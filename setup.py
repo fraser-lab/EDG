@@ -1,5 +1,5 @@
 """
-Setup module for ModelAngelo
+Setup module for ADP3D.
 """
 
 import os

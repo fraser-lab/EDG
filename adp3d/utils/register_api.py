@@ -1,3 +1,10 @@
+"""Import Chroma API key from a file path and register it.
+
+Author: Karson Chrispens (karson.chrispens@ucsf.edu)
+Created: 15 Aug 2024
+Updated: 15 Aug 2024
+"""
+
 from chroma import api
 
 def register_api(key_location: str) -> None:
