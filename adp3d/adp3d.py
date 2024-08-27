@@ -80,7 +80,7 @@ class ADP3D:
         return density_map
 
     def ll_incomplete_structure(  # TODO: Test here
-        self, x_bar: torch.Tensor, z: torch.Tensor
+        self, x_bar: torch.Tensor, z: torch.Tensor, C: torch.Tensor
     ) -> torch.Tensor:
         """Compute the log likelihood of the incomplete structure given the denoised coordinates.
 
@@ -90,15 +90,20 @@ class ADP3D:
             Incomplete structure.
         z : torch.Tensor
             Denoised coordinates.
+        C : torch.Tensor
+            Chain map (needed for multiplying correlation matrix).
 
         Returns
         -------
         torch.Tensor
             Log likelihood of the incomplete structure.
         """
-        return torch.sum(
-            (x_bar - z) ** 2
-        )  # FIXME: This is a placeholder, need to implement the actual log likelihood function
+        A = x_bar # FIXME: measurement matrix to transform z into the form comparable to x_bar. m is the measurement dimension
+        R = self.multiply_corr(torch.eye(*x_bar.size()), C) # FIXME: get this right
+        U, S, V_T = torch.linalg.svd(AR)
+        S_plus = torch.linalg.pinv(S)
+        block = torch.diag()
+        log_p = - torch.linalg.vector_norm(dim=2) # Assuming 3rd dimension is the coordinate dimension
 
     def grad_ll_incomplete_structure(  # TODO: Test here
         self, x_bar: torch.Tensor, z: torch.Tensor
@@ -279,7 +284,7 @@ class ADP3D:
             # Accumulate gradients
             v_i_m = momenta[0] * v_i_m + lr_m_s_d[
                 0
-            ] * self.grad_ll_incomplete_structure(x_bar, z_0)
+            ] * self.grad_ll_incomplete_structure(x_bar, z_0, C)
             v_i_s = momenta[1] * v_i_s + lr_m_s_d[
                 1
             ] * grad_ll_sequence(  # NOTE: This should change if a model other than Chroma is used.
