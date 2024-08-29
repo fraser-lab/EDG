@@ -5,12 +5,112 @@ Created: 6 Aug 2024
 Updated: 20 Aug 2024
 """
 
-from typing import Tuple, Union, List
+from typing import Tuple, Union, List, Dict
 import torch
+import numpy as np
+from einops import rearrange, reduce, repeat
 from chroma import Chroma, Protein
 from chroma.layers.structure.mvn import BackboneMVNGlobular
-from chroma.layers.structure.sidechain import SideChainBuilder
+# from chroma.layers.structure.sidechain import SideChainBuilder
+from chroma.constants import AA_GEOMETRY, AA20_3
 from tqdm import tqdm
+from qfit.transformer import FFTTransformer
+from qfit.volume import EMMap
+from qfit.structure.structure import Structure
+
+
+def get_element_from_XCS(X: torch.Tensor, S: torch.Tensor) -> List[str]:
+    """Get element names from an XCS tensor representation of a protein.
+
+    Parameters
+    ----------
+    X : torch.Tensor
+        Protein coordinates in XCS format.
+    S : torch.Tensor
+        Protein sequence in XCS format.
+
+    Returns
+    -------
+    torch.Tensor
+        _description_
+    """
+    if X.size()[2] == 4:
+        # All residues are backbone atoms = GLY
+        # repeat [N, CA, C, O] for each residue
+        return ["N", "CA", "C", "O"] * X.size()[1]
+    else:
+        elements = []
+
+        # Get 3 letter code from one letter in sequence.
+        index_to_code = {i: code for i, code in enumerate(AA20_3)}
+        S = [index_to_code[aa] for aa in S.squeeze()]
+
+        # Get elements from XCS
+        for residue in S:
+            if residue == "GLY":
+                elements.extend(["N", "CA", "C", "O"])
+            else:
+                elements.extend(
+                    ["N", "CA", "C", "O"].extend(AA_GEOMETRY[residue]["atoms"])
+                )
+
+        return elements
+
+
+def minimal_XCS_to_Structure(X: torch.Tensor, S: torch.Tensor) -> Dict:  # TODO: TEST
+    """Transform a minimal XCS tensor representation of a protein to a qFit Structure object
+    (but secretly just a Dict with the necessary keys for a qFit Transformer as qFit does not type check for Structure)
+
+    Parameters
+    ----------
+    X : torch.Tensor
+        Protein coordinates in XCS format.
+    S : torch.Tensor
+        Sequence in XCS format.
+
+    Returns
+    -------
+    Dict
+        Dictionary with the necessary keys for a qFit Transformer.
+    """
+    if X.size()[0] > 1:
+        raise ValueError(
+            "Currently only one protein structure can be converted at a time."
+        )
+    e = get_element_from_XCS(X, S)
+    coor = rearrange(X, "b r a c -> b (r a) c").squeeze().numpy()
+    natoms = coor.shape()[0]
+    active = np.ones(natoms, dtype=bool)
+    b = np.array([10] * natoms, dtype=np.float64)
+    q = np.array([1] * natoms, dtype=np.float64)
+    structure = {
+        "coor": coor,
+        "b": b,
+        "q": q,
+        "e": e,
+        "active": active,
+    }
+    return structure
+
+
+def XCS_to_Structure(X: torch.Tensor, C: torch.Tensor, S: torch.Tensor) -> Structure:
+    """Transform an XCS tensor representation of a protein to a qFit Structure object.
+
+    Parameters
+    ----------
+    X : torch.Tensor
+        Protein coordinates in XCS format.
+    C : torch.Tensor
+        Chain map in XCS format.
+    S : torch.Tensor
+        Sequence in XCS format.
+
+    Returns
+    -------
+    Structure
+        qFit Structure object.
+    """
+    pass
 
 
 class ADP3D:
@@ -34,14 +134,17 @@ class ADP3D:
         seq : torch.Tensor, optional
             Sequence Tensor for incorporating sequence information, defined in Chroma's XC*S* format, by default None
         structure : torch.Tensor, optional
-            Input atomic coordinates for an incomplete structure, size (num_residues, num_atoms, 3), by default None
+            Input CIF file path for an incomplete structure, by default None
         """
+
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
         self.protein = protein
         self.y = y
         self.seq = seq
-        self.x_bar = structure
-
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.x_bar, self.C_bar, _ = Protein.from_CIF(
+            structure, device=self.device
+        ).to_XCS()
 
         # Importing sqrt(covariance matrix) from Chroma
         # These take in Z and C (for _multiply_R) or X and C (for _multiply_R_inverse)
@@ -61,33 +164,15 @@ class ADP3D:
         #     SideChainBuilder()
         # )  # Chroma's sidechain builder for making all-atom coordinates from backbone and chi angles.
 
-    def gamma(
-        self, X: torch.Tensor, size: tuple = (100, 100, 100)
-    ) -> torch.Tensor:  # TODO: Test here
-        """Compute a density map of the atomic coordinates X and side chain angles chi.
-
-        Args:
-            X (torch.Tensor): The input all-atom protein coordinates.
-            size (torch.Tensor): The desired size of the output density map.
-
-        Returns:
-            torch.Tensor: The density map (shape (100, 100, 100)).
-        """
-        density_map = torch.zeros(*size)
-        for i in range(X.size()[2]):  # Iterate over atoms
-            for j in range(5):
-                return  # FIXME: something like density_map += torch.exp(-torch.norm(X[i] - chi[j])) / (2 * torch.tensor([1, 1, 1])) ** 2
-        return density_map
-
     def ll_incomplete_structure(  # TODO: Test here
-        self, x_bar: torch.Tensor, z: torch.Tensor, C: torch.Tensor
+        self, x_bar: torch.Tensor, z: torch.Tensor
     ) -> torch.Tensor:
         """Compute the log likelihood of the incomplete structure given the denoised coordinates.
 
         Parameters
         ----------
         x_bar : torch.Tensor
-            Incomplete structure.
+            Incomplete structure coordinates.
         z : torch.Tensor
             Denoised coordinates.
         C : torch.Tensor
@@ -98,12 +183,22 @@ class ADP3D:
         torch.Tensor
             Log likelihood of the incomplete structure.
         """
-        A = x_bar # FIXME: measurement matrix to transform z into the form comparable to x_bar. m is the measurement dimension
-        R = self.multiply_corr(torch.eye(*x_bar.size()), C) # FIXME: get this right
+        z = rearrange(z, "b r a c -> b (r a) c")  # I love einops
+        x_bar = rearrange(x_bar, "b r a c -> b (r a) c")
+        n = z.size()[1]
+        m = x_bar.size()[1]
+        A = torch.eye(
+            m, n
+        )  # FIXME: measurement matrix to transform z into the form comparable to x_bar. m is the measurement dimension
+        AR = self.multiply_corr(
+            A, self.C_bar
+        )  # TODO: I may need to implement this correlation matrix on my own?
         U, S, V_T = torch.linalg.svd(AR)
         S_plus = torch.linalg.pinv(S)
-        block = torch.diag()
-        log_p = - torch.linalg.vector_norm(dim=2) # Assuming 3rd dimension is the coordinate dimension
+        to_norm = torch.eye(m, n) @ V_T @ z - S_plus @ U.T @ x_bar
+        return (
+            -torch.linalg.vector_norm(torch.flatten(to_norm), dim=2) ** 2
+        )  # Assuming dim 2 is the coordinate dimension # FIXME: Not sure the shape will be right here
 
     def grad_ll_incomplete_structure(  # TODO: Test here
         self, x_bar: torch.Tensor, z: torch.Tensor
@@ -157,8 +252,30 @@ class ADP3D:
             "Sequence gradient not implemented as Chroma has built in log likelihood."
         )
 
+    def gamma(
+        cls, X: torch.Tensor, S: torch.Tensor, size: tuple = (100, 100, 100)
+    ) -> torch.Tensor:  # TODO: Test here
+        """Compute a density map of the all-atom coordinates X.
+
+        Args:
+            X (torch.Tensor): The input all-atom protein coordinates.
+            S (torch.Tensor): The sequence tensor.
+            size (torch.Tensor): The desired size of the output density map.
+
+        Returns:
+            torch.Tensor: The density map (shape (100, 100, 100)).
+        """
+        # NOTE: NO TYPECHECKS IN QFIT so I can do this
+        structure = minimal_XCS_to_Structure(X, S)
+        map = EMMap.zeros(shape=size)  # TODO: Test this
+        transformer = FFTTransformer(structure, map, em=True)
+        transformer.density()
+        return (
+            transformer.xmap.array
+        )  # TODO: Test, make sure densities are aligned. In this case, the density has origin at 0 and size 100, 100, 100. Make sure the observed density is compatible with this.
+
     def ll_density(  # TODO: Test here
-        self, y: torch.Tensor, z: torch.Tensor, C: torch.Tensor
+        self, y: torch.Tensor, z: torch.Tensor, C: torch.Tensor, S: torch.Tensor
     ) -> torch.Tensor:
         """Compute the log likelihood of the density given the atomic coordinates and side chain angles.
 
@@ -170,6 +287,8 @@ class ADP3D:
             Denoised coordinates.
         C : torch.Tensor
             Chain map (needed for multiplying correlation matrix).
+        S : torch.Tensor
+            Sequence tensor.
 
         Returns
         -------
@@ -180,8 +299,14 @@ class ADP3D:
         X = self.multiply_corr(
             z, C
         )  # Transform denoised coordinates to Cartesian space
+        density = self.gamma(
+            X, S, size=y.size()
+        )  # Get density map from denoised coordinates
 
-        density = self.gamma(X)
+        if density.size() != y.size():
+            raise ValueError("Density map and input density map must be the same size.")
+
+        return -torch.linalg.vector_norm(torch.flatten(density) - torch.flatten(y)) ** 2
 
     def grad_ll_density(  # TODO: Test here
         self, y: torch.Tensor, z: torch.Tensor, C: torch.Tensor
@@ -262,7 +387,7 @@ class ADP3D:
         X, C, _ = protein.to_XCS()
         S = self.seq
 
-        for _ in tqdm(range(epochs), desc="Model Refinement"):
+        for epoch in tqdm(range(epochs), desc="Model Refinement"):
             # Denoise coordinates
             output = self.denoiser(C, X_init=X, N=1)  # TODO: Test here
             X = output["X_sample"]  # Get denoised coordinates
@@ -272,7 +397,9 @@ class ADP3D:
                 X, C
             )  # transform denoised coordinates to whitened space # TODO: Test here
 
-            X_aa, _, _, scores = self.sequence_chi_sampler(X, C, S, t=0.0)
+            if epoch % 100 == 0:
+                X_aa, _, _, scores = self.sequence_chi_sampler(X, C, S, t=0.0)
+
             ll_sequence = scores["logp_S"]  # Get sequence log probability
             ll_sequence.backward(
                 input=X_aa
@@ -284,7 +411,7 @@ class ADP3D:
             # Accumulate gradients
             v_i_m = momenta[0] * v_i_m + lr_m_s_d[
                 0
-            ] * self.grad_ll_incomplete_structure(x_bar, z_0, C)
+            ] * self.grad_ll_incomplete_structure(x_bar, z_0)
             v_i_s = momenta[1] * v_i_s + lr_m_s_d[
                 1
             ] * grad_ll_sequence(  # NOTE: This should change if a model other than Chroma is used.
