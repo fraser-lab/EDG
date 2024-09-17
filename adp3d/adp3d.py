@@ -19,7 +19,7 @@ from qfit.volume import EMMap
 from qfit.structure.structure import Structure
 
 
-def get_element_from_XCS(X: torch.Tensor, S: torch.Tensor) -> List[str]:
+def get_elements_from_XCS(X: torch.Tensor, S: torch.Tensor) -> List[str]:
     """Get element names from an XCS tensor representation of a protein.
 
     Parameters
@@ -32,7 +32,7 @@ def get_element_from_XCS(X: torch.Tensor, S: torch.Tensor) -> List[str]:
     Returns
     -------
     torch.Tensor
-        _description_
+        Elements for the protein atoms compatible with qFit. 
     """
     if X.size()[2] == 4:
         # All residues are backbone atoms = GLY
@@ -57,8 +57,8 @@ def get_element_from_XCS(X: torch.Tensor, S: torch.Tensor) -> List[str]:
         return elements
 
 
-def minimal_XCS_to_Structure(X: torch.Tensor, S: torch.Tensor) -> Dict:  # TODO: TEST
-    """Transform a minimal XCS tensor representation of a protein to a qFit Structure object
+def minimal_XCS_to_Structure(X: torch.Tensor, S: torch.Tensor) -> Dict:  # TODO: Only works for single chains.
+    """Transform a minimal XCS tensor representation of a protein to a qFit Structure object. 
     (but secretly just a Dict with the necessary keys for a qFit Transformer as qFit does not type check for Structure)
 
     Parameters
@@ -77,9 +77,9 @@ def minimal_XCS_to_Structure(X: torch.Tensor, S: torch.Tensor) -> Dict:  # TODO:
         raise ValueError(
             "Currently only one protein structure can be converted at a time."
         )
-    e = get_element_from_XCS(X, S)
-    coor = rearrange(X, "b r a c -> b (r a) c").squeeze().numpy()
-    natoms = coor.shape()[0]
+    e = get_elements_from_XCS(X, S)
+    coor = rearrange(X, "b r a c -> b (r a) c").squeeze().numpy() # FIXME: does qFit work without this as numpy?
+    natoms = coor.shape[0]
     active = np.ones(natoms, dtype=bool)
     b = np.array([10] * natoms, dtype=np.float64)
     q = np.array([1] * natoms, dtype=np.float64)
@@ -130,7 +130,7 @@ class ADP3D:
         protein : Protein, optional
             Chroma Protein object for initializing with a given protein structure, by default None
         y : torch.Tensor, optional
-            Input density measurement in torch.Tensor format with 3 axes, by default None
+            Input density measurement in torch.Tensor format with 3 axes, by default None. Ideally loaded by gemmi or mrcfile.
         seq : torch.Tensor, optional
             Sequence Tensor for incorporating sequence information, defined in Chroma's XC*S* format, by default None
         structure : torch.Tensor, optional
@@ -148,17 +148,50 @@ class ADP3D:
 
         # Importing sqrt(covariance matrix) from Chroma
         # These take in Z and C (for _multiply_R) or X and C (for _multiply_R_inverse)
-        mvn = BackboneMVNGlobular(covariance_model="globular")
-        self.multiply_corr = mvn._multiply_R
-        self.multiply_inverse_corr = mvn._multiply_R_inverse
+        self.mvn = BackboneMVNGlobular(covariance_model="globular")
+        self.multiply_corr = self.mvn._multiply_R
+        self.multiply_inverse_corr = self.mvn._multiply_R_inverse
+
+        # Build correlation matrix for incomplete structure log likelihood
+        z_bar = self.multiply_corr(self.x_bar, self.C_bar)
+        C_bar_mask_all, _, _ = self.mvn._expand_per_chain(z_bar, self.C_bar)
+        B, _, _ = self.mvn._globular_parameters(C_bar_mask_all) # shape will be (B, C), so likely (1, 1)
+        
+        # Only on single chains for now
+        B = B.squeeze() # B is now a scalar
+        N = self.x_bar.size()[1] # Number of residues
+        R = torch.zeros(N, N) # Initialize correlation matrix
+        for i in range(N):
+            R[i:, i]= self.mvn._nu * B ** torch.arange(i, N)
+            if i > 0:
+                R[i:, i] = B ** torch.arange(0, N - i)
+
+        R = self.mvn._scale * R
+
+        # Build measurement matrix for incomplete structure log likelihood
+        # Going to only account for backbone atoms, so 4 atoms per residue. Could extend to all atom later, I think.
+        n = self.seq.size()[1] * 4
+        m = self.x_bar.size()[1] * 4
+        self.A = torch.eye(
+            m, n
+        )  # measurement matrix to transform z into the form comparable to x_bar. m is the measurement dimension # FIXME: I think this doesn't work, test it out
+
+        # Precompute SVD for incomplete structure log likelihood
+        
+        AR = self.A @ R
+        # U shape (m, m), S shape (m, n), V_T shape (n, n)
+        self.U, S, self.V_T = torch.linalg.svd(AR)
+        # S_plus shape (n, m)
+        self.S_plus = torch.linalg.pinv(S)
+
 
         # Initialize Chroma
-        chroma = Chroma()
-        self.denoiser = chroma.backbone_network.sample_sde
+        self.chroma = Chroma()
+        self.denoiser = self.chroma.backbone_network.sample_sde
         self.sequence_sampler = None  # NOTE: Placeholder for sequence sampling. This will need to be implemented if doing model refinement with a denoiser other than Chroma
         self.chi_sampler = None  # NOTE: Placeholder for chi angle sampling. This will need to be implemented if doing model refinement with a denoiser other than Chroma
         self.sequence_chi_sampler = (
-            chroma.design_network.sample
+            self.chroma.design_network.sample
         )  # In Chroma, this can get log_p sequence and all atom coordinates.
         # self.chi_to_X = (
         #     SideChainBuilder()
@@ -183,19 +216,8 @@ class ADP3D:
         torch.Tensor
             Log likelihood of the incomplete structure.
         """
-        z = rearrange(z, "b r a c -> b (r a) c")  # I love einops
-        x_bar = rearrange(x_bar, "b r a c -> b (r a) c")
-        n = z.size()[1]
-        m = x_bar.size()[1]
-        A = torch.eye(
-            m, n
-        )  # FIXME: measurement matrix to transform z into the form comparable to x_bar. m is the measurement dimension
-        AR = self.multiply_corr(
-            A, self.C_bar
-        )  # TODO: I may need to implement this correlation matrix on my own?
-        U, S, V_T = torch.linalg.svd(AR)
-        S_plus = torch.linalg.pinv(S)
-        to_norm = torch.eye(m, n) @ V_T @ z - S_plus @ U.T @ x_bar
+        
+        to_norm = self.A @ self.V_T @ z - self.S_plus @ self.U.T @ x_bar
         return (
             -torch.linalg.vector_norm(torch.flatten(to_norm), dim=2) ** 2
         )  # Assuming dim 2 is the coordinate dimension # FIXME: Not sure the shape will be right here
@@ -371,10 +393,10 @@ class ADP3D:
         epochs : float, optional
             Number of epochs, by default 4000
         lr_m_s_d : List[float], optional
-            Learning rates for optimization on each gradient of each log likelihood function,
+            Learning rates for each log likelihood function,
             first for incomplete *m*odel, then *s*equence, then *d*ensity. By default [1e-1, 1e-5, 3e-5]
         momenta : List[float], optional
-            Momenta for optimization updates, by default [9e-1]*3
+            Momenta for gradient descent updates, by default [9e-1]*3
 
         Returns
         -------
