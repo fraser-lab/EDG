@@ -1,6 +1,6 @@
 import pytest
 from adp3d import ADP3D
-from adp3d import get_elements_from_XCS, minimal_XCS_to_Structure
+from adp3d.adp.optimizer import get_elements_from_XCS, minimal_XCS_to_Structure
 from chroma import Protein
 import gemmi
 
@@ -11,11 +11,11 @@ def test_ADP3D_init():
 
 
 def test_get_elements_from_XCS():
-    structure = Protein("confA.cif")
-    X, _, S = structure.to_XCS()
+    structure = Protein("tests/4yuo.cif")
+    X, _, S = structure.to_XCS(all_atom=True)
     elements = get_elements_from_XCS(X, S)
-    assert elements.size() > 0
-    assert elements.size() > S.size()
+    assert len(elements) > 0
+    assert len(elements) > S.size()[0]
     assert set(elements) == set(
         [
             "N",
@@ -63,17 +63,17 @@ def test_get_elements_from_XCS():
 
 
 def test_minimal_XCS_to_Structure():
-    structure = Protein("confA.cif")
+    structure = Protein("tests/4yuo.cif")
     X, _, S = structure.to_XCS()
     minimal_structure = minimal_XCS_to_Structure(X, S)
     assert minimal_structure is not None
     for key in ["coor", "b", "q", "e", "active"]:
         assert key in minimal_structure.keys()
     num_atoms = X.size()[1] * X.size()[2]
-    assert minimal_structure["coor"].shape == num_atoms
-    assert minimal_structure["b"].shape == num_atoms
-    assert minimal_structure["q"].shape == num_atoms
-    assert minimal_structure["active"].shape == num_atoms
+    assert minimal_structure["coor"].shape == (num_atoms, 3)
+    assert int(minimal_structure["b"].shape) == num_atoms
+    assert int(minimal_structure["q"].shape) == num_atoms
+    assert int(minimal_structure["active"].shape) == num_atoms
 
 
 
@@ -82,7 +82,7 @@ def test_XCS_to_Structure():
 
 
 def test_gamma():
-    structure = Protein("confA.cif")
+    structure = Protein("tests/4yuo.cif")
     X, C, S = structure.to_XCS()
-    y = gemmi.read_structure("confA.cif")
+    y = gemmi.read_structure("tests/4yuo.cif")
     adp = ADP3D()

@@ -2,35 +2,46 @@
 Setup module for ADP3D.
 """
 
+import codecs
 import os
-import sys
+import time
 
-from setuptools import setup, find_packages
+from setuptools import find_packages, setup
 
-sys.path.insert(0, f"{os.path.dirname(__file__)}/adp3d")
+with open("requirements.txt", "r") as req_file:
+    requirements = [line.split("#")[0].strip() for line in req_file]
+    requirements = [line for line in requirements if line]
 
-import adp3d
 
-project_root = os.path.join(os.path.realpath(os.path.dirname(__file__)), "adp3d")
+def read(rel_path):
+    here = os.path.abspath(os.path.dirname(__file__))
+    with codecs.open(os.path.join(here, rel_path), "r") as fp:
+        return fp.read()
+
+
+def get_version(rel_path):
+    for line in read(rel_path).splitlines():
+        if line.startswith("__version__"):
+            delim = '"' if '"' in line else "'"
+            return line.split(delim)[1]
+    else:
+        raise RuntimeError("Unable to find version string.")
+
+
+version = get_version("adp3d/__init__.py")
+
+# During CICD, append "-dev" and unix timestamp to version
+if os.environ.get("CI_COMMIT_BRANCH") == "develop":
+    version += f".dev{int(time.time())}"
 
 setup(
-    name="model_angelo",
-    entry_points={
-        "console_scripts": [
-            "adp3d = adp3d.__main__:main",
-        ],
-    },
+    name="adp3d",
+    version=version,
+    url="https://github.com/k-chrispens/adp3d",
     packages=find_packages(),
-    version=adp3d.__version__,
-    install_requires=[
-        "tqdm",
-        "scipy",
-        "biopython>=1.81",
-        "einops",
-        "matplotlib",
-        "numpy",
-        "pandas",
-        "chroma",
-        "loguru",
-    ],
+    description="Tool to sample protein conformations into density",
+    include_package_data=True,
+    author="Karson Chrispens",
+    license="MIT",
+    install_requires=requirements,
 )

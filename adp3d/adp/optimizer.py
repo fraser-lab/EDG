@@ -11,6 +11,7 @@ import numpy as np
 from einops import rearrange, reduce, repeat
 from chroma import Chroma, Protein
 from chroma.layers.structure.mvn import BackboneMVNGlobular
+
 # from chroma.layers.structure.sidechain import SideChainBuilder
 from chroma.constants import AA_GEOMETRY, AA20_3
 from tqdm import tqdm
@@ -32,7 +33,7 @@ def get_elements_from_XCS(X: torch.Tensor, S: torch.Tensor) -> List[str]:
     Returns
     -------
     torch.Tensor
-        Elements for the protein atoms compatible with qFit. 
+        Elements for the protein atoms compatible with qFit.
     """
     if X.size()[2] == 4:
         # All residues are backbone atoms = GLY
@@ -57,8 +58,10 @@ def get_elements_from_XCS(X: torch.Tensor, S: torch.Tensor) -> List[str]:
         return elements
 
 
-def minimal_XCS_to_Structure(X: torch.Tensor, S: torch.Tensor) -> Dict:  # TODO: Only works for single chains.
-    """Transform a minimal XCS tensor representation of a protein to a qFit Structure object. 
+def minimal_XCS_to_Structure(
+    X: torch.Tensor, S: torch.Tensor
+) -> Dict:  # TODO: Only works for single chains.
+    """Transform a minimal XCS tensor representation of a protein to a qFit Structure object.
     (but secretly just a Dict with the necessary keys for a qFit Transformer as qFit does not type check for Structure)
 
     Parameters
@@ -78,7 +81,9 @@ def minimal_XCS_to_Structure(X: torch.Tensor, S: torch.Tensor) -> Dict:  # TODO:
             "Currently only one protein structure can be converted at a time."
         )
     e = get_elements_from_XCS(X, S)
-    coor = rearrange(X, "b r a c -> b (r a) c").squeeze().numpy() # FIXME: does qFit work without this as numpy?
+    coor = (
+        rearrange(X, "b r a c -> b (r a) c").squeeze().numpy()
+    )  # FIXME: does qFit work without this as numpy?
     natoms = coor.shape[0]
     active = np.ones(natoms, dtype=bool)
     b = np.array([10] * natoms, dtype=np.float64)
@@ -155,14 +160,16 @@ class ADP3D:
         # Build correlation matrix for incomplete structure log likelihood
         z_bar = self.multiply_corr(self.x_bar, self.C_bar)
         C_bar_mask_all, _, _ = self.mvn._expand_per_chain(z_bar, self.C_bar)
-        B, _, _ = self.mvn._globular_parameters(C_bar_mask_all) # shape will be (B, C), so likely (1, 1)
-        
+        B, _, _ = self.mvn._globular_parameters(
+            C_bar_mask_all
+        )  # shape will be (B, C), so likely (1, 1)
+
         # Only on single chains for now
-        B = B.squeeze() # B is now a scalar
-        N = self.x_bar.size()[1] # Number of residues
-        R = torch.zeros(N, N) # Initialize correlation matrix
+        B = B.squeeze()  # B is now a scalar
+        N = self.x_bar.size()[1]  # Number of residues
+        R = torch.zeros(N, N)  # Initialize correlation matrix
         for i in range(N):
-            R[i:, i]= self.mvn._nu * B ** torch.arange(i, N)
+            R[i:, i] = self.mvn._nu * B ** torch.arange(i, N)
             if i > 0:
                 R[i:, i] = B ** torch.arange(0, N - i)
 
@@ -177,13 +184,12 @@ class ADP3D:
         )  # measurement matrix to transform z into the form comparable to x_bar. m is the measurement dimension # FIXME: I think this doesn't work, test it out
 
         # Precompute SVD for incomplete structure log likelihood
-        
+
         AR = self.A @ R
         # U shape (m, m), S shape (m, n), V_T shape (n, n)
         self.U, S, self.V_T = torch.linalg.svd(AR)
         # S_plus shape (n, m)
         self.S_plus = torch.linalg.pinv(S)
-
 
         # Initialize Chroma
         self.chroma = Chroma()
@@ -216,7 +222,7 @@ class ADP3D:
         torch.Tensor
             Log likelihood of the incomplete structure.
         """
-        
+
         to_norm = self.A @ self.V_T @ z - self.S_plus @ self.U.T @ x_bar
         return (
             -torch.linalg.vector_norm(torch.flatten(to_norm), dim=2) ** 2
