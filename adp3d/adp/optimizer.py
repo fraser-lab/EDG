@@ -44,16 +44,16 @@ def get_elements_from_XCS(X: torch.Tensor, S: torch.Tensor) -> List[str]:
 
         # Get 3 letter code from one letter in sequence.
         index_to_code = {i: code for i, code in enumerate(AA20_3)}
-        S = [index_to_code[aa] for aa in S.squeeze()]
+        S = [index_to_code[int(aa)] for aa in S.squeeze()]
 
         # Get elements from XCS
         for residue in S:
+            backbone_elements = ["N", "CA", "C", "O"]
             if residue == "GLY":
-                elements.extend(["N", "CA", "C", "O"])
+                elements.extend(backbone_elements)
             else:
-                elements.extend(
-                    ["N", "CA", "C", "O"].extend(AA_GEOMETRY[residue]["atoms"])
-                )
+                backbone_elements.extend(AA_GEOMETRY[residue]["atoms"])
+                elements.extend(backbone_elements)
 
         return elements
 
@@ -144,6 +144,11 @@ class ADP3D:
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+        # enforce input args # TODO: check if this is needed
+        check = [x is not None for x in [y, seq, structure]]
+        if not any(check):
+            raise ValueError("Arguments y, seq, and structure must be defined.")
+
         self.protein = protein
         self.y = y
         self.seq = seq
@@ -158,20 +163,26 @@ class ADP3D:
         self.multiply_inverse_corr = self.mvn._multiply_R_inverse
 
         # Build correlation matrix for incomplete structure log likelihood
-        z_bar = self.multiply_corr(self.x_bar, self.C_bar)
+        z_bar = self.multiply_inverse_corr(self.x_bar, self.C_bar)
+
+        # fix dimensions for _expand_per_chain
+        if z_bar.dim() == 4:
+            z_bar = rearrange(z_bar, "b r a c -> b (r a) c")
+
         C_bar_mask_all, _, _ = self.mvn._expand_per_chain(z_bar, self.C_bar)
         B, _, _ = self.mvn._globular_parameters(
             C_bar_mask_all
         )  # shape will be (B, C), so likely (1, 1)
 
-        # Only on single chains for now
+        # NOTE: Only on single chains for now
         B = B.squeeze()  # B is now a scalar
         N = self.x_bar.size()[1]  # Number of residues
-        R = torch.zeros(N, N)  # Initialize correlation matrix
-        for i in range(N):
-            R[i:, i] = self.mvn._nu * B ** torch.arange(i, N)
+        A = 4 * N  # Number of atoms in backbone
+        R = torch.zeros(A, A)  # Initialize correlation matrix on all atoms
+        for i in range(A):
+            R[i:, i] = self.mvn._nu * B ** torch.arange(i, A).to(self.device)
             if i > 0:
-                R[i:, i] = B ** torch.arange(0, N - i)
+                R[i:, i] = B ** torch.arange(0, A - i).to(self.device)
 
         R = self.mvn._scale * R
 
@@ -188,6 +199,8 @@ class ADP3D:
         AR = self.A @ R
         # U shape (m, m), S shape (m, n), V_T shape (n, n)
         self.U, S, self.V_T = torch.linalg.svd(AR)
+        if len(S.size()) == 1:
+            S = torch.diag(S)
         # S_plus shape (n, m)
         self.S_plus = torch.linalg.pinv(S)
 
