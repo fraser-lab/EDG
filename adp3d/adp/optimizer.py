@@ -48,11 +48,11 @@ def get_elements_from_XCS(X: torch.Tensor, S: torch.Tensor) -> List[str]:
 
         # Get elements from XCS
         for residue in S:
-            backbone_elements = ["N", "CA", "C", "O"]
+            backbone_elements = ["N", "C", "C", "O"]
             if residue == "GLY":
                 elements.extend(backbone_elements)
             else:
-                backbone_elements.extend(AA_GEOMETRY[residue]["atoms"])
+                backbone_elements.extend([atom[0] for atom in AA_GEOMETRY[residue]["atoms"]])
                 elements.extend(backbone_elements)
 
         return elements
@@ -137,7 +137,7 @@ class ADP3D:
         y : torch.Tensor, optional
             Input density measurement in torch.Tensor format with 3 axes, by default None. Ideally loaded by gemmi or mrcfile.
         seq : torch.Tensor, optional
-            Sequence Tensor for incorporating sequence information, defined in Chroma's XC*S* format, by default None
+            Sequence Tensor for incorporating sequence information, defined in Chroma's XC**S** format, by default None
         structure : torch.Tensor, optional
             Input CIF file path for an incomplete structure, by default None
         """

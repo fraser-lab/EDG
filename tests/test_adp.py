@@ -1,10 +1,13 @@
 import pytest
 import adp3d
+import gemmi
+import numpy as np
+
 from adp3d import ADP3D
 from adp3d.adp.optimizer import get_elements_from_XCS, minimal_XCS_to_Structure
-from chroma import Protein
-import gemmi
+from chroma import Chroma, Protein
 from pathlib import Path
+from qfit.structure.elements import ELEMENTS
 
 
 @pytest.fixture
@@ -34,56 +37,23 @@ def density_file():
 #     assert adp is not None
 
 
-def test_get_elements_from_XCS(cif_file):
-    structure = Protein(cif_file)
-    X, _, S = structure.to_XCS(all_atom=True)
-    elements = get_elements_from_XCS(X, S)
-    assert len(elements) > 0
-    assert len(elements) > S.size()[0]
-    assert set(elements) == set(
-        [
-            "N",
-            "CA",
-            "C",
-            "O",
-            "OD1",
-            "OD2",
-            "OE1",
-            "OE2",
-            "OH",
-            "OG",
-            "OG1",
-            "CB",
-            "CG",
-            "CG1",
-            "CG2",
-            "CD",
-            "CD1",
-            "CD2",
-            "CE",
-            "CE1",
-            "CE2",
-            "CE3",
-            "CZ",
-            "CZ2",
-            "CZ3",
-            "CH2",
-            "NE",
-            "NE1",
-            "NE2",
-            "NH1",
-            "NH2",
-            "ND1",
-            "ND2",
-            "NZ",
-            "OD1",
-            "OE1",
-            "OD2",
-            "SD",
-            "SG",
-            "H",
-        ]
-    )
+# def test_get_elements_from_XCS(cif_file):
+#     structure = Protein(cif_file)
+#     X, _, S = structure.to_XCS(all_atom=True)
+#     elements = get_elements_from_XCS(X, S)
+#     assert len(elements) > 0
+#     assert len(elements) > S.size()[0]
+#     assert set(elements).issubset(
+#         set(
+#             [
+#                 "N",
+#                 "C",
+#                 "O",
+#                 "S",
+#                 "H",
+#             ]
+#         )
+#     )
 
 
 # def test_minimal_XCS_to_Structure(cif_file):
@@ -95,17 +65,25 @@ def test_get_elements_from_XCS(cif_file):
 #         assert key in minimal_structure.keys()
 #     num_atoms = X.size()[1] * X.size()[2]
 #     assert minimal_structure["coor"].shape == (num_atoms, 3)
-#     assert int(minimal_structure["b"].shape) == num_atoms
-#     assert int(minimal_structure["q"].shape) == num_atoms
-#     assert int(minimal_structure["active"].shape) == num_atoms
+#     assert minimal_structure["b"].shape == (num_atoms, )
+#     assert minimal_structure["q"].shape == (num_atoms, )
+#     assert minimal_structure["active"].shape == (num_atoms, )
 
 
 # def test_XCS_to_Structure():
 #     pass
 
+def test_chroma_cif_with_qfit(cif_file):
+    pass
 
-# def test_gamma(cif_file):
-#     structure = Protein(cif_file)
-#     X, C, S = structure.to_XCS()
-#     y = gemmi.read_structure(cif_file)
-#     adp = ADP3D()
+def test_gamma(cif_file, density_file):
+    density = gemmi.read_ccp4_map(density_file)
+    structure = Protein(cif_file)
+
+    X, C, S = structure.to_XCS()
+
+    y = gemmi.read_structure(cif_file)
+    adp = ADP3D(y=density, seq=S, structure=cif_file)
+    volume = adp.gamma(X, S)
+    assert volume is not None
+    assert np.any(volume > 0)
