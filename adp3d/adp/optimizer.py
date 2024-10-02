@@ -15,8 +15,10 @@ from chroma.layers.structure.mvn import BackboneMVNGlobular
 # from chroma.layers.structure.sidechain import SideChainBuilder
 from chroma.constants import AA_GEOMETRY, AA20_3
 from tqdm import tqdm
-from qfit.transformer import FFTTransformer
-from qfit.volume import EMMap
+from adp3d.utils.utility import DotDict
+from qfit.transformer import Transformer
+from qfit.unitcell import UnitCell
+from qfit.volume import XMap, Resolution
 from qfit.structure.structure import Structure
 
 
@@ -37,8 +39,8 @@ def get_elements_from_XCS(X: torch.Tensor, S: torch.Tensor) -> List[str]:
     """
     if X.size()[2] == 4:
         # All residues are backbone atoms = GLY
-        # repeat [N, CA, C, O] for each residue
-        return ["N", "CA", "C", "O"] * X.size()[1]
+        # repeat [N, C, C, O] for each residue
+        return ["N", "C", "C", "O"] * X.size()[1]
     else:
         elements = []
 
@@ -52,7 +54,9 @@ def get_elements_from_XCS(X: torch.Tensor, S: torch.Tensor) -> List[str]:
             if residue == "GLY":
                 elements.extend(backbone_elements)
             else:
-                backbone_elements.extend([atom[0] for atom in AA_GEOMETRY[residue]["atoms"]])
+                backbone_elements.extend(
+                    [atom[0] for atom in AA_GEOMETRY[residue]["atoms"]]
+                )
                 elements.extend(backbone_elements)
 
         return elements
@@ -82,8 +86,10 @@ def minimal_XCS_to_Structure(
         )
     e = get_elements_from_XCS(X, S)
     coor = (
-        rearrange(X, "b r a c -> b (r a) c").squeeze().numpy()
+        rearrange(X, "b r a c -> b (r a) c").squeeze().cpu().numpy()
     )  # FIXME: does qFit work without this as numpy?
+    coor = np.ascontiguousarray(coor).astype(np.float64)
+
     natoms = coor.shape[0]
     active = np.ones(natoms, dtype=bool)
     b = np.array([10] * natoms, dtype=np.float64)
@@ -94,6 +100,7 @@ def minimal_XCS_to_Structure(
         "q": q,
         "e": e,
         "active": active,
+        "natoms": natoms,
     }
     return structure
 
@@ -121,10 +128,10 @@ def XCS_to_Structure(X: torch.Tensor, C: torch.Tensor, S: torch.Tensor) -> Struc
 class ADP3D:
     def __init__(
         self,
+        y: torch.Tensor,
+        seq: torch.Tensor,
+        structure: str,
         protein: Protein = None,
-        y: torch.Tensor = None,
-        seq: torch.Tensor = None,
-        structure: torch.Tensor = None,
     ):
         """Initialize the ADP3D class.
 
@@ -132,14 +139,14 @@ class ADP3D:
 
         Parameters
         ----------
+        y : torch.Tensor
+            Input density measurement in torch.Tensor format with 3 axes. Ideally loaded by gemmi or mrcfile.
+        seq : torch.Tensor
+            Sequence Tensor for incorporating sequence information, defined in Chroma's XC**S** format
+        structure : str
+            Input CIF file path for an incomplete structure
         protein : Protein, optional
             Chroma Protein object for initializing with a given protein structure, by default None
-        y : torch.Tensor, optional
-            Input density measurement in torch.Tensor format with 3 axes, by default None. Ideally loaded by gemmi or mrcfile.
-        seq : torch.Tensor, optional
-            Sequence Tensor for incorporating sequence information, defined in Chroma's XC**S** format, by default None
-        structure : torch.Tensor, optional
-            Input CIF file path for an incomplete structure, by default None
         """
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -180,18 +187,18 @@ class ADP3D:
         A = 4 * N  # Number of atoms in backbone
         R = torch.zeros(A, A)  # Initialize correlation matrix on all atoms
         for i in range(A):
-            R[i:, i] = self.mvn._nu * B ** torch.arange(i, A).to(self.device)
+            R[i:, i] = self.mvn._nu * B ** torch.arange(i, A, device=self.device)
             if i > 0:
-                R[i:, i] = B ** torch.arange(0, A - i).to(self.device)
+                R[i:, i] = B ** torch.arange(0, A - i, device=self.device)
 
-        R = self.mvn._scale * R
+        R = (self.mvn._scale * R).to(self.device)
 
         # Build measurement matrix for incomplete structure log likelihood
         # Going to only account for backbone atoms, so 4 atoms per residue. Could extend to all atom later, I think.
         n = self.seq.size()[1] * 4
         m = self.x_bar.size()[1] * 4
         self.A = torch.eye(
-            m, n
+            m, n, device=self.device
         )  # measurement matrix to transform z into the form comparable to x_bar. m is the measurement dimension # FIXME: I think this doesn't work, test it out
 
         # Precompute SVD for incomplete structure log likelihood
@@ -216,9 +223,7 @@ class ADP3D:
         #     SideChainBuilder()
         # )  # Chroma's sidechain builder for making all-atom coordinates from backbone and chi angles.
 
-    def ll_incomplete_structure(  # TODO: Test here
-        self, x_bar: torch.Tensor, z: torch.Tensor
-    ) -> torch.Tensor:
+    def ll_incomplete_structure(self, z: torch.Tensor) -> torch.Tensor:
         """Compute the log likelihood of the incomplete structure given the denoised coordinates.
 
         Parameters
@@ -235,11 +240,13 @@ class ADP3D:
         torch.Tensor
             Log likelihood of the incomplete structure.
         """
-
+        z = rearrange(z, "b r a c -> b (r a) c").squeeze()
+        x_bar = rearrange(self.x_bar, "b r a c -> b (r a) c").squeeze()
         to_norm = self.A @ self.V_T @ z - self.S_plus @ self.U.T @ x_bar
+        breakpoint()
         return (
-            -torch.linalg.vector_norm(torch.flatten(to_norm), dim=2) ** 2
-        )  # Assuming dim 2 is the coordinate dimension # FIXME: Not sure the shape will be right here
+            -torch.linalg.vector_norm(torch.flatten(to_norm)) ** 2
+        )
 
     def grad_ll_incomplete_structure(  # TODO: Test here
         self, x_bar: torch.Tensor, z: torch.Tensor
@@ -247,8 +254,7 @@ class ADP3D:
         x_bar.requires_grad = False
         result = self.ll_incomplete_structure(x_bar, z)
 
-        result.backward(inputs=z)
-        return z.grad
+        return torch.autograd.grad(result, z)
 
     def ll_sequence(self, s: torch.Tensor, z: torch.Tensor) -> torch.Tensor:
         """Compute the log likelihood of the sequence given the denoised coordinates.
@@ -307,9 +313,16 @@ class ADP3D:
             torch.Tensor: The density map (shape (100, 100, 100)).
         """
         # NOTE: NO TYPECHECKS IN QFIT so I can do this
-        structure = minimal_XCS_to_Structure(X, S)
-        map = EMMap.zeros(shape=size)  # TODO: Test this
-        transformer = FFTTransformer(structure, map, em=True)
+        structure = DotDict(minimal_XCS_to_Structure(X, S))
+        # NOTE: EMMap in qFit doesn't seem to be interoperable with the Transformer, so I'm going to use XMap
+        map = XMap(
+            array=np.zeros(size, dtype=np.float64),
+            unit_cell=UnitCell(),
+            resolution=Resolution(high=2.0, low=2.0),
+        )
+        transformer = Transformer(
+            structure, map, em=True, simple=True
+        )  # TODO: not sure what simple means here exactly, check this later
         transformer.density()
         return (
             transformer.xmap.array
@@ -349,9 +362,7 @@ class ADP3D:
 
         return -torch.linalg.vector_norm(torch.flatten(density) - torch.flatten(y)) ** 2
 
-    def grad_ll_density(  # TODO: Test here
-        self, y: torch.Tensor, z: torch.Tensor, C: torch.Tensor
-    ) -> torch.Tensor:
+    def grad_ll_density(self, z: torch.Tensor) -> torch.Tensor:  # TODO: Test here
         """Compute the gradient of the log likelihood of the density given the atomic coordinates and side chain angles.
 
         Parameters
@@ -369,12 +380,11 @@ class ADP3D:
         torch.Tensor
             Gradient of the log likelihood of the density.
         """
-        y.requires_grad = False
-        C.requires_grad = False
-        result = self.ll_density(y, z, C)
+        self.y.requires_grad = False  # TODO: move these to init?
+        self.C_bar.requires_grad = False
+        result = self.ll_density(self.y, z, self.C_bar)
 
-        result.backward(inputs=z)
-        return z.grad
+        return torch.autograd.grad(result, z)
 
     def _t(epoch: int) -> torch.Tensor:
         """Time schedule for the model refinement task.
@@ -393,10 +403,6 @@ class ADP3D:
 
     def model_refinement_optimizer(
         self,
-        protein: Protein,
-        x_bar: torch.Tensor,
-        seq: torch.Tensor,
-        y: torch.Tensor,
         epochs: float = 4000,
         lr_m_s_d: List[float] = [1e-1, 1e-5, 3e-5],
         momenta: List[float] = [9e-1] * 3,
@@ -405,10 +411,6 @@ class ADP3D:
 
         Parameters
         ----------
-        protein : Protein
-            Input incomplete protein structure as a Chroma Protein object. Most often this should be a
-        y : torch.Tensor
-            Measured density map data in 3D space.
         epochs : float, optional
             Number of epochs, by default 4000
         lr_m_s_d : List[float], optional
@@ -425,7 +427,7 @@ class ADP3D:
         v_i_m = torch.zeros(X.size())
         v_i_s = torch.zeros(X.size())
         v_i_d = torch.zeros(X.size())
-        X, C, _ = protein.to_XCS()
+        X, C = self.x_bar, self.C_bar
         S = self.seq
 
         for epoch in tqdm(range(epochs), desc="Model Refinement"):
@@ -452,14 +454,14 @@ class ADP3D:
             # Accumulate gradients
             v_i_m = momenta[0] * v_i_m + lr_m_s_d[
                 0
-            ] * self.grad_ll_incomplete_structure(x_bar, z_0)
+            ] * self.grad_ll_incomplete_structure(z_0)
             v_i_s = momenta[1] * v_i_s + lr_m_s_d[
                 1
             ] * grad_ll_sequence(  # NOTE: This should change if a model other than Chroma is used.
-                seq, z_0
+                self.seq, z_0
             )
             z_0_aa = self.multiply_inverse_corr(X_aa, C)  # Transform to whitened space
-            v_i_d = momenta[2] * v_i_d + lr_m_s_d[2] * self.grad_ll_density(y, z_0_aa)
+            v_i_d = momenta[2] * v_i_d + lr_m_s_d[2] * self.grad_ll_density(z_0_aa)
 
             # Update denoised coordinates
             z_t_1 = z_0 + v_i_m + v_i_s + v_i_d
