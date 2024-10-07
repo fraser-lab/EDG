@@ -9,6 +9,12 @@ from adp3d.adp.optimizer import get_elements_from_XCS, minimal_XCS_to_Structure
 from chroma import Chroma, Protein
 from pathlib import Path
 from qfit.structure.elements import ELEMENTS
+from einops import rearrange
+
+
+@pytest.fixture
+def device():
+    return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 @pytest.fixture
@@ -113,30 +119,45 @@ def peptides():
 #     assert np.any(volume > 0)
 
 
-def test_ll_incomplete_structure(peptides, density_file):
+# def test_correlation_matrix(peptides, device):
+#     # 3 residue protein, each with coordinate at (0, 0, 0)
+#     X = torch.zeros(1, 3, 4, 3, device=device)
+#     C = torch.ones(1, 3, device=device)
+#     adp = ADP3D(y=1, seq=torch.zeros(20, 3), structure=peptides[0])
+#     chroma_whitened_test = adp.multiply_inverse_corr(X, C)
+#     chroma_unwhitened_test = adp.multiply_corr(chroma_whitened_test, C)
+#     assert torch.allclose(X, chroma_unwhitened_test, atol=1e-5)
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+#     x_rearranged = rearrange(X, "b r a c -> b (r a) c").squeeze()
+#     my_whitened_test = adp.R @ x_rearranged
+#     assert torch.allclose(
+#         rearrange(chroma_whitened_test, "b r a c -> b (r a) c").squeeze(),
+#         my_whitened_test,
+#         atol=1e-5,
+#     )
+
+
+def test_ll_incomplete_structure(peptides, device):
 
     complete_peptide, incomplete_peptide = peptides
 
     # test simple case: both structures are the same, ll should be 0
-    complete_peptide_XCS = Protein(complete_peptide).to_XCS()
+    complete_peptide_XCS = Protein(complete_peptide).to_XCS(device=device)
     adp = ADP3D(
         y=1, seq=complete_peptide_XCS[2], structure=complete_peptide
     )  # NOTE: density is arbitrary here (just needs to be not None), but if type-checked later in development this might throw an error
-    z = adp.multiply_corr(complete_peptide_XCS[0], complete_peptide_XCS[1]).to(device)
+    z = adp.multiply_inverse_corr(complete_peptide_XCS[0], complete_peptide_XCS[1]).to(
+        device
+    )
     ll = adp.ll_incomplete_structure(z)
     assert ll is not None
-    assert ll == 0
+    assert torch.isclose(ll, torch.zeros(1, device=device), atol=1e-5)
 
     # test slightly more complex case: one structure is a subset of the other
-    incomplete_peptide_XCS = Protein(incomplete_peptide_XCS).to_XCS(all_atom=True)
     adp = ADP3D(
         y=1, seq=complete_peptide_XCS[2], structure=incomplete_peptide
-    ) # NOTE: density is arbitrary here (just needs to be not None), but if type-checked later in development this might throw an error
-    z = adp.multiply_corr(incomplete_peptide_XCS[0], incomplete_peptide_XCS[1]).to(device)
+    )  # NOTE: density is arbitrary here (just needs to be not None), but if type-checked later in development this might throw an error
+    # z stays the same, ll w.r.t. complete structure
     ll = adp.ll_incomplete_structure(z)
     assert ll is not None
     assert ll < 0
-
-    

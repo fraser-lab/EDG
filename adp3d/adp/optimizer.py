@@ -7,6 +7,7 @@ Updated: 20 Aug 2024
 
 from typing import Tuple, Union, List, Dict
 import torch
+import torch.nn.functional as F
 import numpy as np
 from einops import rearrange, reduce, repeat
 from chroma import Chroma, Protein
@@ -20,6 +21,49 @@ from qfit.transformer import Transformer
 from qfit.unitcell import UnitCell
 from qfit.volume import XMap, Resolution
 from qfit.structure.structure import Structure
+
+
+def identity_submatrices(N) -> Tuple[torch.Tensor]:
+    """Generate all identity submatrices of size N x 3.
+
+    Parameters
+    ----------
+    N : int
+        number of rows in the identity submatrices, must be > 3.
+
+    Returns
+    -------
+    torch.Tensor or Tuple[torch.Tensor]
+        (num_submatrices, N, 3) tensor of identity submatrices if N % 3 == 0, else
+        (num_submatrices, 3, N) tensor of identity submatrices and the
+        overhang submatrix of size (N, 3).
+
+    Raises
+    ------
+    ValueError
+        if N is less than 3.
+    """
+    # Ensure that N is at least 3
+    if N < 3:
+        raise ValueError(
+            "N must be at least 3 to create identity submatrices of size N x 3."
+        )
+    overhang = N % 3
+    if overhang != 0:
+        base_submatrices = F.pad(
+            torch.eye(N - overhang)
+            .reshape((N - overhang) // 3, 3, N - overhang)
+            .transpose(1, 2),
+            (0, 0, 0, overhang),
+            "constant",
+            0,
+        )
+        extra_submatrix = torch.cat(
+            [torch.zeros(N - overhang, 3), torch.eye(overhang, 3)], dim=0
+        )
+        return base_submatrices, extra_submatrix
+    else:
+        return torch.eye(N).reshape(N // 3, 3, N).transpose(1, 2), None
 
 
 def get_elements_from_XCS(X: torch.Tensor, S: torch.Tensor) -> List[str]:
@@ -144,14 +188,14 @@ class ADP3D:
         seq : torch.Tensor
             Sequence Tensor for incorporating sequence information, defined in Chroma's XC**S** format
         structure : str
-            Input CIF file path for an incomplete structure
+            Input file path for an incomplete structure
         protein : Protein, optional
             Chroma Protein object for initializing with a given protein structure, by default None
         """
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        # enforce input args # TODO: check if this is needed
+        # enforce input args
         check = [x is not None for x in [y, seq, structure]]
         if not any(check):
             raise ValueError("Arguments y, seq, and structure must be defined.")
@@ -159,9 +203,7 @@ class ADP3D:
         self.protein = protein
         self.y = y
         self.seq = seq
-        self.x_bar, self.C_bar, _ = Protein.from_CIF(
-            structure, device=self.device
-        ).to_XCS()
+        self.x_bar, self.C_bar, _ = Protein(structure).to_XCS(device=self.device)
 
         # Importing sqrt(covariance matrix) from Chroma
         # These take in Z and C (for _multiply_R) or X and C (for _multiply_R_inverse)
@@ -170,28 +212,36 @@ class ADP3D:
         self.multiply_inverse_corr = self.mvn._multiply_R_inverse
 
         # Build correlation matrix for incomplete structure log likelihood
-        z_bar = self.multiply_inverse_corr(self.x_bar, self.C_bar)
+        r = self.seq.size()[
+            1
+        ]  # Number of residues (from sequence, since we want total number in the correlation matrix)
+        a = self.x_bar.size()[2]  # Number of atoms in one residue
+        N = r * a  # Number of atoms in the protein backbone
+        identity_matrices, overhang_matrix = identity_submatrices(N)
+        overhang = N % 3
 
-        # fix dimensions for _expand_per_chain
-        if z_bar.dim() == 4:
-            z_bar = rearrange(z_bar, "b r a c -> b (r a) c")
+        Z = rearrange(identity_matrices, "b (r a) c -> b r a c", r=r, a=a).to(
+            self.device
+        )
+        C = torch.ones(
+            identity_matrices.size()[0], r, device=self.device
+        )  # all residues in sequence should be active
 
-        C_bar_mask_all, _, _ = self.mvn._expand_per_chain(z_bar, self.C_bar)
-        B, _, _ = self.mvn._globular_parameters(
-            C_bar_mask_all
-        )  # shape will be (B, C), so likely (1, 1)
+        self.R = rearrange(self.multiply_corr(Z, C), "b r a c -> (r a) (b c)")
 
-        # NOTE: Only on single chains for now
-        B = B.squeeze()  # B is now a scalar
-        N = self.x_bar.size()[1]  # Number of residues
-        A = 4 * N  # Number of atoms in backbone
-        R = torch.zeros(A, A)  # Initialize correlation matrix on all atoms
-        for i in range(A):
-            R[i:, i] = self.mvn._nu * B ** torch.arange(i, A, device=self.device)
-            if i > 0:
-                R[i:, i] = B ** torch.arange(0, A - i, device=self.device)
+        if overhang_matrix is not None:
+            overhang_matrix = overhang_matrix.unsqueeze(0).to(self.device)
+            overhang_matrix = rearrange(
+                overhang_matrix, "b (r a) c -> b r a c", r=r, a=a
+            )
+            last_R_columns = rearrange(
+                self.multiply_corr(overhang_matrix, self.C_bar).squeeze(),
+                "r a c -> (r a) c",
+            )[
+                :, :overhang
+            ]  # should be shape N x overhang for concat with identity_matrices
 
-        R = (self.mvn._scale * R).to(self.device)
+            self.R = torch.cat([self.R, last_R_columns], dim=1)
 
         # Build measurement matrix for incomplete structure log likelihood
         # Going to only account for backbone atoms, so 4 atoms per residue. Could extend to all atom later, I think.
@@ -203,7 +253,7 @@ class ADP3D:
 
         # Precompute SVD for incomplete structure log likelihood
 
-        AR = self.A @ R
+        AR = self.A @ self.R
         # U shape (m, m), S shape (m, n), V_T shape (n, n)
         self.U, S, self.V_T = torch.linalg.svd(AR)
         if len(S.size()) == 1:
@@ -228,12 +278,8 @@ class ADP3D:
 
         Parameters
         ----------
-        x_bar : torch.Tensor
-            Incomplete structure coordinates.
         z : torch.Tensor
             Denoised coordinates.
-        C : torch.Tensor
-            Chain map (needed for multiplying correlation matrix).
 
         Returns
         -------
@@ -242,11 +288,9 @@ class ADP3D:
         """
         z = rearrange(z, "b r a c -> b (r a) c").squeeze()
         x_bar = rearrange(self.x_bar, "b r a c -> b (r a) c").squeeze()
-        to_norm = self.A @ self.V_T @ z - self.S_plus @ self.U.T @ x_bar
         breakpoint()
-        return (
-            -torch.linalg.vector_norm(torch.flatten(to_norm)) ** 2
-        )
+        to_norm = self.A @ self.V_T @ z - self.S_plus @ self.U.T @ x_bar
+        return -torch.linalg.vector_norm(torch.flatten(to_norm)) ** 2
 
     def grad_ll_incomplete_structure(  # TODO: Test here
         self, x_bar: torch.Tensor, z: torch.Tensor
