@@ -17,10 +17,6 @@ from chroma.layers.structure.mvn import BackboneMVNGlobular
 from chroma.constants import AA_GEOMETRY, AA20_3
 from tqdm import tqdm
 from adp3d.utils.utility import DotDict
-from qfit.transformer import Transformer
-from qfit.unitcell import UnitCell
-from qfit.volume import XMap, Resolution
-from qfit.structure.structure import Structure
 
 
 def identity_submatrices(N) -> Tuple[torch.Tensor]:
@@ -64,109 +60,6 @@ def identity_submatrices(N) -> Tuple[torch.Tensor]:
         return base_submatrices, extra_submatrix
     else:
         return torch.eye(N).reshape(N // 3, 3, N).transpose(1, 2), None
-
-
-def get_elements_from_XCS(X: torch.Tensor, S: torch.Tensor) -> List[str]:
-    """Get element names from an XCS tensor representation of a protein.
-
-    Parameters
-    ----------
-    X : torch.Tensor
-        Protein coordinates in XCS format.
-    S : torch.Tensor
-        Protein sequence in XCS format.
-
-    Returns
-    -------
-    torch.Tensor
-        Elements for the protein atoms compatible with qFit.
-    """
-    if X.size()[2] == 4:
-        # All residues are backbone atoms = GLY
-        # repeat [N, C, C, O] for each residue
-        return ["N", "C", "C", "O"] * X.size()[1]
-    else:
-        elements = []
-
-        # Get 3 letter code from one letter in sequence.
-        index_to_code = {i: code for i, code in enumerate(AA20_3)}
-        S = [index_to_code[int(aa)] for aa in S.squeeze()]
-
-        # Get elements from XCS
-        for residue in S:
-            backbone_elements = ["N", "C", "C", "O"]
-            if residue == "GLY":
-                elements.extend(backbone_elements)
-            else:
-                backbone_elements.extend(
-                    [atom[0] for atom in AA_GEOMETRY[residue]["atoms"]]
-                )
-                elements.extend(backbone_elements)
-
-        return elements
-
-
-def minimal_XCS_to_Structure(
-    X: torch.Tensor, S: torch.Tensor
-) -> Dict:  # TODO: Only works for single chains.
-    """Transform a minimal XCS tensor representation of a protein to a qFit Structure object.
-    (but secretly just a Dict with the necessary keys for a qFit Transformer as qFit does not type check for Structure)
-
-    Parameters
-    ----------
-    X : torch.Tensor
-        Protein coordinates in XCS format.
-    S : torch.Tensor
-        Sequence in XCS format.
-
-    Returns
-    -------
-    Dict
-        Dictionary with the necessary keys for a qFit Transformer.
-    """
-    if X.size()[0] > 1:
-        raise ValueError(
-            "Currently only one protein structure can be converted at a time."
-        )
-    e = get_elements_from_XCS(X, S)
-    coor = (
-        rearrange(X, "b r a c -> b (r a) c").squeeze().cpu().numpy()
-    )  # FIXME: does qFit work without this as numpy?
-    coor = np.ascontiguousarray(coor).astype(np.float64)
-
-    natoms = coor.shape[0]
-    active = np.ones(natoms, dtype=bool)
-    b = np.array([10] * natoms, dtype=np.float64)
-    q = np.array([1] * natoms, dtype=np.float64)
-    structure = {
-        "coor": coor,
-        "b": b,
-        "q": q,
-        "e": e,
-        "active": active,
-        "natoms": natoms,
-    }
-    return structure
-
-
-def XCS_to_Structure(X: torch.Tensor, C: torch.Tensor, S: torch.Tensor) -> Structure:
-    """Transform an XCS tensor representation of a protein to a qFit Structure object.
-
-    Parameters
-    ----------
-    X : torch.Tensor
-        Protein coordinates in XCS format.
-    C : torch.Tensor
-        Chain map in XCS format.
-    S : torch.Tensor
-        Sequence in XCS format.
-
-    Returns
-    -------
-    Structure
-        qFit Structure object.
-    """
-    pass
 
 
 class ADP3D:
@@ -354,23 +247,9 @@ class ADP3D:
             size (torch.Tensor): The desired size of the output density map.
 
         Returns:
-            torch.Tensor: The density map (shape (100, 100, 100)).
+            torch.Tensor: The structure factors.
         """
-        # NOTE: NO TYPECHECKS IN QFIT so I can do this
-        structure = DotDict(minimal_XCS_to_Structure(X, S))
-        # NOTE: EMMap in qFit doesn't seem to be interoperable with the Transformer, so I'm going to use XMap
-        map = XMap(
-            array=np.zeros(size, dtype=np.float64),
-            unit_cell=UnitCell(),
-            resolution=Resolution(high=2.0, low=2.0),
-        )
-        transformer = Transformer(
-            structure, map, em=True, simple=True
-        )  # TODO: not sure what simple means here exactly, check this later
-        transformer.density()
-        return (
-            transformer.xmap.array
-        )  # TODO: Test, make sure densities are aligned. In this case, the density has origin at 0 and size 100, 100, 100. Make sure the observed density is compatible with this.
+        
 
     def ll_density(  # TODO: Test here
         self, y: torch.Tensor, z: torch.Tensor, C: torch.Tensor, S: torch.Tensor
