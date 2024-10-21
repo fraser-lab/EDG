@@ -66,49 +66,6 @@ def peptides():
 #     assert adp is not None
 
 
-# def test_get_elements_from_XCS(cif_file):
-#     structure = Protein(cif_file)
-#     X, _, S = structure.to_XCS(all_atom=True)
-#     elements = get_elements_from_XCS(X, S)
-#     assert len(elements) > 0
-#     assert len(elements) > S.size()[0]
-#     assert set(elements).issubset(
-#         set(
-#             [
-#                 "N",
-#                 "C",
-#                 "O",
-#                 "S",
-#                 "H",
-#             ]
-#         )
-#     )
-
-
-# def test_minimal_XCS_to_Structure(cif_file):
-#     structure = Protein(cif_file)
-#     X, _, S = structure.to_XCS()
-#     minimal_structure = minimal_XCS_to_Structure(X, S)
-#     assert minimal_structure is not None
-#     for key in ["coor", "b", "q", "e", "active"]:
-#         assert key in minimal_structure.keys()
-#     num_atoms = X.size()[1] * X.size()[2]
-#     assert minimal_structure["coor"].shape == (num_atoms, 3)
-#     assert np.any(minimal_structure["coor"] != (0, 0, 0))
-#     assert minimal_structure["b"].shape == (num_atoms,)
-#     assert minimal_structure["q"].shape == (num_atoms,)
-#     assert minimal_structure["active"].shape == (num_atoms,)
-#     assert minimal_structure["natoms"] == num_atoms
-
-
-# def test_XCS_to_Structure():
-#     pass
-
-
-# def test_chroma_cif_with_qfit(cif_file):
-#     pass
-
-
 # def test_gamma(adp_init):
 #     adp = adp_init
 #     X, S = adp.x_bar, adp.seq
