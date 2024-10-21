@@ -9,6 +9,9 @@ from typing import Tuple, Union, List, Dict
 import torch
 import torch.nn.functional as F
 import numpy as np
+import os
+import gemmi
+import warnings
 from einops import rearrange, reduce, repeat
 from chroma import Chroma, Protein
 from chroma.layers.structure.mvn import BackboneMVNGlobular
@@ -18,6 +21,7 @@ from chroma.constants import AA_GEOMETRY, AA20_3
 from tqdm import tqdm
 from adp3d.utils.utility import DotDict
 from SFC_Torch.Fmodel import SFcalculator
+
 
 
 def identity_submatrices(N) -> Tuple[torch.Tensor]:
@@ -66,7 +70,7 @@ def identity_submatrices(N) -> Tuple[torch.Tensor]:
 class ADP3D:
     def __init__(
         self,
-        y: torch.Tensor,
+        y: str,
         seq: torch.Tensor,
         structure: str,
         protein: Protein = None,
@@ -77,8 +81,8 @@ class ADP3D:
 
         Parameters
         ----------
-        y : torch.Tensor
-            Input density measurement in torch.Tensor format with 3 axes. Ideally loaded by gemmi or mrcfile.
+        y : str
+            Input density measurement for incorporating density information, as a ccp4 or mrc file.
         seq : torch.Tensor
             Sequence Tensor for incorporating sequence information, defined in Chroma's XC**S** format
         structure : str
@@ -95,7 +99,15 @@ class ADP3D:
             raise ValueError("Arguments y, seq, and structure must be defined.")
 
         self.protein = protein
-        self.y = y
+
+        if os.path.splitext(y)[1] not in (".ccp4", ".map"):
+            warnings.warn("Density map must be a ccp4 or mrc file.")
+
+        map = gemmi.read_ccp4_map(y)
+        map_array = map.grid.array
+        self.y = torch.from_numpy(
+            np.ascontiguousarray(map_array)
+        ).to(self.device, dtype=torch.float32)
         self.seq = seq
         self.x_bar, self.C_bar, _ = Protein(structure).to_XCS(device=self.device)
 
@@ -182,17 +194,19 @@ class ADP3D:
         """
         z = rearrange(z, "b r a c -> b (r a) c").squeeze()
         x_bar = rearrange(self.x_bar, "b r a c -> b (r a) c").squeeze()
-        breakpoint()
         to_norm = self.A @ self.V_T @ z - self.S_plus @ self.U.T @ x_bar
         return -torch.linalg.vector_norm(torch.flatten(to_norm)) ** 2
 
     def grad_ll_incomplete_structure(  # TODO: Test here
-        self, x_bar: torch.Tensor, z: torch.Tensor
+        self, z: torch.Tensor
     ) -> torch.Tensor:
-        x_bar.requires_grad = False
-        result = self.ll_incomplete_structure(x_bar, z)
 
-        return torch.autograd.grad(result, z)
+        if z.requires_grad == False:
+            z = z.clone().detach().requires_grad_(True)  # reset graph history
+
+        result = self.ll_incomplete_structure(z)
+
+        return torch.autograd.grad(result, z)[0]
 
     def ll_sequence(self, s: torch.Tensor, z: torch.Tensor) -> torch.Tensor:
         """Compute the log likelihood of the sequence given the denoised coordinates.
@@ -238,9 +252,9 @@ class ADP3D:
         )
 
     def gamma(
-        cls, X: torch.Tensor, S: torch.Tensor, size: tuple = (100, 100, 100)
+        self, X: torch.Tensor, size: tuple = (100, 100, 100)
     ) -> torch.Tensor:  # TODO: Test here
-        """Compute a density map of the all-atom coordinates X.
+        """Compute backbone structure factors of the all-atom coordinates X for density map subtraction in Fourier space.
 
         Args:
             X (torch.Tensor): The input all-atom protein coordinates.
@@ -253,21 +267,15 @@ class ADP3D:
         # Get structure factors
         sfcalculator = SFcalculator()
 
-    def ll_density(  # TODO: Test here
-        self, y: torch.Tensor, z: torch.Tensor, C: torch.Tensor, S: torch.Tensor
+    def ll_density(
+        self, z: torch.Tensor
     ) -> torch.Tensor:
         """Compute the log likelihood of the density given the atomic coordinates and side chain angles.
 
         Parameters
         ----------
-        y : torch.Tensor
-            Density map.
         z : torch.Tensor
             Denoised coordinates.
-        C : torch.Tensor
-            Chain map (needed for multiplying correlation matrix).
-        S : torch.Tensor
-            Sequence tensor.
 
         Returns
         -------
@@ -276,16 +284,16 @@ class ADP3D:
         """
 
         X = self.multiply_corr(
-            z, C
+            z, self.C_bar
         )  # Transform denoised coordinates to Cartesian space
         density = self.gamma(
-            X, S, size=y.size()
+            X, size=self.y.size()
         )  # Get density map from denoised coordinates
 
-        if density.size() != y.size():
+        if density.size() != self.y.size():
             raise ValueError("Density map and input density map must be the same size.")
 
-        return -torch.linalg.vector_norm(torch.flatten(density) - torch.flatten(y)) ** 2
+        return -torch.linalg.vector_norm(torch.flatten(density) - torch.flatten(self.y)) ** 2
 
     def grad_ll_density(self, z: torch.Tensor) -> torch.Tensor:  # TODO: Test here
         """Compute the gradient of the log likelihood of the density given the atomic coordinates and side chain angles.
@@ -293,21 +301,19 @@ class ADP3D:
         Parameters
         ----------
 
-        y : torch.Tensor
-            Density map.
         z : torch.Tensor
             Denoised coordinates.
-        C : torch.Tensor
-            Chain map (needed for multiplying correlation matrix).
 
         Returns
         -------
         torch.Tensor
             Gradient of the log likelihood of the density.
         """
-        self.y.requires_grad = False  # TODO: move these to init?
-        self.C_bar.requires_grad = False
-        result = self.ll_density(self.y, z, self.C_bar)
+        if z.requires_grad == False:
+            z = z.clone().detach().requires_grad_(True)  # reset graph history
+
+        breakpoint()
+        result = self.ll_density(z)
 
         return torch.autograd.grad(result, z)
 
@@ -357,13 +363,13 @@ class ADP3D:
 
         for epoch in tqdm(range(epochs), desc="Model Refinement"):
             # Denoise coordinates
-            output = self.denoiser(C, X_init=X, N=1)  # TODO: Test here
+            output = self.denoiser(C, X_init=X, N=1)  # TODO: FIX HERE
             X = output["X_sample"]  # Get denoised coordinates
             C = output["C"]  # Get denoised chain map (required for Chroma functions)
 
             z_0 = self.multiply_inverse_corr(
                 X, C
-            )  # transform denoised coordinates to whitened space # TODO: Test here
+            )  # transform denoised coordinates to whitened space
 
             if epoch % 100 == 0:
                 X_aa, _, _, scores = self.sequence_chi_sampler(X, C, S, t=0.0)
@@ -371,10 +377,10 @@ class ADP3D:
             ll_sequence = scores["logp_S"]  # Get sequence log probability
             ll_sequence.backward(
                 input=X_aa
-            )  # Backpropagate to get gradients # TODO: Test here
+            )  # Backpropagate to get gradients # TODO: use autograd.grad
             grad_ll_sequence = self.multiply_corr(
                 X_aa.grad[:, :, :4, :], C
-            )  # Get gradient of log likelihood of sequence # TODO: Test here
+            )  # Get gradient of log likelihood of sequence # TODO: this doesn't make sense to me anymore
 
             # Accumulate gradients
             v_i_m = momenta[0] * v_i_m + lr_m_s_d[
