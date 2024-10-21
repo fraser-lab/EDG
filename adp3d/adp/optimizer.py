@@ -17,6 +17,7 @@ from chroma.layers.structure.mvn import BackboneMVNGlobular
 from chroma.constants import AA_GEOMETRY, AA20_3
 from tqdm import tqdm
 from adp3d.utils.utility import DotDict
+from SFC_Torch.Fmodel import SFcalculator
 
 
 def identity_submatrices(N) -> Tuple[torch.Tensor]:
@@ -249,7 +250,8 @@ class ADP3D:
         Returns:
             torch.Tensor: The structure factors.
         """
-        
+        # Get structure factors
+        sfcalculator = SFcalculator()
 
     def ll_density(  # TODO: Test here
         self, y: torch.Tensor, z: torch.Tensor, C: torch.Tensor, S: torch.Tensor
