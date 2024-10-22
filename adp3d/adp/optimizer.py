@@ -21,7 +21,7 @@ from chroma.constants import AA_GEOMETRY, AA20_3
 from tqdm import tqdm
 from adp3d.utils.utility import DotDict
 from SFC_Torch.Fmodel import SFcalculator
-
+from SFC_Torch.io import PDBParser
 
 
 def identity_submatrices(N) -> Tuple[torch.Tensor]:
@@ -82,7 +82,7 @@ class ADP3D:
         Parameters
         ----------
         y : str
-            Input density measurement for incorporating density information, as a ccp4 or mrc file.
+            Input density measurement for incorporating density information, as a CCP4, MRC, or MTZ file.
         seq : torch.Tensor
             Sequence Tensor for incorporating sequence information, defined in Chroma's XC**S** format
         structure : str
@@ -100,16 +100,52 @@ class ADP3D:
 
         self.protein = protein
 
-        if os.path.splitext(y)[1] not in (".ccp4", ".map"):
-            warnings.warn("Density map must be a ccp4 or mrc file.")
-
-        map = gemmi.read_ccp4_map(y)
-        map_array = map.grid.array
-        self.y = torch.from_numpy(
-            np.ascontiguousarray(map_array)
-        ).to(self.device, dtype=torch.float32)
         self.seq = seq
-        self.x_bar, self.C_bar, _ = Protein(structure).to_XCS(device=self.device)
+        self.x_bar, self.C_bar, S = Protein(structure).to_XCS(device=self.device)
+
+        # save backbone only PDB model NOTE: Get rid of this once all atom works
+        Protein.from_XCS(self.x_bar, self.C_bar, S).to_PDB(
+            f"{os.path.splitext(structure)[0]}_bb.pdb"
+        )
+
+        self.density_extension = os.path.splitext(y)[1]
+        if self.density_extension not in (".ccp4", ".map", ".mtz"):
+            warnings.warn("Density map must be a CCP4, MRC, or MTZ file.")
+
+        # deal with SFcalculator
+        if (
+            self.density_extension == ".mtz"
+        ):  # NOTE: MTZ isn't used currently, but will be once all atom or chi sampler is used.
+            structure_bb = gemmi.read_pdb(
+                f"{os.path.splitext(structure)[0]}_bb.pdb"
+            )  # NOTE: Get rid of this once all atom works
+
+            if os.path.splitext(structure)[1] == ".cif":
+                structure = gemmi.make_structure_from_block(
+                    gemmi.cif.read(structure)[0]
+                )
+            else:  # assume PDB
+                structure = gemmi.read_pdb(structure)
+
+            structure_bb.spacegroup_hm = (
+                structure.spacegroup_h
+            )  # NOTE: Get rid of this once all atom worksm
+            structure_bb.cell = (
+                structure.cell
+            )  # NOTE: Get rid of this once all atom works
+            self.input_sfcalculator = (
+                SFcalculator(  # NOTE: Get rid of this once all atom works
+                    structure=PDBParser(structure_bb),
+                    set_experiment=False,
+                    device=self.device,
+                )
+            )
+        else:
+            map = gemmi.read_ccp4_map(y)
+            map_array = map.grid.array
+            self.y = torch.from_numpy(np.ascontiguousarray(map_array)).to(
+                self.device, dtype=torch.float32
+            )
 
         # Importing sqrt(covariance matrix) from Chroma
         # These take in Z and C (for _multiply_R) or X and C (for _multiply_R_inverse)
@@ -173,7 +209,7 @@ class ADP3D:
         self.sequence_sampler = None  # NOTE: Placeholder for sequence sampling. This will need to be implemented if doing model refinement with a denoiser other than Chroma
         self.chi_sampler = None  # NOTE: Placeholder for chi angle sampling. This will need to be implemented if doing model refinement with a denoiser other than Chroma
         self.sequence_chi_sampler = (
-            self.chroma.design_network.sample
+            self.chroma.design_network.sample  # TODO: test this
         )  # In Chroma, this can get log_p sequence and all atom coordinates.
         # self.chi_to_X = (
         #     SideChainBuilder()
@@ -264,12 +300,9 @@ class ADP3D:
         Returns:
             torch.Tensor: The structure factors.
         """
-        # Get structure factors
-        sfcalculator = SFcalculator()
+        pass
 
-    def ll_density(
-        self, z: torch.Tensor
-    ) -> torch.Tensor:
+    def ll_density(self, z: torch.Tensor) -> torch.Tensor:
         """Compute the log likelihood of the density given the atomic coordinates and side chain angles.
 
         Parameters
@@ -282,18 +315,39 @@ class ADP3D:
         torch.Tensor
             Log likelihood of the density.
         """
-
         X = self.multiply_corr(
             z, self.C_bar
         )  # Transform denoised coordinates to Cartesian space
-        density = self.gamma(
-            X, size=self.y.size()
-        )  # Get density map from denoised coordinates
+        X = rearrange(X, "b r a c -> b (r a) c").squeeze()
 
-        if density.size() != self.y.size():
-            raise ValueError("Density map and input density map must be the same size.")
+        if self.density_extension == ".mtz":
 
-        return -torch.linalg.vector_norm(torch.flatten(density) - torch.flatten(self.y)) ** 2
+            if X.size()[0] != self.input_sfcalculator.n_atoms:
+                raise ValueError(
+                    "Number of atoms in input coordinates must match number of atoms in structure factor calculator."
+                )
+            Fprotein = self.input_sfcalculator.calc_fprotein(Return=True)
+            Fmodel = self.input_sfcalculator.calc_fprotein_batch(
+                X, Return=True
+            ).squeeze()
+
+            return -torch.linalg.norm(Fprotein - Fmodel) ** 2
+        else:  # FIXME: Currently doesn't work
+            density = self.gamma(
+                X, size=self.y.size()
+            )  # Get density map from denoised coordinates
+
+            if density.size() != self.y.size():
+                raise ValueError(
+                    "Density map and input density map must be the same size."
+                )
+
+            return (
+                -torch.linalg.vector_norm(
+                    torch.flatten(density) - torch.flatten(self.y)
+                )
+                ** 2
+            )
 
     def grad_ll_density(self, z: torch.Tensor) -> torch.Tensor:  # TODO: Test here
         """Compute the gradient of the log likelihood of the density given the atomic coordinates and side chain angles.
@@ -315,7 +369,7 @@ class ADP3D:
         breakpoint()
         result = self.ll_density(z)
 
-        return torch.autograd.grad(result, z)
+        return torch.autograd.grad(result, z)[0]
 
     def _t(epoch: int) -> torch.Tensor:
         """Time schedule for the model refinement task.
@@ -358,12 +412,20 @@ class ADP3D:
         v_i_m = torch.zeros(X.size())
         v_i_s = torch.zeros(X.size())
         v_i_d = torch.zeros(X.size())
-        X, C = self.x_bar, self.C_bar
+        if self.protein is not None:
+            X, C, _ = self.protein.to_XCS(
+                device=self.device
+            )  # handle GT protein initialization
+        else:
+            X = torch.randn_like(self.x_bar, device=self.device)
+            C = torch.ones_like(self.seq, device=self.device)
         S = self.seq
 
         for epoch in tqdm(range(epochs), desc="Model Refinement"):
             # Denoise coordinates
-            output = self.denoiser(C, X_init=X, N=1)  # TODO: FIX HERE
+            output = self.denoiser(
+                C, X_init=X, N=1
+            )  # TODO: FIX HERE, X should be randn
             X = output["X_sample"]  # Get denoised coordinates
             C = output["C"]  # Get denoised chain map (required for Chroma functions)
 
@@ -375,11 +437,11 @@ class ADP3D:
                 X_aa, _, _, scores = self.sequence_chi_sampler(X, C, S, t=0.0)
 
             ll_sequence = scores["logp_S"]  # Get sequence log probability
-            ll_sequence.backward(
-                input=X_aa
-            )  # Backpropagate to get gradients # TODO: use autograd.grad
+            grad_ll_sequence = torch.autograd.grad(ll_sequence, X_aa)[
+                0
+            ]  # Backpropagate to get gradients # TODO: use autograd.grad
             grad_ll_sequence = self.multiply_corr(
-                X_aa.grad[:, :, :4, :], C
+                grad_ll_sequence[:, :, :4, :], C
             )  # Get gradient of log likelihood of sequence # TODO: this doesn't make sense to me anymore
 
             # Accumulate gradients
