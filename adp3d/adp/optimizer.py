@@ -68,6 +68,20 @@ def identity_submatrices(N) -> Tuple[torch.Tensor]:
     else:
         return torch.eye(N).reshape(N // 3, 3, N).transpose(1, 2), None
 
+def _t(epoch: int, total_epochs: int) -> torch.Tensor:
+    """Time schedule for the model refinement task.
+
+    Parameters
+    ----------
+    epoch : int
+        Current epoch.
+
+    Returns
+    -------
+    torch.Tensor
+        Current time.
+    """
+    return torch.tensor((1.0 - 0.001) * (1.0 - np.sqrt(epoch / total_epochs)) + 0.001).float()
 
 class ADP3D:
     def __init__(
@@ -115,8 +129,9 @@ class ADP3D:
             warnings.warn("Density map must be a CCP4, MRC, SF-CIF, or MTZ file.")
 
         # deal with SFcalculator
-        if (
-            self.density_extension in (".mtz", ".cif")
+        if self.density_extension in (
+            ".mtz",
+            ".cif",
         ):  # NOTE: MTZ or SF-CIF aren't used currently, but will be once all atom or chi sampler is used.
             structure_bb = gemmi.read_pdb(
                 f"{os.path.splitext(structure)[0]}_bb.pdb"
@@ -208,7 +223,10 @@ class ADP3D:
 
         # Initialize Chroma
         self.chroma = Chroma()
-        self.denoiser = self.chroma.backbone_network.sample_sde
+        self.denoiser = self.chroma.backbone_network.denoise
+        self.noise_scheduler = (
+            self.chroma.backbone_network.noise_perturb._schedule_coefficients
+        )
         self.sequence_sampler = None  # NOTE: Placeholder for sequence sampling. This will need to be implemented if doing model refinement with a denoiser other than Chroma
         self.chi_sampler = None  # NOTE: Placeholder for chi angle sampling. This will need to be implemented if doing model refinement with a denoiser other than Chroma
         self.sequence_chi_sampler = (
@@ -236,9 +254,7 @@ class ADP3D:
         to_norm = self.A @ self.V_T @ z - self.S_plus @ self.U.T @ x_bar
         return -torch.linalg.vector_norm(torch.flatten(to_norm)) ** 2
 
-    def grad_ll_incomplete_structure(  # TODO: Test here
-        self, z: torch.Tensor
-    ) -> torch.Tensor:
+    def grad_ll_incomplete_structure(self, z: torch.Tensor) -> torch.Tensor:
 
         if z.requires_grad == False:
             z = z.clone().detach().requires_grad_(True)  # reset graph history
@@ -302,10 +318,9 @@ class ADP3D:
         Returns:
             torch.Tensor: The structure factors.
         """
+        # TODO: account for time dependent resolution
         if len(X.size()) == 4:
             X = rearrange(X, "b r a c -> b (r a) c").squeeze()
-        
-
 
     def ll_density(self, z: torch.Tensor) -> torch.Tensor:
         """Compute the log likelihood of the density given the atomic coordinates and side chain angles.
@@ -323,7 +338,7 @@ class ADP3D:
         X = self.multiply_corr(
             z, self.C_bar
         )  # Transform denoised coordinates to Cartesian space
-        X = rearrange(X, "b r a c -> b (r a) c") # b, N, 3
+        X = rearrange(X, "b r a c -> b (r a) c")  # b, N, 3
 
         if self.density_extension in (".mtz", ".cif"):
 
@@ -337,7 +352,7 @@ class ADP3D:
             ).squeeze()
 
             return -torch.linalg.norm(torch.abs(Fprotein) - torch.abs(Fmodel)) ** 2
-        else:  # TODO: move this to Fourier space
+        else:  # TODO: fix and move this to Fourier space
             density = self.gamma(
                 X, size=self.y.size()
             )  # Get density map from denoised coordinates
@@ -354,7 +369,7 @@ class ADP3D:
                 ** 2
             )
 
-    def grad_ll_density(self, z: torch.Tensor) -> torch.Tensor:  # TODO: Test here
+    def grad_ll_density(self, z: torch.Tensor) -> torch.Tensor:
         """Compute the gradient of the log likelihood of the density given the atomic coordinates and side chain angles.
 
         Parameters
@@ -375,32 +390,18 @@ class ADP3D:
 
         return torch.autograd.grad(result, z)[0]
 
-    def _t(epoch: int) -> torch.Tensor:
-        """Time schedule for the model refinement task.
-
-        Parameters
-        ----------
-        epoch : int
-            Current epoch.
-
-        Returns
-        -------
-        torch.Tensor
-            Current temperature. # FIXME: Not sure?
-        """
-        return 1 - torch.sqrt(torch.tensor(epoch) / 4000)
-
     def model_refinement_optimizer(
         self,
-        epochs: float = 4000,
+        epochs: int = 4000,
         lr_m_s_d: List[float] = [1e-1, 1e-5, 3e-5],
         momenta: List[float] = [9e-1] * 3,
+        output_dir: str = "output",
     ) -> Protein:
         """Use gradient descent with momentum to optimize log likelihood functions for model refinement task along with denoised coordinates.
 
         Parameters
         ----------
-        epochs : float, optional
+        epochs : int, optional
             Number of epochs, by default 4000
         lr_m_s_d : List[float], optional
             Learning rates for each log likelihood function,
@@ -413,38 +414,46 @@ class ADP3D:
         Protein
             Denoised and data matched protein structure.
         """
-        v_i_m = torch.zeros(X.size())
-        v_i_s = torch.zeros(X.size())
-        v_i_d = torch.zeros(X.size())
+
         if self.protein is not None:
             X, C, _ = self.protein.to_XCS(
                 device=self.device
             )  # handle GT protein initialization
         else:
             X = torch.randn_like(self.x_bar, device=self.device)
-            C = torch.ones_like(self.seq, device=self.device)
+            C = torch.ones_like(self.C_bar, device=self.device)
         S = self.seq
+
+        v_i_m = torch.zeros(X.size(), device=self.device)
+        v_i_s = torch.zeros(X.size(), device=self.device)
+        v_i_d = torch.zeros(X.size(), device=self.device)
 
         for epoch in tqdm(range(epochs), desc="Model Refinement"):
             # Denoise coordinates
-            output = self.denoiser(C, X_init=X, N=1)
-            X = output["X_sample"]  # Get denoised coordinates
-            C = output["C"]  # Get denoised chain map (required for Chroma functions)
+            t = _t(epoch, epochs).to(self.device)
 
-            z_0 = self.multiply_inverse_corr(
-                X, C
-            )  # transform denoised coordinates to whitened space
+            with torch.no_grad():
+                X_0 = self.denoiser(X.detach(), C, t)
 
-            if epoch % 100 == 0:
-                X_aa, _, _, scores = self.sequence_chi_sampler(X, C, S, t=0.0)
+            # transform denoised coordinates to whitened space
+            z_0 = self.multiply_inverse_corr(X_0, C)
 
-            ll_sequence = scores["logp_S"]  # Get sequence log probability
-            grad_ll_sequence = torch.autograd.grad(ll_sequence, X_aa)[
-                0
-            ]  # Backpropagate to get gradients # TODO: use autograd.grad
-            grad_ll_sequence = self.multiply_corr(
-                grad_ll_sequence[:, :, :4, :], C
-            )  # Get gradient of log likelihood of sequence # TODO: this doesn't make sense to me anymore
+            if epoch > 3000:
+                with torch.enable_grad():
+                    X_0.requires_grad_(True)
+                    if epoch % 100 == 0:  # TODO: implement all atom
+                        X_aa, _, _, scores = self.sequence_chi_sampler(X_0, C, S, t=0.0)
+
+                    ll_sequence = scores["logp_S"]  # Get sequence log probability
+                    grad_ll_sequence = torch.autograd.grad(ll_sequence, X_aa)[
+                        0
+                    ]  # Backpropagate to get gradients
+
+                grad_ll_sequence = self.multiply_corr(
+                    grad_ll_sequence[:, :, :4, :], C
+                )  # Get gradient of log likelihood of sequence in whitened space # TODO: remove :4 once all atom is implemented
+            else:
+                grad_ll_sequence = torch.zeros_like(z_0, device=self.device)
 
             # Accumulate gradients
             v_i_m = momenta[0] * v_i_m + lr_m_s_d[
@@ -452,18 +461,24 @@ class ADP3D:
             ] * self.grad_ll_incomplete_structure(z_0)
             v_i_s = momenta[1] * v_i_s + lr_m_s_d[
                 1
-            ] * grad_ll_sequence(  # NOTE: This should change if a model other than Chroma is used.
-                self.seq, z_0
-            )
-            z_0_aa = self.multiply_inverse_corr(X_aa, C)  # Transform to whitened space
-            v_i_d = momenta[2] * v_i_d + lr_m_s_d[2] * self.grad_ll_density(z_0_aa)
+            ] * grad_ll_sequence # NOTE: This should change if a model other than Chroma is used.
+
+            # TODO: update below with all atom once done
+            # z_0_aa = self.multiply_inverse_corr(X_aa, C)  # Transform to whitened space
+            v_i_d = momenta[2] * v_i_d + lr_m_s_d[2] * self.grad_ll_density(z_0)
 
             # Update denoised coordinates
             z_t_1 = z_0 + v_i_m + v_i_s + v_i_d
-            X = self.multiply_corr(z_t_1, C)
 
-            # Add noise (currently just assuming the default addition of noise by chroma.backbone_network.sample_sde, not what is defined in the ADP paper)
-            # https://github.com/search?q=repo%3Ageneratebio%2Fchroma%20noise&type=code
+            # Add noise (this is the same as what OG ADP3D does)
+            t1 = _t(epoch + 1, epochs).to(self.device)
+            alpha, sigma, _, _, _, _ = self.noise_scheduler(t1)
+            X = self.multiply_corr(alpha * z_t_1 + sigma * torch.randn_like(z_t_1), C)
+
+            if epoch % 500 == 0:
+                Protein.from_XCS(X, C, S).to_PDB(
+                    os.path.join(output_dir, f"output_epoch_{epoch}.pdb")
+                )
 
         MAP_protein = Protein.from_XCS(X, C, S)
 
