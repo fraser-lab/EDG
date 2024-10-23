@@ -11,6 +11,7 @@ import torch.nn.functional as F
 import numpy as np
 import os
 import gemmi
+import reciprocalspaceship as rs
 import warnings
 from einops import rearrange, reduce, repeat
 from chroma import Chroma, Protein
@@ -20,6 +21,7 @@ from chroma.layers.structure.mvn import BackboneMVNGlobular
 from chroma.constants import AA_GEOMETRY, AA20_3
 from tqdm import tqdm
 from adp3d.utils.utility import DotDict
+from adp3d.data.sf import ATOM_STRUCTURE_FACTORS, ELECTRON_SCATTERING_FACTORS
 from SFC_Torch.Fmodel import SFcalculator
 from SFC_Torch.io import PDBParser
 
@@ -114,11 +116,11 @@ class ADP3D:
 
         # deal with SFcalculator
         if (
-            self.density_extension == ".mtz"
-        ):  # NOTE: MTZ isn't used currently, but will be once all atom or chi sampler is used.
+            self.density_extension in (".mtz", ".cif")
+        ):  # NOTE: MTZ or SF-CIF aren't used currently, but will be once all atom or chi sampler is used.
             structure_bb = gemmi.read_pdb(
                 f"{os.path.splitext(structure)[0]}_bb.pdb"
-            )  # NOTE: Get rid of this once all atom works
+            )  # NOTE: Get rid of this once all atom works, and build the density beforehand
 
             if os.path.splitext(structure)[1] == ".cif":
                 structure = gemmi.make_structure_from_block(
@@ -290,17 +292,19 @@ class ADP3D:
     def gamma(
         self, X: torch.Tensor, size: tuple = (100, 100, 100)
     ) -> torch.Tensor:  # TODO: Test here
-        """Compute backbone structure factors of the all-atom coordinates X for density map subtraction in Fourier space.
+        """Compute electron density map of the all-atom coordinates X.
 
         Args:
             X (torch.Tensor): The input all-atom protein coordinates.
-            S (torch.Tensor): The sequence tensor.
             size (torch.Tensor): The desired size of the output density map.
 
         Returns:
             torch.Tensor: The structure factors.
         """
-        pass
+        if len(X.size()) == 4:
+            X = rearrange(X, "b r a c -> b (r a) c").squeeze()
+        
+
 
     def ll_density(self, z: torch.Tensor) -> torch.Tensor:
         """Compute the log likelihood of the density given the atomic coordinates and side chain angles.
@@ -332,7 +336,7 @@ class ADP3D:
             ).squeeze()
 
             return -torch.linalg.norm(Fprotein - Fmodel) ** 2
-        else:  # FIXME: Currently doesn't work
+        else:  # TODO: move this to Fourier space
             density = self.gamma(
                 X, size=self.y.size()
             )  # Get density map from denoised coordinates
@@ -423,9 +427,7 @@ class ADP3D:
 
         for epoch in tqdm(range(epochs), desc="Model Refinement"):
             # Denoise coordinates
-            output = self.denoiser(
-                C, X_init=X, N=1
-            )  # TODO: FIX HERE, X should be randn
+            output = self.denoiser(C, X_init=X, N=1)
             X = output["X_sample"]  # Get denoised coordinates
             C = output["C"]  # Get denoised chain map (required for Chroma functions)
 
