@@ -111,8 +111,8 @@ class ADP3D:
         )
 
         self.density_extension = os.path.splitext(y)[1]
-        if self.density_extension not in (".ccp4", ".map", ".mtz"):
-            warnings.warn("Density map must be a CCP4, MRC, or MTZ file.")
+        if self.density_extension not in (".ccp4", ".map", ".mtz", ".cif"):
+            warnings.warn("Density map must be a CCP4, MRC, SF-CIF, or MTZ file.")
 
         # deal with SFcalculator
         if (
@@ -130,14 +130,15 @@ class ADP3D:
                 structure = gemmi.read_pdb(structure)
 
             structure_bb.spacegroup_hm = (
-                structure.spacegroup_h
+                structure.spacegroup_hm
             )  # NOTE: Get rid of this once all atom worksm
             structure_bb.cell = (
                 structure.cell
             )  # NOTE: Get rid of this once all atom works
             self.input_sfcalculator = (
                 SFcalculator(  # NOTE: Get rid of this once all atom works
-                    structure=PDBParser(structure_bb),
+                    pdbmodel=PDBParser(structure_bb),
+                    dmin=2.0,
                     set_experiment=False,
                     device=self.device,
                 )
@@ -322,11 +323,11 @@ class ADP3D:
         X = self.multiply_corr(
             z, self.C_bar
         )  # Transform denoised coordinates to Cartesian space
-        X = rearrange(X, "b r a c -> b (r a) c").squeeze()
+        X = rearrange(X, "b r a c -> b (r a) c") # b, N, 3
 
-        if self.density_extension == ".mtz":
+        if self.density_extension in (".mtz", ".cif"):
 
-            if X.size()[0] != self.input_sfcalculator.n_atoms:
+            if X.size()[1] != self.input_sfcalculator.n_atoms:
                 raise ValueError(
                     "Number of atoms in input coordinates must match number of atoms in structure factor calculator."
                 )
@@ -335,7 +336,7 @@ class ADP3D:
                 X, Return=True
             ).squeeze()
 
-            return -torch.linalg.norm(Fprotein - Fmodel) ** 2
+            return -torch.linalg.norm(torch.abs(Fprotein) - torch.abs(Fmodel)) ** 2
         else:  # TODO: move this to Fourier space
             density = self.gamma(
                 X, size=self.y.size()
@@ -370,7 +371,6 @@ class ADP3D:
         if z.requires_grad == False:
             z = z.clone().detach().requires_grad_(True)  # reset graph history
 
-        breakpoint()
         result = self.ll_density(z)
 
         return torch.autograd.grad(result, z)[0]
