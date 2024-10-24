@@ -68,6 +68,7 @@ def identity_submatrices(N) -> Tuple[torch.Tensor]:
     else:
         return torch.eye(N).reshape(N // 3, 3, N).transpose(1, 2), None
 
+
 def _t(epoch: int, total_epochs: int) -> torch.Tensor:
     """Time schedule for the model refinement task.
 
@@ -81,7 +82,10 @@ def _t(epoch: int, total_epochs: int) -> torch.Tensor:
     torch.Tensor
         Current time.
     """
-    return torch.tensor((1.0 - 0.001) * (1.0 - np.sqrt(epoch / total_epochs)) + 0.001).float()
+    return torch.tensor(
+        (1.0 - 0.001) * (1.0 - np.sqrt(epoch / total_epochs)) + 0.001
+    ).float()
+
 
 class ADP3D:
     def __init__(
@@ -146,7 +150,7 @@ class ADP3D:
 
             structure_bb.spacegroup_hm = (
                 structure.spacegroup_hm
-            )  # NOTE: Get rid of this once all atom worksm
+            )  # NOTE: Get rid of this once all atom works
             structure_bb.cell = (
                 structure.cell
             )  # NOTE: Get rid of this once all atom works
@@ -322,7 +326,7 @@ class ADP3D:
         if len(X.size()) == 4:
             X = rearrange(X, "b r a c -> b (r a) c").squeeze()
 
-    def ll_density(self, z: torch.Tensor) -> torch.Tensor:
+    def ll_density(self, X: torch.Tensor) -> torch.Tensor:
         """Compute the log likelihood of the density given the atomic coordinates and side chain angles.
 
         Parameters
@@ -335,10 +339,8 @@ class ADP3D:
         torch.Tensor
             Log likelihood of the density.
         """
-        X = self.multiply_corr(
-            z, self.C_bar
-        )  # Transform denoised coordinates to Cartesian space
-        X = rearrange(X, "b r a c -> b (r a) c")  # b, N, 3
+        if len(X.size()) == 4:
+            X = rearrange(X, "b r a c -> b (r a) c")  # b, N, 3
 
         if self.density_extension in (".mtz", ".cif"):
 
@@ -350,7 +352,7 @@ class ADP3D:
             Fmodel = self.input_sfcalculator.calc_fprotein_batch(
                 X, Return=True
             ).squeeze()
-            breakpoint() # FIXME
+
             return -torch.linalg.norm(torch.abs(Fprotein) - torch.abs(Fmodel)) ** 2
         else:  # TODO: fix and move this to Fourier space
             density = self.gamma(
@@ -369,7 +371,7 @@ class ADP3D:
                 ** 2
             )
 
-    def grad_ll_density(self, z: torch.Tensor) -> torch.Tensor:
+    def grad_ll_density(self, X: torch.Tensor) -> torch.Tensor:
         """Compute the gradient of the log likelihood of the density given the atomic coordinates and side chain angles.
 
         Parameters
@@ -383,12 +385,12 @@ class ADP3D:
         torch.Tensor
             Gradient of the log likelihood of the density.
         """
-        if z.requires_grad == False:
-            z = z.clone().detach().requires_grad_(True)  # reset graph history
+        if X.requires_grad == False:
+            X = X.clone().detach().requires_grad_(True)  # reset graph history
 
-        result = self.ll_density(z)
+        result = self.ll_density(X)
 
-        return torch.autograd.grad(result, z)[0]
+        return torch.autograd.grad(result, X)[0]
 
     def model_refinement_optimizer(
         self,
@@ -422,11 +424,11 @@ class ADP3D:
         else:
             Z = torch.randn_like(self.x_bar, device=self.device)
             X = self.multiply_corr(Z, self.C_bar)
-            C = torch.ones_like(self.C_bar, device=self.device)
+            # C = torch.ones_like(self.C_bar, device=self.device) # NOTE: use self.C_bar, which provides correct chains and masking
         S = self.seq
 
         # FIXME
-        Protein.from_XCS(X, C, S).to_CIF(os.path.join(output_dir, "init.cif"))
+        Protein.from_XCS(X, self.C_bar, S).to_CIF(os.path.join(output_dir, "init.cif"))
 
         v_i_m = torch.zeros(X.size(), device=self.device)
         v_i_s = torch.zeros(X.size(), device=self.device)
@@ -437,16 +439,18 @@ class ADP3D:
             t = _t(epoch, epochs).to(self.device)
 
             with torch.no_grad():
-                X_0 = self.denoiser(X.detach(), C, t)
+                X_0 = self.denoiser(X.detach(), self.C_bar, t)
 
             # transform denoised coordinates to whitened space
-            z_0 = self.multiply_inverse_corr(X_0, C)
+            z_0 = self.multiply_inverse_corr(X_0, self.C_bar)
 
             if epoch >= 3000:
                 with torch.enable_grad():
                     X_0.requires_grad_(True)
                     if epoch % 100 == 0:  # TODO: implement all atom
-                        X_aa, _, _, scores = self.sequence_chi_sampler(X_0, C, S, t=0.0, return_scores=True)
+                        X_aa, _, _, scores = self.sequence_chi_sampler(
+                            X_0, self.C_bar, S, t=0.0, return_scores=True
+                        )
 
                     ll_sequence = scores["logp_S"]  # Get sequence log probability
                     grad_ll_sequence = torch.autograd.grad(ll_sequence, X_aa)[
@@ -454,7 +458,7 @@ class ADP3D:
                     ]  # Backpropagate to get gradients
 
                 grad_ll_sequence = self.multiply_inverse_corr(
-                    grad_ll_sequence[:, :, :4, :], C
+                    grad_ll_sequence[:, :, :4, :], self.C_bar
                 )  # Get gradient of log likelihood of sequence in whitened space # TODO: remove :4 once all atom is implemented
             else:
                 grad_ll_sequence = torch.zeros_like(z_0, device=self.device)
@@ -464,24 +468,33 @@ class ADP3D:
                 0
             ] * self.grad_ll_incomplete_structure(z_0)
 
-            v_i_s = momenta[1] * v_i_s + lr_m_s_d[
-                1
-            ] * grad_ll_sequence # NOTE: This should change if a model other than Chroma is used.
+            v_i_s = (
+                momenta[1] * v_i_s + lr_m_s_d[1] * grad_ll_sequence
+            )  # NOTE: This should change if a model other than Chroma is used.
 
             # TODO: update below with all atom once done
             # z_0_aa = self.multiply_inverse_corr(X_aa, C)  # Transform to whitened space
-            v_i_d = momenta[2] * v_i_d + lr_m_s_d[2] * self.grad_ll_density(z_0) # FIXME
+            density_grad_tf = torch.clamp(
+                self.multiply_inverse_corr(self.grad_ll_density(X_0), self.C_bar),
+                -10000,
+                10000,
+            )
+            v_i_d = (
+                momenta[2] * v_i_d + lr_m_s_d[2] * density_grad_tf
+            )  # FIXME try gradient clipping?
 
             # Update denoised coordinates
-            z_t_1 = z_0 - v_i_m - v_i_s - v_i_d # FIXME
+            z_t_1 = z_0 - v_i_m - v_i_s - v_i_d  # FIXME
 
             # Add noise (this is the same as what OG ADP3D does)
             t1 = _t(epoch + 1, epochs).to(self.device)
             alpha, sigma, _, _, _, _ = self.noise_scheduler(t1)
-            X = self.multiply_corr(alpha * z_t_1 + sigma * torch.randn_like(z_t_1), C)
+            X = self.multiply_corr(
+                alpha * z_t_1 + sigma * torch.randn_like(z_t_1), self.C_bar
+            )
 
             if epoch % 500 == 0:
-                Protein.from_XCS(X, C, S).to_CIF(
+                Protein.from_XCS(X, self.C_bar, S).to_CIF(
                     os.path.join(output_dir, f"output_epoch_{epoch}.cif")
                 )
 
