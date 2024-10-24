@@ -167,3 +167,6 @@ key*
 # files no longer needed
 adp3d/utils/qfit_utils.py
 structure_completion_hqs.py
+
+# output files
+*/output

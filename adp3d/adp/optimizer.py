@@ -350,7 +350,7 @@ class ADP3D:
             Fmodel = self.input_sfcalculator.calc_fprotein_batch(
                 X, Return=True
             ).squeeze()
-
+            breakpoint() # FIXME
             return -torch.linalg.norm(torch.abs(Fprotein) - torch.abs(Fmodel)) ** 2
         else:  # TODO: fix and move this to Fourier space
             density = self.gamma(
@@ -420,9 +420,13 @@ class ADP3D:
                 device=self.device
             )  # handle GT protein initialization
         else:
-            X = torch.randn_like(self.x_bar, device=self.device)
+            Z = torch.randn_like(self.x_bar, device=self.device)
+            X = self.multiply_corr(Z, self.C_bar)
             C = torch.ones_like(self.C_bar, device=self.device)
         S = self.seq
+
+        # FIXME
+        Protein.from_XCS(X, C, S).to_CIF(os.path.join(output_dir, "init.cif"))
 
         v_i_m = torch.zeros(X.size(), device=self.device)
         v_i_s = torch.zeros(X.size(), device=self.device)
@@ -438,18 +442,18 @@ class ADP3D:
             # transform denoised coordinates to whitened space
             z_0 = self.multiply_inverse_corr(X_0, C)
 
-            if epoch > 3000:
+            if epoch >= 3000:
                 with torch.enable_grad():
                     X_0.requires_grad_(True)
                     if epoch % 100 == 0:  # TODO: implement all atom
-                        X_aa, _, _, scores = self.sequence_chi_sampler(X_0, C, S, t=0.0)
+                        X_aa, _, _, scores = self.sequence_chi_sampler(X_0, C, S, t=0.0, return_scores=True)
 
                     ll_sequence = scores["logp_S"]  # Get sequence log probability
                     grad_ll_sequence = torch.autograd.grad(ll_sequence, X_aa)[
                         0
                     ]  # Backpropagate to get gradients
 
-                grad_ll_sequence = self.multiply_corr(
+                grad_ll_sequence = self.multiply_inverse_corr(
                     grad_ll_sequence[:, :, :4, :], C
                 )  # Get gradient of log likelihood of sequence in whitened space # TODO: remove :4 once all atom is implemented
             else:
@@ -459,16 +463,17 @@ class ADP3D:
             v_i_m = momenta[0] * v_i_m + lr_m_s_d[
                 0
             ] * self.grad_ll_incomplete_structure(z_0)
+
             v_i_s = momenta[1] * v_i_s + lr_m_s_d[
                 1
             ] * grad_ll_sequence # NOTE: This should change if a model other than Chroma is used.
 
             # TODO: update below with all atom once done
             # z_0_aa = self.multiply_inverse_corr(X_aa, C)  # Transform to whitened space
-            v_i_d = momenta[2] * v_i_d + lr_m_s_d[2] * self.grad_ll_density(z_0)
+            v_i_d = momenta[2] * v_i_d + lr_m_s_d[2] * self.grad_ll_density(z_0) # FIXME
 
             # Update denoised coordinates
-            z_t_1 = z_0 + v_i_m + v_i_s + v_i_d
+            z_t_1 = z_0 - v_i_m - v_i_s - v_i_d # FIXME
 
             # Add noise (this is the same as what OG ADP3D does)
             t1 = _t(epoch + 1, epochs).to(self.device)
@@ -476,8 +481,8 @@ class ADP3D:
             X = self.multiply_corr(alpha * z_t_1 + sigma * torch.randn_like(z_t_1), C)
 
             if epoch % 500 == 0:
-                Protein.from_XCS(X, C, S).to_PDB(
-                    os.path.join(output_dir, f"output_epoch_{epoch}.pdb")
+                Protein.from_XCS(X, C, S).to_CIF(
+                    os.path.join(output_dir, f"output_epoch_{epoch}.cif")
                 )
 
         MAP_protein = Protein.from_XCS(X, C, S)
