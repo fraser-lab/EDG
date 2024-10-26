@@ -123,10 +123,21 @@ class ADP3D:
         self.seq = seq
         self.x_bar, self.C_bar, S = Protein(structure).to_XCS(device=self.device)
 
+        # processing coordinates
+        self.x_bar -= self.x_bar.mean(dim=(0, 1, 2))  # centering
+        self.x_bar = self.x_bar[torch.abs(self.C_bar) == 1].unsqueeze(
+            0
+        )  # take only chain 1
+        self.C_bar = self.C_bar[torch.abs(self.C_bar) == 1].unsqueeze(
+            0
+        )  # get only chain 1
+
         # save backbone only PDB model NOTE: Get rid of this once all atom works
-        Protein.from_XCS(self.x_bar, self.C_bar, S).to_PDB(
-            f"{os.path.splitext(structure)[0]}_bb.pdb"
-        )
+        Protein.from_XCS(
+            self.x_bar,
+            torch.ones(self.x_bar.size()[1], device=self.device).unsqueeze(0),
+            S,
+        ).to_PDB(f"{os.path.splitext(structure)[0]}_bb.pdb")
 
         self.density_extension = os.path.splitext(y)[1]
         if self.density_extension not in (".ccp4", ".map", ".mtz", ".cif"):
@@ -189,7 +200,7 @@ class ADP3D:
         )
         C = torch.ones(
             identity_matrices.size()[0], r, device=self.device
-        )  # all residues in sequence should be active
+        )  # all residues in sequence should be active for this part
 
         self.R = rearrange(self.multiply_corr(Z, C), "b r a c -> (r a) (b c)")
 
@@ -209,21 +220,25 @@ class ADP3D:
 
         # Build measurement matrix for incomplete structure log likelihood
         # Going to only account for backbone atoms, so 4 atoms per residue. Could extend to all atom later, I think.
-        n = self.seq.size()[1] * 4
-        m = self.x_bar.size()[1] * 4
-        self.A = torch.eye(
-            m, n, device=self.device
-        )  # measurement matrix to transform z into the form comparable to x_bar. m is the measurement dimension # FIXME: I think this doesn't work, test it out
+        mask = torch.ones(r, device=self.device).float()
+        if self.C_bar.size()[1] != r:
+            raise ValueError(
+                "Number of residues in input coordinates must match number of residues in sequence."
+            )
+        mask[(self.C_bar != 1).reshape(-1)] = 0.0  # TODO: this requires CIF right now
+        mask = repeat(mask, "m -> (m repeat)", repeat=4)
+        self.A = torch.diag(mask)
 
         # Precompute SVD for incomplete structure log likelihood
-
         AR = self.A @ self.R
+        AR = AR[AR.any(dim=1)]
         # U shape (m, m), S shape (m, n), V_T shape (n, n)
-        self.U, S, self.V_T = torch.linalg.svd(AR)
-        if len(S.size()) == 1:
-            S = torch.diag(S)
-        # S_plus shape (n, m)
-        self.S_plus = torch.linalg.pinv(S)
+        self.U, S_, self.V_T = torch.linalg.svd(AR)
+        if len(S_.size()) == 1:
+            S_ = torch.diag(S_)
+            # pad columns of S_ with zeros to match shape of U
+            S_ = F.pad(S_, (0, self.U.size()[0] - S_.size()[0]), "constant", 0)
+        self.S_plus = torch.linalg.pinv(S_)
 
         # Initialize Chroma
         self.chroma = Chroma()
@@ -254,9 +269,13 @@ class ADP3D:
             Log likelihood of the incomplete structure.
         """
         z = rearrange(z, "b r a c -> b (r a) c").squeeze()
-        x_bar = rearrange(self.x_bar, "b r a c -> b (r a) c").squeeze()
-        to_norm = self.A @ self.V_T @ z - self.S_plus @ self.U.T @ x_bar
-        return -torch.linalg.vector_norm(torch.flatten(to_norm)) ** 2
+        x_bar = rearrange(
+            self.x_bar[self.C_bar == 1].unsqueeze(0), "b r a c -> b (r a) c"
+        ).squeeze()  # TODO: take only modeled residues, requires CIF
+        denoised = self.A @ self.V_T @ z
+        denoised = denoised[denoised.any(dim=1)]
+        measured = self.S_plus @ self.U.T @ x_bar
+        return -torch.linalg.vector_norm(torch.flatten(denoised - measured)) ** 2
 
     def grad_ll_incomplete_structure(self, z: torch.Tensor) -> torch.Tensor:
 
@@ -424,11 +443,13 @@ class ADP3D:
         else:
             Z = torch.randn_like(self.x_bar, device=self.device)
             X = self.multiply_corr(Z, self.C_bar)
-            # C = torch.ones_like(self.C_bar, device=self.device) # NOTE: use self.C_bar, which provides correct chains and masking
+            C = torch.ones_like(
+                self.C_bar, device=self.device
+            )  # NOTE: self.C_bar provides correct chains and masking
         S = self.seq
 
         # FIXME
-        Protein.from_XCS(X, self.C_bar, S).to_CIF(os.path.join(output_dir, "init.cif"))
+        Protein.from_XCS(X, C, S).to_CIF(os.path.join(output_dir, "init.cif"))
 
         v_i_m = torch.zeros(X.size(), device=self.device)
         v_i_s = torch.zeros(X.size(), device=self.device)
@@ -439,17 +460,17 @@ class ADP3D:
             t = _t(epoch, epochs).to(self.device)
 
             with torch.no_grad():
-                X_0 = self.denoiser(X.detach(), self.C_bar, t)
+                X_0 = self.denoiser(X.detach(), C, t)
 
             # transform denoised coordinates to whitened space
-            z_0 = self.multiply_inverse_corr(X_0, self.C_bar)
+            z_0 = self.multiply_inverse_corr(X_0, C)
 
             if epoch >= 3000:
                 with torch.enable_grad():
                     X_0.requires_grad_(True)
                     if epoch % 100 == 0:  # TODO: implement all atom
                         X_aa, _, _, scores = self.sequence_chi_sampler(
-                            X_0, self.C_bar, S, t=0.0, return_scores=True
+                            X_0, C, S, t=0.0, return_scores=True
                         )
 
                     ll_sequence = scores["logp_S"]  # Get sequence log probability
@@ -458,7 +479,7 @@ class ADP3D:
                     ]  # Backpropagate to get gradients
 
                 grad_ll_sequence = self.multiply_inverse_corr(
-                    grad_ll_sequence[:, :, :4, :], self.C_bar
+                    grad_ll_sequence[:, :, :4, :], C
                 )  # Get gradient of log likelihood of sequence in whitened space # TODO: remove :4 once all atom is implemented
             else:
                 grad_ll_sequence = torch.zeros_like(z_0, device=self.device)
@@ -473,28 +494,27 @@ class ADP3D:
             )  # NOTE: This should change if a model other than Chroma is used.
 
             # TODO: update below with all atom once done
-            # z_0_aa = self.multiply_inverse_corr(X_aa, C)  # Transform to whitened space
+            # z_0_aa = self.multiply_inverse_corr(X_aa, self.C_bar)  # Transform to whitened space
             density_grad_tf = torch.clamp(
-                self.multiply_inverse_corr(self.grad_ll_density(X_0), self.C_bar),
-                -10000,
-                10000,
+                self.multiply_inverse_corr(self.grad_ll_density(X_0), C),
+                -1000,
+                1000,
             )
             v_i_d = (
                 momenta[2] * v_i_d + lr_m_s_d[2] * density_grad_tf
             )  # FIXME try gradient clipping?
 
             # Update denoised coordinates
-            z_t_1 = z_0 - v_i_m - v_i_s - v_i_d  # FIXME
+            z_t_1 = z_0 + v_i_m + v_i_s + v_i_d
+            # z_t_1 = z_0 + v_i_d
 
             # Add noise (this is the same as what OG ADP3D does)
             t1 = _t(epoch + 1, epochs).to(self.device)
             alpha, sigma, _, _, _, _ = self.noise_scheduler(t1)
-            X = self.multiply_corr(
-                alpha * z_t_1 + sigma * torch.randn_like(z_t_1), self.C_bar
-            )
+            X = self.multiply_corr(alpha * z_t_1 + sigma * torch.randn_like(z_t_1), C)
 
-            if epoch % 500 == 0:
-                Protein.from_XCS(X, self.C_bar, S).to_CIF(
+            if epoch % 500 == 0:  # FIXME
+                Protein.from_XCS(X, C, S).to_CIF(
                     os.path.join(output_dir, f"output_epoch_{epoch}.cif")
                 )
 
