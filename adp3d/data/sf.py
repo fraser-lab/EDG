@@ -5,6 +5,17 @@ f(s) = SUM_i=1^6 a_i * exp[-b_i * s^2]
 From https://github.com/ExcitedStates/qfit-3.0.git src/qfit/atomsf.py
 """
 
+ELEMENTS = { # protein elements
+    "H": 0,
+    "C": 1,
+    "N": 2,
+    "O": 3,
+    "S": 4,
+    "nan": 5
+}
+
+IDX_TO_ELEMENT = {v: k for k, v in ELEMENTS.items()}
+
 ATOM_STRUCTURE_FACTORS = {
     "H": [
         [0.413048, 0.294953, 0.187491, 0.080701, 0.023736, 0.000049],

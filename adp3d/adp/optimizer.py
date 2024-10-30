@@ -21,7 +21,7 @@ from chroma.layers.structure.mvn import BackboneMVNGlobular
 from chroma.constants import AA_GEOMETRY, AA20_3
 from tqdm import tqdm
 from adp3d.utils.utility import DotDict
-from adp3d.data.sf import ATOM_STRUCTURE_FACTORS, ELECTRON_SCATTERING_FACTORS
+from adp3d.data.sf import ATOM_STRUCTURE_FACTORS, ELECTRON_SCATTERING_FACTORS, ELEMENTS, IDX_TO_ELEMENT
 from SFC_Torch.Fmodel import SFcalculator
 from SFC_Torch.io import PDBParser
 
@@ -94,6 +94,7 @@ class ADP3D:
         seq: torch.Tensor,
         structure: str,
         protein: Protein = None,
+        em: bool = False,
     ):
         """Initialize the ADP3D class.
 
@@ -112,7 +113,7 @@ class ADP3D:
         """
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
+        self.em = em
         # enforce input args
         check = [x is not None for x in [y, seq, structure]]
         if not any(check):
@@ -120,14 +121,18 @@ class ADP3D:
 
         self.protein = protein
 
-        self.seq = seq
+        self.seq = seq.to(self.device)
         self.x_bar, self.C_bar, S = Protein(structure).to_XCS(device=self.device)
 
         # processing coordinates
         self.x_bar -= self.x_bar.mean(dim=(0, 1, 2))  # centering
         self.x_bar = self.x_bar[torch.abs(self.C_bar) == 1].unsqueeze(
             0
-        )  # take only chain 1
+        )  # get only chain 1
+        S = S[torch.abs(self.C_bar) == 1].unsqueeze(0)  # get only chain 1
+
+        # TODO: consider later maintaining only one sequence tensor
+        self.seq = self.seq[torch.abs(self.C_bar) == 1].unsqueeze(0)  # get only chain 1
         self.C_bar = self.C_bar[torch.abs(self.C_bar) == 1].unsqueeze(
             0
         )  # get only chain 1
@@ -249,8 +254,9 @@ class ADP3D:
         self.sequence_sampler = None  # NOTE: Placeholder for sequence sampling. This will need to be implemented if doing model refinement with a denoiser other than Chroma
         self.chi_sampler = None  # NOTE: Placeholder for chi angle sampling. This will need to be implemented if doing model refinement with a denoiser other than Chroma
         self.sequence_chi_sampler = (
-            self.chroma.design_network.sample  # TODO: test this
-        )  # In Chroma, this can get log_p sequence and all atom coordinates.
+            self.chroma.design_network.sample
+        )  # In Chroma, this gets all atom coordinates. Has nograd decorator.
+        self.sequence_loss = self.chroma.design_network.loss
         # self.chi_to_X = (
         #     SideChainBuilder()
         # )  # Chroma's sidechain builder for making all-atom coordinates from backbone and chi angles.
@@ -329,7 +335,41 @@ class ADP3D:
             "Sequence gradient not implemented as Chroma has built in log likelihood."
         )
 
-    def gamma(
+    def _extract_elements(self, all_atom: bool = False) -> torch.Tensor:
+        """Extract elements from the denoised protein coordinates and, if all atom, sequence.
+
+        Parameters
+        ----------
+        all_atom : bool, optional
+            Whether the coordinates are backbone or all-atom, by default False
+
+        Returns
+        -------
+        torch.Tensor
+            Extracted elements for each residue, shape (residues, (4 or 14) elements), in order of Chroma's AA_GEOMETRY definition.
+        """
+
+        bb_elements = [ELEMENTS[a] for a in ["N", "C", "C", "O"]]
+        if all_atom:
+            elements = torch.zeros(self.seq.size()[1], 14, device=self.device, dtype=torch.int8) # 14 is max number of atoms in residue from chroma
+            # assign each residue elements to all atoms
+            seq = self.seq[0, :] # TODO: put this in init eventually, going to need to change all instances where dim 1 of seq is accessed
+            for i in range(seq.size()[0]):
+                atoms = AA_GEOMETRY[AA20_3[seq[i]]]["atoms"]
+                residue_elements = bb_elements + [ELEMENTS[a[:1]] for a in atoms]
+                # pad up to 14
+                residue_elements += [5] * (14 - len(residue_elements)) # 5 is the "nan" element
+                elements[i] = torch.tensor(residue_elements, device=self.device)
+        else:
+            elements = torch.zeros(self.seq.size()[1], 4, device=self.device, dtype=torch.int8) # backbone elements
+
+            # assign each residue elements to backbone atoms
+            for i in range(self.seq.size()[1]):
+                elements[i] = torch.tensor(bb_elements, device=self.device)
+        return elements
+
+
+    def _gamma(
         self, X: torch.Tensor, size: tuple = (100, 100, 100)
     ) -> torch.Tensor:  # TODO: Test here
         """Compute electron density map of the all-atom coordinates X.
@@ -344,6 +384,46 @@ class ADP3D:
         # TODO: account for time dependent resolution
         if len(X.size()) == 4:
             X = rearrange(X, "b r a c -> b (r a) c").squeeze()
+
+        if X.size()[1] != self.x_bar.size()[1]:
+            raise ValueError(
+                "Number of atoms in input coordinates must match number of atoms in structure."
+            )
+        
+        elements = rearrange(self._extract_elements(all_atom=True), "r a -> (r a)")
+        x = torch.linspace(torch.min(self.y[0]), torch.max(self.y[0]), size[0])
+        y = torch.linspace(torch.min(self.y[1]), torch.max(self.y[1]), size[1])
+        z = torch.linspace(torch.min(self.y[2]), torch.max(self.y[2]), size[2])
+        grid = torch.meshgrid(x, y, z, indexing="ij")
+        grid = torch.stack(grid, dim=-1).to(self.device)
+        density = torch.zeros(size, device=self.device)
+
+        four_pi2 = 4 * torch.pi ** 2
+
+        if self.em:
+            sf = ELECTRON_SCATTERING_FACTORS
+            _range = 5
+        else:
+            sf = ATOM_STRUCTURE_FACTORS
+            _range = 6
+
+        bw_dict = lambda x: torch.tensor([-four_pi2 / b if b > 1e-4 else 0 for b in sf[x][1][:_range]], device=self.device)
+        aw_dict = lambda x: (torch.tensor(sf[x][0][:_range]) * (-bw_dict(x) / torch.pi) ** 1.5).to(self.device)
+
+        # iterate over each each voxel
+        for i in range(size[0]):
+            for j in range(size[1]):
+                for k in range(size[2]):
+                    for atom in range(X.size()[1]):
+                        # calculate the density at the voxel
+                        # TODO: simple density, maybe move to quadrature like qfit later
+                        e = IDX_TO_ELEMENT[elements[atom]]
+                        r = torch.linalg.norm(grid[i, j, k] - X[0, atom])
+                        density[i, j, k] += torch.sum(aw_dict(elements[atom]) * torch.exp(bw_dict(elements[atom]) * r ** 2))
+
+        return density
+
+        
 
     def ll_density(self, X: torch.Tensor) -> torch.Tensor:
         """Compute the log likelihood of the density given the atomic coordinates and side chain angles.
@@ -374,7 +454,7 @@ class ADP3D:
 
             return -torch.linalg.norm(torch.abs(Fprotein) - torch.abs(Fmodel)) ** 2
         else:  # TODO: fix and move this to Fourier space
-            density = self.gamma(
+            density = self._gamma(
                 X, size=self.y.size()
             )  # Get density map from denoised coordinates
 
@@ -429,12 +509,15 @@ class ADP3D:
             first for incomplete *m*odel, then *s*equence, then *d*ensity. By default [1e-1, 1e-5, 3e-5]
         momenta : List[float], optional
             Momenta for gradient descent updates, by default [9e-1]*3
+        output_dir : str, optional
+            Output directory for saving refined protein structures, by default "output
 
         Returns
         -------
         Protein
             Denoised and data matched protein structure.
         """
+        os.makedirs(output_dir, exist_ok=True)
 
         if self.protein is not None:
             X, C, _ = self.protein.to_XCS(
@@ -465,47 +548,50 @@ class ADP3D:
             # transform denoised coordinates to whitened space
             z_0 = self.multiply_inverse_corr(X_0, C)
 
-            if epoch >= 3000:
-                with torch.enable_grad():
-                    X_0.requires_grad_(True)
-                    if epoch % 100 == 0:  # TODO: implement all atom
-                        X_aa, _, _, scores = self.sequence_chi_sampler(
-                            X_0, C, S, t=0.0, return_scores=True
-                        )
+            # if epoch % 100 == 0:  # TODO: implement all atom
+            #     X_aa, _, _, _ = self.sequence_chi_sampler(
+            #                 X_0, C, S, t=0.0, return_scores=True, resample_chi=True
+            #     )
+            
+            # if epoch >= 3000:
+            # with torch.enable_grad():
+            #     X_0.requires_grad_(True)
+            #     scores = self.sequence_loss(X_0, C, S, t=0.0)
+            #     ll_sequence = scores["logp_S"]  # Get sequence log probability
+            #     grad_ll_sequence = torch.autograd.grad(ll_sequence, X_0)[
+            #         0
+            #     ]  # Backpropagate to get gradients
 
-                    ll_sequence = scores["logp_S"]  # Get sequence log probability
-                    grad_ll_sequence = torch.autograd.grad(ll_sequence, X_aa)[
-                        0
-                    ]  # Backpropagate to get gradients
-
-                grad_ll_sequence = self.multiply_inverse_corr(
-                    grad_ll_sequence[:, :, :4, :], C
-                )  # Get gradient of log likelihood of sequence in whitened space # TODO: remove :4 once all atom is implemented
-            else:
-                grad_ll_sequence = torch.zeros_like(z_0, device=self.device)
+            # grad_ll_sequence = self.multiply_inverse_corr(
+            #     grad_ll_sequence[:, :, :4, :], C
+            # )  # Get gradient of log likelihood of sequence in whitened space # TODO: remove :4 once all atom is implemented
+            # else:
+            #     grad_ll_sequence = torch.zeros_like(z_0, device=self.device)
 
             # Accumulate gradients
             v_i_m = momenta[0] * v_i_m + lr_m_s_d[
                 0
             ] * self.grad_ll_incomplete_structure(z_0)
 
-            v_i_s = (
-                momenta[1] * v_i_s + lr_m_s_d[1] * grad_ll_sequence
-            )  # NOTE: This should change if a model other than Chroma is used.
+            # v_i_s = (
+            #     momenta[1] * v_i_s + lr_m_s_d[1] * grad_ll_sequence
+            # )  # NOTE: This should change if a model other than Chroma is used.
 
             # TODO: update below with all atom once done
             # z_0_aa = self.multiply_inverse_corr(X_aa, self.C_bar)  # Transform to whitened space
-            density_grad_tf = torch.clamp(
-                self.multiply_inverse_corr(self.grad_ll_density(X_0), C),
-                -1000,
-                1000,
-            )
-            v_i_d = (
-                momenta[2] * v_i_d + lr_m_s_d[2] * density_grad_tf
-            )  # FIXME try gradient clipping?
+            # density_grad_tf = torch.clamp(
+            #     self.multiply_inverse_corr(self.grad_ll_density(X_0), C),
+            #     -1000,
+            #     1000,
+            # )
+            # v_i_d = (
+            #     momenta[2] * v_i_d + lr_m_s_d[2] * density_grad_tf
+            # )  # FIXME try gradient clipping?
 
-            # Update denoised coordinates
-            z_t_1 = z_0 + v_i_m + v_i_s + v_i_d
+            # Update denoised coordinates # FIXME
+            # z_t_1 = z_0 + v_i_m + v_i_s + v_i_d
+            # z_t_1 = z_0 + v_i_m + v_i_s
+            z_t_1 = z_0 + v_i_m
             # z_t_1 = z_0 + v_i_d
 
             # Add noise (this is the same as what OG ADP3D does)
@@ -513,7 +599,7 @@ class ADP3D:
             alpha, sigma, _, _, _, _ = self.noise_scheduler(t1)
             X = self.multiply_corr(alpha * z_t_1 + sigma * torch.randn_like(z_t_1), C)
 
-            if epoch % 500 == 0:  # FIXME
+            if epoch % 100 == 0:  # FIXME was 500
                 Protein.from_XCS(X, C, S).to_CIF(
                     os.path.join(output_dir, f"output_epoch_{epoch}.cif")
                 )
