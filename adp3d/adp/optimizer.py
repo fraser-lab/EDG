@@ -139,7 +139,9 @@ class ADP3D:
         self.protein = protein
 
         self.seq = seq.to(self.device)
-        self.x_bar, self.C_bar, S = Protein(structure).to_XCS(all_atom = True, device=self.device)
+        self.x_bar, self.C_bar, S = Protein(structure).to_XCS(
+            all_atom=True, device=self.device
+        )
 
         # processing coordinates # FIXME: this is a placeholder for now
         # self.center_shift = self.x_bar.mean(
@@ -202,12 +204,14 @@ class ADP3D:
             #         device=self.device,
             #     )
             # )
-        else:
+        elif self.density_extension in (".ccp4", ".map", ".mrc"):
             map = gemmi.read_ccp4_map(y)
             self.grid = map.grid
             self.y = torch.from_numpy(np.ascontiguousarray(self.grid.array)).to(
                 self.device, dtype=torch.float32
             )
+        else:
+            raise ValueError("Density map must be a CCP4, MRC, SF-CIF, or MTZ file.")
 
         # Importing sqrt(covariance matrix) from Chroma
         # These take in Z and C (for _multiply_R) or X and C (for _multiply_R_inverse)
@@ -280,7 +284,9 @@ class ADP3D:
         self.sequence_chi_sampler = (
             self.chroma.design_network.sample
         )  # In Chroma, this gets all atom coordinates. Has nograd decorator.
-        self.sequence_loss = self.chroma.design_network.forward
+        self.sequence_loss = (
+            self.chroma.design_network.forward
+        )  # .loss() runs forward anyway, might as well just use forward
         # self.chi_to_X = (
         #     SideChainBuilder()
         # )  # Chroma's sidechain builder for making all-atom coordinates from backbone and chi angles.
@@ -388,7 +394,7 @@ class ADP3D:
                 # pad up to 14
                 residue_elements += [5] * (
                     14 - len(residue_elements)
-                )  # 5 is the "nan" element
+                )  # 5 is the "nan" element # TODO: this can be done better I think
                 elements[i] = torch.tensor(residue_elements, device=self.device)
         else:
             elements = torch.zeros(
@@ -401,18 +407,25 @@ class ADP3D:
         return elements
 
     def _gamma(
-        self, X: torch.Tensor, size: tuple = (100, 100, 100), all_atom: bool = False
-    ) -> torch.Tensor:  # TODO: Test here
+        self,
+        X: torch.Tensor,
+        size: Tuple[int] = (100, 100, 100),
+        all_atom: bool = False,
+    ) -> torch.Tensor:
         """Compute electron density map of the all-atom coordinates X.
 
         Args:
             X (torch.Tensor): The input all-atom protein coordinates.
-            size (torch.Tensor): The desired size of the output density map.
+            size (Tuple[int]): The desired size of the output density map.
 
         Returns:
             torch.Tensor: The structure factors.
         """
         # TODO: account for time dependent resolution
+        if X.size()[2] == 4 and all_atom:
+            raise ValueError(
+                "Input coordinates are backbone only, all_atom must be False."
+            )
         if len(X.size()) == 4:
             X = rearrange(
                 X, "b r a c -> b (r a) c"
@@ -423,34 +436,47 @@ class ADP3D:
                 "Input coordinates must be of shape (residues * atoms, 3). Batched X is not yet supported in _gamma."
             )
 
-        if X.size()[0] != self.x_bar.size()[1] * self.x_bar.size()[2]:
-            raise ValueError(
-                "Number of atoms in input coordinates must match number of atoms in structure."
-            )
+        # if X.size()[0] != self.x_bar.size()[1] * self.x_bar.size()[2]: # TODO: fix this once all atom is implemented
+        #     raise ValueError(
+        #         "Number of atoms in input coordinates must match number of atoms in structure."
+        #     )
 
         elements = rearrange(self._extract_elements(all_atom), "r a -> (r a)")
+        C_expand = repeat(
+            self.C_bar, "b r -> b (r a)", a=14 if all_atom else 4
+        ).squeeze()  # expand to all atoms, squeeze batch dim out
 
-        origin = torch.tensor([*self.grid.get_position(0, 0, 0)], device=self.device) - self.center_shift
-        if self.grid.spacing[0] > 0: # if one is > 0, all are > 0 from GEMMI
+        origin = (
+            torch.tensor([*self.grid.get_position(0, 0, 0)], device=self.device)
+            - self.center_shift
+        )
+        if self.grid.spacing[0] > 0:  # if one is > 0, all are > 0 from GEMMI
             x = torch.arange(
                 origin[0],
                 origin[0] + self.grid.spacing[0] * size[0],
                 self.grid.spacing[0],
-            )
+            )[
+                : size[0]
+            ]  # This gets right size. Size is sometimes off due to precision errors
             y = torch.arange(
                 origin[1],
                 origin[1] + self.grid.spacing[1] * size[1],
                 self.grid.spacing[1],
-            )
+            )[: size[1]]
             z = torch.arange(
                 origin[2],
                 origin[2] + self.grid.spacing[2] * size[2],
                 self.grid.spacing[2],
-            )
+            )[: size[2]]
         else:
             x = torch.linspace(origin[0], self.grid.unit_cell.a, size[0])
             y = torch.linspace(origin[1], self.grid.unit_cell.b, size[1])
             z = torch.linspace(origin[2], self.grid.unit_cell.c, size[2])
+
+        if x.size()[0] != size[0] or y.size()[0] != size[1] or z.size()[0] != size[2]:
+            raise ValueError(
+                f"Size of the density map is not matching the input size: ({x.size()[0]}, {y.size()[0]}, {z.size()[0]}) is not {size}"
+            )
 
         grid = torch.meshgrid(x, y, z, indexing="ij")
         grid = torch.stack(grid, dim=-1).to(self.device)
@@ -483,8 +509,11 @@ class ADP3D:
             grid_flat.size(0), device=self.device
         )  # Shape: (x*y*z,)
 
-        # Iterate over each atom in `X`
+        # Iterate over each element in the protein
         for i, atom in enumerate(elements):
+            if atom.item() == 5 or C_expand[i].item() != 1:
+                continue
+
             e = IDX_TO_ELEMENT[atom.item()]
 
             aw_values = aw_dict(e)  # Shape: (_range,)
@@ -508,7 +537,6 @@ class ADP3D:
 
             # accumulate contributions to the density
             density_flat += density_contribution
-            breakpoint()
 
         # back to volume
         density = rearrange(
@@ -672,18 +700,14 @@ class ADP3D:
 
             # TODO: update below with all atom once done
             # z_0_aa = self.multiply_inverse_corr(X_aa, self.C_bar)  # Transform to whitened space
-            # density_grad_tf = torch.clamp(
-            #     self.multiply_inverse_corr(self.grad_ll_density(X_0), C),
-            #     -1000,
-            #     1000,
-            # )
-            # v_i_d = (
-            #     momenta[2] * v_i_d + lr_m_s_d[2] * density_grad_tf
-            # )  # FIXME try gradient clipping?
+            density_grad_transformed = self.multiply_inverse_corr(
+                self.grad_ll_density(X_0), C
+            )
+            v_i_d = momenta[2] * v_i_d + lr_m_s_d[2] * density_grad_transformed
 
             # Update denoised coordinates # FIXME
-            # z_t_1 = z_0 + v_i_m + v_i_s + v_i_d
-            z_t_1 = z_0 + v_i_m + v_i_s
+            z_t_1 = z_0 + v_i_m + v_i_s + v_i_d
+            # z_t_1 = z_0 + v_i_m + v_i_s
             # z_t_1 = z_0 + v_i_m
             # z_t_1 = z_0 + v_i_d
 
@@ -692,7 +716,9 @@ class ADP3D:
             alpha, sigma, _, _, _, _ = self.noise_scheduler(t1)
             X = self.multiply_corr(alpha * z_t_1 + sigma * torch.randn_like(z_t_1), C)
 
-            if epoch % 100 == 0:  # FIXME was 500
+            if (
+                epoch % 100 == 0
+            ):  # ~40 structure is minimum for a good diffusion trajectory
                 Protein.from_XCS(X, C, S).to_PDB(
                     os.path.join(output_dir, f"output_epoch_{epoch}.pdb")
                 )
