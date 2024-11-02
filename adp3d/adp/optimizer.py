@@ -430,6 +430,8 @@ class ADP3D:
             X = rearrange(
                 X, "b r a c -> b (r a) c"
             ).squeeze()  # if b = 1, should result in (r a, c)
+        else:
+            X = X.squeeze() # assuming already in shape (r a, c)
 
         if len(X.size()) != 2:
             raise ValueError(
