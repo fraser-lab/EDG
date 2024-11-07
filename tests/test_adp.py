@@ -132,6 +132,11 @@ def test_extract_elements(adp_init):
 def test_gamma(sim_data_1az5, device):
     protein = Protein(sim_data_1az5[0])
     X, _, S = protein.to_XCS(device=device)  # backbone coordinates
+    flat_X = rearrange(X, "b r a c -> b (r a) c").squeeze()
+    mask = flat_X != 0
+    values = torch.where(mask, flat_X, torch.tensor(float("nan")))
+    center_shift = torch.nanmean(values, dim=0)
+    X -= center_shift  # centering
     adp = adp3d.ADP3D(y=sim_data_1az5[1], seq=S, structure=sim_data_1az5[0])
 
     density = gemmi.read_ccp4_map(sim_data_1az5[1])
@@ -151,20 +156,26 @@ def test_gamma(sim_data_1az5, device):
     ccp4.update_ccp4_header()
     ccp4.write_ccp4_map("tests/output/gamma.ccp4")
 
-    # test all atom # TODO
-    # X_aa, _, _ = protein.to_XCS(device=device, all_atom=True) # all atom coordinates
-    # volume = adp._gamma(X, size, all_atom=True)
+    # test all atom
+    X_aa, _, S = protein.to_XCS(device=device, all_atom=True) # all atom coordinates
+    flat_X_aa = rearrange(X, "b r a c -> b (r a) c").squeeze()
+    mask = flat_X_aa != 0
+    values = torch.where(mask, flat_X_aa, torch.tensor(float("nan")))
+    center_shift = torch.nanmean(values, dim=0)
+    X_aa -= center_shift  # centering
+    adp = adp3d.ADP3D(y=sim_data_1az5[1], seq=S, structure=sim_data_1az5[0], all_atom=True)
+    volume = adp._gamma(X_aa, size, all_atom=True)
 
-    # assert volume is not None
-    # assert torch.any(volume > 0)
+    assert volume is not None
+    assert torch.any(volume > 0)
 
-    # volume_np = volume.cpu().numpy()
-    # ccp4 = gemmi.Ccp4Map()
-    # ccp4.grid = gemmi.FloatGrid(
-    #     volume_np, cell=density.grid.unit_cell, spacegroup=density.grid.spacegroup
-    # )
-    # ccp4.update_ccp4_header()
-    # ccp4.write_ccp4_map("tests/output/gamma_aa.ccp4")
+    volume_np = volume.cpu().numpy()
+    ccp4 = gemmi.Ccp4Map()
+    ccp4.grid = gemmi.FloatGrid(
+        volume_np, cell=density.grid.unit_cell, spacegroup=density.grid.spacegroup
+    )
+    ccp4.update_ccp4_header()
+    ccp4.write_ccp4_map("tests/output/gamma_aa.ccp4")
 
 
 def test_correlation_matrix(peptides, density_4yuo, device):
@@ -264,5 +275,5 @@ def test_optimizer(sim_data_1az5, device):
     # default args, 10 epochs
     output_model = adp.model_refinement_optimizer(output_dir="./tests/output", epochs = 10)
     assert output_model is not None
-    output_model.to_CIF("./tests/output/final.cif")
-    assert Path("./tests/output/final.cif").exists()
+    output_model.to_PDB("./tests/output/final.pdb")
+    assert Path("./tests/output/final.pdb").exists()

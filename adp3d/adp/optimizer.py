@@ -99,6 +99,7 @@ class ADP3D:
         seq: torch.Tensor,
         structure: str,
         protein: Protein = None,
+        all_atom: bool = False,
         em: bool = False,
         gpu: bool = True,
     ):
@@ -131,6 +132,7 @@ class ADP3D:
             )
 
         self.em = em
+        self.all_atom = all_atom
         # enforce input args
         check = [x is not None for x in [y, seq, structure]]
         if not any(check):
@@ -143,11 +145,12 @@ class ADP3D:
             all_atom=True, device=self.device
         )
 
-        # processing coordinates # FIXME: this is a placeholder for now
-        # self.center_shift = self.x_bar.mean(
-        #     dim=(0, 1, 2)
-        # )  # this will need to be applied to the map too so map and model are aligned
-        self.center_shift = torch.tensor([0.0, 0.0, 0.0], device=self.device)
+        # processing coordinates 
+        # TODO: (LATER PROCESS CHROMA I/O SO UNMODELED ATOMS ARE nan)
+        flat_x_bar = rearrange(self.x_bar, "b r a c -> b (r a) c").squeeze()
+        mask = flat_x_bar != 0
+        values = torch.where(mask, flat_x_bar, torch.tensor(float("nan")))
+        self.center_shift = torch.nanmean(values, dim=0) # this will need to be applied to the map too so map and model are aligned
         self.x_bar -= self.center_shift  # centering
         self.x_bar = self.x_bar[torch.abs(self.C_bar) == 1].unsqueeze(
             0
@@ -161,11 +164,12 @@ class ADP3D:
         )  # get only chain 1
 
         # set x_bar to backbone
-        self.x_bar = self.x_bar[:, :, :4, :]
+        if not self.all_atom:
+            self.x_bar = self.x_bar[:, :, :4, :]
 
         # save backbone only PDB model NOTE: Get rid of this once all atom works
         Protein.from_XCS(
-            self.x_bar,
+            self.x_bar[:, :, :4, :],
             torch.ones(self.x_bar.size()[1], device=self.device).unsqueeze(0),
             S,
         ).to_PDB(f"{os.path.splitext(structure)[0]}_bb.pdb")
@@ -223,7 +227,7 @@ class ADP3D:
         r = self.seq.size()[
             1
         ]  # Number of residues (from sequence, since we want total number in the correlation matrix)
-        a = self.x_bar.size()[2]  # Number of atoms in one residue
+        a = self.x_bar.size()[2] if not self.all_atom else 4  # Number of atoms in one residue
         N = r * a  # Number of atoms in the protein backbone
         identity_matrices, overhang_matrix = identity_submatrices(N)
         overhang = N % 3
@@ -306,8 +310,9 @@ class ADP3D:
         """
         z = rearrange(z, "b r a c -> b (r a) c").squeeze()
         x_bar = rearrange(
-            self.x_bar[self.C_bar == 1].unsqueeze(0), "b r a c -> b (r a) c"
+            self.x_bar[self.C_bar == 1].unsqueeze(0)[:, :, :4, :], "b r a c -> b (r a) c"
         ).squeeze()  # TODO: take only modeled residues, requires CIF
+        # model backbone only for this
         denoised = self.A @ self.V_T @ z
         denoised = denoised[denoised.any(dim=1)]
         measured = self.S_plus @ self.U.T @ x_bar
@@ -438,10 +443,16 @@ class ADP3D:
                 "Input coordinates must be of shape (residues * atoms, 3). Batched X is not yet supported in _gamma."
             )
 
-        # if X.size()[0] != self.x_bar.size()[1] * self.x_bar.size()[2]: # TODO: fix this once all atom is implemented
-        #     raise ValueError(
-        #         "Number of atoms in input coordinates must match number of atoms in structure."
-        #     )
+        if all_atom and X.size()[0] != self.x_bar.size()[1] * self.x_bar.size()[2]:
+            print(X.size(), self.x_bar.size())
+            raise ValueError(
+                "Number of atoms in input coordinates must match number of atoms in structure."
+            )
+        elif not all_atom and X.size()[0] != self.x_bar.size()[1] * 4:
+            print(X.size(), self.x_bar.size())
+            raise ValueError(
+                "Number of atoms in input coordinates must match number of backbone atoms in structure."
+            )
 
         elements = rearrange(self._extract_elements(all_atom), "r a -> (r a)")
         C_expand = repeat(
@@ -577,7 +588,7 @@ class ADP3D:
             return -torch.linalg.norm(torch.abs(Fprotein) - torch.abs(Fmodel)) ** 2
         else:  # TODO: fix and move this to Fourier space
             density = self._gamma(
-                X, size=self.y.size()
+                X, size=self.y.size(), all_atom=self.all_atom
             )  # Get density map from denoised coordinates
 
             if density.size() != self.y.size():
@@ -646,7 +657,7 @@ class ADP3D:
                 device=self.device
             )  # handle GT protein initialization
         else:
-            Z = torch.randn_like(self.x_bar, device=self.device)
+            Z = torch.randn_like(self.x_bar[:, :, :4, :], device=self.device)
             X = self.multiply_corr(Z, self.C_bar)
             C = torch.ones_like(
                 self.C_bar, device=self.device
@@ -700,18 +711,19 @@ class ADP3D:
                 momenta[1] * v_i_s + lr_m_s_d[1] * grad_ll_sequence
             )  # NOTE: This should change if a model other than Chroma is used.
 
-            # TODO: update below with all atom once done
-            # z_0_aa = self.multiply_inverse_corr(X_aa, self.C_bar)  # Transform to whitened space
-            density_grad_transformed = self.multiply_inverse_corr(
-                self.grad_ll_density(X_0), C
-            )
+            if self.all_atom:
+                density_grad_transformed = self.multiply_inverse_corr(
+                    self.grad_ll_density(X_aa)[:, :, :4, :], C # get the backbone coords to update
+                )
+            else:
+                density_grad_transformed = self.multiply_inverse_corr(
+                    self.grad_ll_density(X_0), C
+                )
             v_i_d = momenta[2] * v_i_d + lr_m_s_d[2] * density_grad_transformed
 
-            # Update denoised coordinates # FIXME
-            z_t_1 = z_0 + v_i_m + v_i_s + v_i_d
+            # Update denoised coordinates 
+            z_t_1 = z_0 + v_i_m + v_i_s + v_i_d # FIXME
             # z_t_1 = z_0 + v_i_m + v_i_s
-            # z_t_1 = z_0 + v_i_m
-            # z_t_1 = z_0 + v_i_d
 
             # Add noise (this is the same as what OG ADP3D does)
             t1 = _t(epoch + 1, epochs).to(self.device)
