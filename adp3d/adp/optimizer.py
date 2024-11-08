@@ -11,7 +11,6 @@ import torch.nn.functional as F
 import numpy as np
 import os
 import gemmi
-import reciprocalspaceship as rs
 import warnings
 from einops import rearrange, reduce, repeat
 from chroma import Chroma, Protein
@@ -20,15 +19,13 @@ from chroma.layers.structure.mvn import BackboneMVNGlobular
 # from chroma.layers.structure.sidechain import SideChainBuilder
 from chroma.constants import AA_GEOMETRY, AA20_3
 from tqdm import tqdm
-from adp3d.utils.utility import DotDict
+from adp3d.utils.utility import DotDict, try_gpu
 from adp3d.data.sf import (
     ATOM_STRUCTURE_FACTORS,
     ELECTRON_SCATTERING_FACTORS,
     ELEMENTS,
     IDX_TO_ELEMENT,
 )
-from SFC_Torch.Fmodel import SFcalculator
-from SFC_Torch.io import PDBParser
 
 
 def identity_submatrices(N) -> Tuple[torch.Tensor]:
@@ -101,7 +98,7 @@ class ADP3D:
         protein: Protein = None,
         all_atom: bool = False,
         em: bool = False,
-        gpu: bool = True,
+        device: Union[str, torch.device] = None,
     ):
         """Initialize the ADP3D class.
 
@@ -119,13 +116,21 @@ class ADP3D:
             Input file path for an incomplete structure
         protein : Protein, optional
             Chroma Protein object for initializing with a given protein structure, by default None
+        all_atom : bool, optional
+            Whether to use all-atom coordinates, by default False
+        em : bool, optional
+            Whether to use electron scattering factors, by default False
+        gpu : bool, optional
+            Whether to use GPU, by default True
         """
 
-        self.device = (
-            torch.device("cuda" if torch.cuda.is_available() else "cpu")
-            if gpu
-            else torch.device("cpu")
-        )
+        if device is None:
+            self.device = try_gpu()
+        elif isinstance(device, str):
+            self.device = torch.device(device)
+        else:
+            self.device = device
+    
         if self.device == torch.device("cpu"):
             warnings.warn(
                 "Running on CPU. Consider using a GPU for faster computation."
@@ -416,17 +421,23 @@ class ADP3D:
         X: torch.Tensor,
         size: Tuple[int] = (100, 100, 100),
         all_atom: bool = False,
+        variance_scale: float = 1.0,
     ) -> torch.Tensor:
         """Compute electron density map of the all-atom coordinates X.
 
         Args:
             X (torch.Tensor): The input all-atom protein coordinates.
             size (Tuple[int]): The desired size of the output density map.
+            all_atom (bool): Whether the input coordinates are all-atom or backbone only.
+            variance_scale (float): Multiplier on the Gaussian kernel variance. Use >1 for this to "smear" the
+            density out. A value of 10 will give an approximately 10 Angstrom resolution map.
 
         Returns:
             torch.Tensor: The structure factors.
         """
-        # TODO: account for time dependent resolution
+        
+        variance_scale = torch.tensor(variance_scale, device=self.device)
+
         if X.size()[2] == 4 and all_atom:
             raise ValueError(
                 "Input coordinates are backbone only, all_atom must be False."
@@ -494,7 +505,7 @@ class ADP3D:
         grid = torch.meshgrid(x, y, z, indexing="ij")
         grid = torch.stack(grid, dim=-1).to(self.device)
 
-        four_pi2 = 4 * torch.pi**2
+        four_pi2_var = 4 * torch.pi**2
 
         if self.em:
             sf = ELECTRON_SCATTERING_FACTORS
@@ -504,7 +515,7 @@ class ADP3D:
             _range = 6
 
         bw_dict = lambda x: torch.tensor(
-            [-four_pi2 / b if b > 1e-4 else 0 for b in sf[x][1][:_range]],
+            [-four_pi2_var / b if b > 1e-4 else 0 for b in sf[x][1][:_range]],
             device=self.device,
         )
         aw_dict = (
@@ -545,7 +556,7 @@ class ADP3D:
             r_expanded = repeat(r, "r -> r n", n=_range)  # Shape: (x*y*z, _range)
 
             density_contribution = torch.sum(
-                aw_expanded * torch.exp(bw_expanded * r_expanded**2), dim=1
+                aw_expanded * torch.exp(bw_expanded * r_expanded**2 / variance_scale), dim=1
             )
 
             # accumulate contributions to the density
@@ -563,7 +574,7 @@ class ADP3D:
 
         Parameters
         ----------
-        z : torch.Tensor
+        X : torch.Tensor
             Denoised coordinates.
 
         Returns
@@ -574,34 +585,37 @@ class ADP3D:
         if len(X.size()) == 4:
             X = rearrange(X, "b r a c -> b (r a) c")  # b, N, 3
 
-        if self.density_extension in (".mtz", ".cif"):
+        # if self.density_extension in (".mtz", ".cif"):
 
-            if X.size()[1] != self.input_sfcalculator.n_atoms:
-                raise ValueError(
-                    "Number of atoms in input coordinates must match number of atoms in structure factor calculator."
-                )
-            Fprotein = self.input_sfcalculator.calc_fprotein(Return=True)
-            Fmodel = self.input_sfcalculator.calc_fprotein_batch(
-                X, Return=True
-            ).squeeze()
+        #     if X.size()[1] != self.input_sfcalculator.n_atoms:
+        #         raise ValueError(
+        #             "Number of atoms in input coordinates must match number of atoms in structure factor calculator."
+        #         )
+        #     Fprotein = self.input_sfcalculator.calc_fprotein(Return=True)
+        #     Fmodel = self.input_sfcalculator.calc_fprotein_batch(
+        #         X, Return=True
+        #     ).squeeze()
 
-            return -torch.linalg.norm(torch.abs(Fprotein) - torch.abs(Fmodel)) ** 2
-        else:  # TODO: fix and move this to Fourier space
-            density = self._gamma(
-                X, size=self.y.size(), all_atom=self.all_atom
-            )  # Get density map from denoised coordinates
+        #     return -torch.linalg.norm(torch.abs(Fprotein) - torch.abs(Fmodel)) ** 2
 
-            if density.size() != self.y.size():
-                raise ValueError(
-                    "Density map and input density map must be the same size."
-                )
+        density = self._gamma(
+            X, size=self.y.size(), all_atom=self.all_atom
+        )  # Get density map from denoised coordinates
 
-            return (
-                -torch.linalg.vector_norm(
-                    torch.flatten(density) - torch.flatten(self.y)
-                )
-                ** 2
+        if density.size() != self.y.size():
+            raise ValueError(
+                "Density map and input density map must be the same size."
             )
+
+        diff = density - self.y
+        diff_fft = torch.fft.fftn(diff, norm="forward") # "forward" does 1/N normalization
+
+        return (
+            -torch.linalg.norm(
+                diff_fft
+            )
+            ** 2
+        )
 
     def grad_ll_density(self, X: torch.Tensor) -> torch.Tensor:
         """Compute the gradient of the log likelihood of the density given the atomic coordinates and side chain angles.
@@ -609,7 +623,7 @@ class ADP3D:
         Parameters
         ----------
 
-        z : torch.Tensor
+        X : torch.Tensor
             Denoised coordinates.
 
         Returns
@@ -629,6 +643,7 @@ class ADP3D:
         epochs: int = 4000,
         lr_m_s_d: List[float] = [1e-1, 1e-5, 3e-5],
         momenta: List[float] = [9e-1] * 3,
+        map_resolution: float = 2.0,
         output_dir: str = "output",
     ) -> Protein:
         """Use gradient descent with momentum to optimize log likelihood functions for model refinement task along with denoised coordinates.
@@ -681,11 +696,13 @@ class ADP3D:
             # transform denoised coordinates to whitened space
             z_0 = self.multiply_inverse_corr(X_0, C)
 
+            # sample chi angles
             if epoch % 100 == 0:  # TODO: implement all atom
                 X_aa, _, _, _ = self.sequence_chi_sampler(
                     X_0, C, S, t=0.0, return_scores=True, resample_chi=True
                 )
 
+            # sequence matching
             if epoch >= 3000:
                 with torch.enable_grad():
                     X_aa = X_aa.clone().detach().requires_grad_(True)
@@ -702,15 +719,19 @@ class ADP3D:
             else:
                 grad_ll_sequence = torch.zeros_like(z_0, device=self.device)
 
-            # Accumulate gradients
+            ### Accumulate gradients
+
+            # incomplete structure
             v_i_m = momenta[0] * v_i_m + lr_m_s_d[
                 0
             ] * self.grad_ll_incomplete_structure(z_0)
 
+            # sequence
             v_i_s = (
                 momenta[1] * v_i_s + lr_m_s_d[1] * grad_ll_sequence
             )  # NOTE: This should change if a model other than Chroma is used.
 
+            # density
             if self.all_atom:
                 density_grad_transformed = self.multiply_inverse_corr(
                     self.grad_ll_density(X_aa)[:, :, :4, :], C # get the backbone coords to update
@@ -719,7 +740,10 @@ class ADP3D:
                 density_grad_transformed = self.multiply_inverse_corr(
                     self.grad_ll_density(X_0), C
                 )
-            v_i_d = momenta[2] * v_i_d + lr_m_s_d[2] * density_grad_transformed
+
+            current_resolution = 15 if epoch < 3000 else 15 - (epoch - 3000) / 100 # TODO: generalize to different epoch counts
+            lr_density = lr_m_s_d[2] * (current_resolution / map_resolution) ** 3
+            v_i_d = momenta[2] * v_i_d + lr_density * density_grad_transformed
 
             # Update denoised coordinates 
             z_t_1 = z_0 + v_i_m + v_i_s + v_i_d # FIXME

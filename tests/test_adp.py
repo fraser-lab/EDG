@@ -8,13 +8,12 @@ from adp3d import ADP3D
 from chroma import Chroma, Protein
 from pathlib import Path
 from adp3d.data.sf import ELEMENTS
+from adp3d.utils.utility import try_gpu
 from einops import rearrange
-
 
 @pytest.fixture
 def device():
-    return torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
+    return try_gpu()
 
 @pytest.fixture
 def cif_4yuo():
@@ -81,12 +80,12 @@ def sim_data_7pzt():
 
 
 @pytest.fixture
-def adp_init(density_4yuo, cif_4yuo):
+def adp_init(density_4yuo, cif_4yuo, device):
     structure = Protein(cif_4yuo)
 
     _, _, S = structure.to_XCS()
 
-    adp = ADP3D(y=density_4yuo, seq=S, structure=cif_4yuo)
+    adp = ADP3D(y=density_4yuo, seq=S, structure=cif_4yuo, device=device)
     return adp
 
 
@@ -137,7 +136,7 @@ def test_gamma(sim_data_1az5, device):
     values = torch.where(mask, flat_X, torch.tensor(float("nan")))
     center_shift = torch.nanmean(values, dim=0)
     X -= center_shift  # centering
-    adp = adp3d.ADP3D(y=sim_data_1az5[1], seq=S, structure=sim_data_1az5[0])
+    adp = adp3d.ADP3D(y=sim_data_1az5[1], seq=S, structure=sim_data_1az5[0], device=device)
 
     density = gemmi.read_ccp4_map(sim_data_1az5[1])
     size = density.grid.shape
@@ -163,7 +162,7 @@ def test_gamma(sim_data_1az5, device):
     values = torch.where(mask, flat_X_aa, torch.tensor(float("nan")))
     center_shift = torch.nanmean(values, dim=0)
     X_aa -= center_shift  # centering
-    adp = adp3d.ADP3D(y=sim_data_1az5[1], seq=S, structure=sim_data_1az5[0], all_atom=True)
+    adp = adp3d.ADP3D(y=sim_data_1az5[1], seq=S, structure=sim_data_1az5[0], all_atom=True, device=device)
     volume = adp._gamma(X_aa, size, all_atom=True)
 
     assert volume is not None
@@ -182,7 +181,7 @@ def test_correlation_matrix(peptides, density_4yuo, device):
     # 3 residue protein, each with coordinate at (0, 0, 0)
     X = torch.zeros(1, 3, 4, 3, device=device)
     C = torch.ones(1, 3, device=device)
-    adp = ADP3D(y=density_4yuo, seq=torch.zeros(1, 3), structure=peptides[0])
+    adp = ADP3D(y=density_4yuo, seq=torch.zeros(1, 3), structure=peptides[0], device=device)
     chroma_whitened_test = adp.multiply_inverse_corr(X, C)
     chroma_unwhitened_test = adp.multiply_corr(chroma_whitened_test, C)
     assert torch.allclose(X, chroma_unwhitened_test, atol=1e-5)
@@ -203,12 +202,12 @@ def test_ll_incomplete_structure(peptides, density_4yuo, device):
     # test simple case: both structures are the same, ll should be 0
     complete_peptide_XCS = Protein(complete_peptide).to_XCS(device=device)
     adp = ADP3D(
-        y=density_4yuo, seq=complete_peptide_XCS[2], structure=complete_peptide
+        y=density_4yuo, seq=complete_peptide_XCS[2], structure=complete_peptide, device=device
     )  # NOTE: density is arbitrary here (just needs to be not None), but if type-checked later in development this might throw an error
     z = adp.multiply_inverse_corr(
         complete_peptide_XCS[
             0
-        ],  # shifting mean later maybe?  - complete_peptide_XCS[0].mean(dim=(0, 1, 2))
+        ] - adp.center_shift,  # centering
         complete_peptide_XCS[1],
     ).to(device)
     ll = adp.ll_incomplete_structure(z)
@@ -217,7 +216,7 @@ def test_ll_incomplete_structure(peptides, density_4yuo, device):
 
     # test slightly more complex case: one structure is a subset of the other
     adp = ADP3D(
-        y=density_4yuo, seq=complete_peptide_XCS[2], structure=incomplete_peptide
+        y=density_4yuo, seq=complete_peptide_XCS[2], structure=incomplete_peptide, device=device
     )
     # z stays the same, ll w.r.t. complete structure
     ll = adp.ll_incomplete_structure(z)
@@ -225,7 +224,7 @@ def test_ll_incomplete_structure(peptides, density_4yuo, device):
     assert ll < 0
 
     # test alternative conformation of peptide
-    adp = ADP3D(y=density_4yuo, seq=complete_peptide_XCS[2], structure=altconf_peptide)
+    adp = ADP3D(y=density_4yuo, seq=complete_peptide_XCS[2], structure=altconf_peptide, device=device)
     # z stays the same, ll w.r.t. complete structure
     ll = adp.ll_incomplete_structure(z)
     assert ll is not None
@@ -238,9 +237,9 @@ def test_grad_ll_incomplete_structure(peptides, density_4yuo, device):
     # test simple case: both structures are the same, ll should be 0, grad should be 0
     complete_peptide_XCS = Protein(complete_peptide).to_XCS(device=device)
     adp = ADP3D(
-        y=density_4yuo, seq=complete_peptide_XCS[2], structure=complete_peptide
+        y=density_4yuo, seq=complete_peptide_XCS[2], structure=complete_peptide, device=device
     )  # NOTE: density is arbitrary here (just needs to be not None), but if type-checked later in development this might throw an error
-    z = adp.multiply_inverse_corr(complete_peptide_XCS[0], complete_peptide_XCS[1]).to(
+    z = adp.multiply_inverse_corr(complete_peptide_XCS[0] - adp.center_shift, complete_peptide_XCS[1]).to(
         device
     )
     grad_ll = adp.grad_ll_incomplete_structure(z)
@@ -249,7 +248,7 @@ def test_grad_ll_incomplete_structure(peptides, density_4yuo, device):
 
     # test slightly more complex case: one structure is a subset of the other
     adp = ADP3D(
-        y=density_4yuo, seq=complete_peptide_XCS[2], structure=incomplete_peptide
+        y=density_4yuo, seq=complete_peptide_XCS[2], structure=incomplete_peptide, device=device
     )  # NOTE: density is arbitrary here (just needs to be not None), but if type-checked later in development this might throw an error
     # z stays the same, ll w.r.t. complete structure
     grad_ll = adp.grad_ll_incomplete_structure(z)
@@ -259,18 +258,35 @@ def test_grad_ll_incomplete_structure(peptides, density_4yuo, device):
 
 def test_ll_density_and_grad(sim_data_7pzt, sf_cif_7pzt, cif_7pzt, device):
     # using SFcalculator, currently failing # FIXME
-    prot = Protein(cif_7pzt).to_XCS(device=device)
-    adp = ADP3D(y=sf_cif_7pzt, seq=prot[2], structure=cif_7pzt)
-    X = prot[0]
-    grad_ll = adp.grad_ll_density(X)  # tests ll_density in this function
+    # prot = Protein(cif_7pzt).to_XCS(device=device)
+    # adp = ADP3D(y=sf_cif_7pzt, seq=prot[2], structure=cif_7pzt)
+    # X = prot[0]
+    # grad_ll = adp.grad_ll_density(X)  # tests ll_density in this function
+    # assert grad_ll is not None
+    # assert torch.allclose(grad_ll, torch.zeros_like(grad_ll, device=device), atol=0.5)
+    # ll_density with _gamma
+    protein = Protein(sim_data_7pzt[0])
+    X, _, S = protein.to_XCS(all_atom=True, device=device)  # backbone coordinates
+    flat_X = rearrange(X, "b r a c -> b (r a) c").squeeze()
+    mask = flat_X != 0
+    values = torch.where(mask, flat_X, torch.tensor(float("nan")))
+    center_shift = torch.nanmean(values, dim=0)
+    X -= center_shift  # centering
+    adp = adp3d.ADP3D(y=sim_data_7pzt[1], seq=S, structure=sim_data_7pzt[0], all_atom=True, em=True, device=device)
+
+    ll_density = adp.ll_density(X)
+    assert ll_density is not None
+    assert torch.allclose(ll_density, torch.zeros_like(ll_density, device=device), atol=0.1)
+
+    grad_ll = adp.grad_ll_density(X)
     assert grad_ll is not None
-    assert torch.allclose(grad_ll, torch.zeros_like(grad_ll, device=device), atol=0.5)
-    # TODO: compare with gamma calculation
+    assert torch.allclose(grad_ll, torch.zeros_like(grad_ll, device=device), atol=0.3)
+
 
 
 def test_optimizer(sim_data_1az5, device):
     prot = Protein(sim_data_1az5[0]).to_XCS(device=device)
-    adp = ADP3D(y=sim_data_1az5[1], seq=prot[2], structure=sim_data_1az5[0])
+    adp = ADP3D(y=sim_data_1az5[1], seq=prot[2], structure=sim_data_1az5[0], device=device)
 
     # default args, 10 epochs
     output_model = adp.model_refinement_optimizer(output_dir="./tests/output", epochs = 10)
