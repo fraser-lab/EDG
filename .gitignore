@@ -173,6 +173,7 @@ model_refinement.py
 */output
 tests/adp3d_test.ipynb
 tests/resources/*_bb.*
+*output_test*
 
 # large files
 *.mrc

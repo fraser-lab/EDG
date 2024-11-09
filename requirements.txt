@@ -1,1 +1,3 @@
-# add more at some point
+generate-chroma
+pytest
+tqdm

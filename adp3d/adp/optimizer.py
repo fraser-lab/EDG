@@ -130,7 +130,7 @@ class ADP3D:
             self.device = torch.device(device)
         else:
             self.device = device
-    
+
         if self.device == torch.device("cpu"):
             warnings.warn(
                 "Running on CPU. Consider using a GPU for faster computation."
@@ -150,12 +150,14 @@ class ADP3D:
             all_atom=True, device=self.device
         )
 
-        # processing coordinates 
+        # processing coordinates
         # TODO: (LATER PROCESS CHROMA I/O SO UNMODELED ATOMS ARE nan)
         flat_x_bar = rearrange(self.x_bar, "b r a c -> b (r a) c").squeeze()
         mask = flat_x_bar != 0
         values = torch.where(mask, flat_x_bar, torch.tensor(float("nan")))
-        self.center_shift = torch.nanmean(values, dim=0) # this will need to be applied to the map too so map and model are aligned
+        self.center_shift = torch.nanmean(
+            values, dim=0
+        )  # this will need to be applied to the map too so map and model are aligned
         self.x_bar -= self.center_shift  # centering
         self.x_bar = self.x_bar[torch.abs(self.C_bar) == 1].unsqueeze(
             0
@@ -232,7 +234,9 @@ class ADP3D:
         r = self.seq.size()[
             1
         ]  # Number of residues (from sequence, since we want total number in the correlation matrix)
-        a = self.x_bar.size()[2] if not self.all_atom else 4  # Number of atoms in one residue
+        a = (
+            self.x_bar.size()[2] if not self.all_atom else 4
+        )  # Number of atoms in one residue
         N = r * a  # Number of atoms in the protein backbone
         identity_matrices, overhang_matrix = identity_submatrices(N)
         overhang = N % 3
@@ -315,7 +319,8 @@ class ADP3D:
         """
         z = rearrange(z, "b r a c -> b (r a) c").squeeze()
         x_bar = rearrange(
-            self.x_bar[self.C_bar == 1].unsqueeze(0)[:, :, :4, :], "b r a c -> b (r a) c"
+            self.x_bar[self.C_bar == 1].unsqueeze(0)[:, :, :4, :],
+            "b r a c -> b (r a) c",
         ).squeeze()  # TODO: take only modeled residues, requires CIF
         # model backbone only for this
         denoised = self.A @ self.V_T @ z
@@ -435,7 +440,7 @@ class ADP3D:
         Returns:
             torch.Tensor: The structure factors.
         """
-        
+
         variance_scale = torch.tensor(variance_scale, device=self.device)
 
         if X.size()[2] == 4 and all_atom:
@@ -447,7 +452,7 @@ class ADP3D:
                 X, "b r a c -> b (r a) c"
             ).squeeze()  # if b = 1, should result in (r a, c)
         else:
-            X = X.squeeze() # assuming already in shape (r a, c)
+            X = X.squeeze()  # assuming already in shape (r a, c)
 
         if len(X.size()) != 2:
             raise ValueError(
@@ -556,7 +561,8 @@ class ADP3D:
             r_expanded = repeat(r, "r -> r n", n=_range)  # Shape: (x*y*z, _range)
 
             density_contribution = torch.sum(
-                aw_expanded * torch.exp(bw_expanded * r_expanded**2 / variance_scale), dim=1
+                aw_expanded * torch.exp(bw_expanded * r_expanded**2 / variance_scale),
+                dim=1,
             )
 
             # accumulate contributions to the density
@@ -568,6 +574,34 @@ class ADP3D:
         )
 
         return density
+    
+    def ll_density_real(self, X: torch.Tensor) -> torch.Tensor:
+        """OLD: Real space analog of ll_density.
+        Compute the log likelihood of the density given the atomic coordinates and side chain angles.
+
+        Parameters
+        ----------
+        X : torch.Tensor
+            Denoised coordinates.
+
+        Returns
+        -------
+        torch.Tensor
+            Log likelihood of the density.
+        """
+        if len(X.size()) == 4:
+            X = rearrange(X, "b r a c -> b (r a) c")  # b, N, 3
+
+        density = self._gamma(
+            X, size=self.y.size(), all_atom=self.all_atom
+        )  # Get density map from denoised coordinates
+
+        if density.size() != self.y.size():
+            raise ValueError("Density map and input density map must be the same size.")
+
+        diff = density - self.y
+
+        return -torch.linalg.norm(diff)**2
 
     def ll_density(self, X: torch.Tensor) -> torch.Tensor:
         """Compute the log likelihood of the density given the atomic coordinates and side chain angles.
@@ -603,19 +637,14 @@ class ADP3D:
         )  # Get density map from denoised coordinates
 
         if density.size() != self.y.size():
-            raise ValueError(
-                "Density map and input density map must be the same size."
-            )
+            raise ValueError("Density map and input density map must be the same size.")
 
         diff = density - self.y
-        diff_fft = torch.fft.fftn(diff, norm="forward") # "forward" does 1/N normalization
+        diff_fft = torch.fft.fftn(
+            diff, norm="forward"
+        )  # "forward" does 1/N normalization, which we need with DFT
 
-        return (
-            -torch.linalg.norm(
-                diff_fft
-            )
-            ** 2
-        )
+        return torch.sum(torch.real(diff_fft * torch.conj(diff_fft)))
 
     def grad_ll_density(self, X: torch.Tensor) -> torch.Tensor:
         """Compute the gradient of the log likelihood of the density given the atomic coordinates and side chain angles.
@@ -734,19 +763,22 @@ class ADP3D:
             # density
             if self.all_atom:
                 density_grad_transformed = self.multiply_inverse_corr(
-                    self.grad_ll_density(X_aa)[:, :, :4, :], C # get the backbone coords to update
+                    self.grad_ll_density(X_aa)[:, :, :4, :],
+                    C,  # get the backbone coords to update
                 )
             else:
                 density_grad_transformed = self.multiply_inverse_corr(
                     self.grad_ll_density(X_0), C
                 )
 
-            current_resolution = 15 if epoch < 3000 else 15 - (epoch - 3000) / 100 # TODO: generalize to different epoch counts
+            current_resolution = (
+                15 if epoch < 3000 else 15 - (epoch - 3000) / 100
+            )  # TODO: generalize to different epoch counts
             lr_density = lr_m_s_d[2] * (current_resolution / map_resolution) ** 3
             v_i_d = momenta[2] * v_i_d + lr_density * density_grad_transformed
 
-            # Update denoised coordinates 
-            z_t_1 = z_0 + v_i_m + v_i_s + v_i_d # FIXME
+            # Update denoised coordinates
+            z_t_1 = z_0 + v_i_m + v_i_s + v_i_d  # FIXME
             # z_t_1 = z_0 + v_i_m + v_i_s
 
             # Add noise (this is the same as what OG ADP3D does)

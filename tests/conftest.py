@@ -17,7 +17,7 @@ except Exception:
 
 def pytest_runtest_setup(item):
     # Fix seeds at the beginning of each test.
-    seed = 20220714
+    seed = 20241108
     random.seed(seed)
     if HAS_NP:
         np.random.seed(seed)
