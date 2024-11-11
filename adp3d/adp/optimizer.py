@@ -2,7 +2,7 @@
 
 Author: Karson Chrispens (karson.chrispens@ucsf.edu)
 Created: 6 Aug 2024
-Updated: 20 Aug 2024
+Updated: 11 Nov 2024
 """
 
 from typing import Tuple, Union, List, Dict
@@ -438,7 +438,7 @@ class ADP3D:
             density out. A value of 10 will give an approximately 10 Angstrom resolution map.
 
         Returns:
-            torch.Tensor: The structure factors.
+            torch.Tensor: The density map.
         """
 
         variance_scale = torch.tensor(variance_scale, device=self.device)
@@ -510,7 +510,7 @@ class ADP3D:
         grid = torch.meshgrid(x, y, z, indexing="ij")
         grid = torch.stack(grid, dim=-1).to(self.device)
 
-        four_pi2_var = 4 * torch.pi**2
+        four_pi2 = 4 * torch.pi**2
 
         if self.em:
             sf = ELECTRON_SCATTERING_FACTORS
@@ -520,7 +520,7 @@ class ADP3D:
             _range = 6
 
         bw_dict = lambda x: torch.tensor(
-            [-four_pi2_var / b if b > 1e-4 else 0 for b in sf[x][1][:_range]],
+            [-four_pi2 / b if b > 1e-4 else 0 for b in sf[x][1][:_range]],
             device=self.device,
         )
         aw_dict = (
