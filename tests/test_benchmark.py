@@ -71,7 +71,7 @@ class TestOptimizationsWithSetup:
             return torch.autograd.grad(result, X)[0]
         
         result = benchmark.pedantic(
-            grad_ll_density_real, iterations=5, rounds=1 # more expensive, so fewer iterations
+            grad_ll_density_real, iterations=3, rounds=3 # more expensive, so fewer iterations
         )
 
         assert result is not None
@@ -84,7 +84,7 @@ class TestOptimizationsWithSetup:
             return torch.autograd.grad(result, X)[0]
 
         result = benchmark.pedantic(
-            grad_ll_density_fourier, iterations=5, rounds=1 # more expensive, so fewer iterations
+            grad_ll_density_fourier, iterations=3, rounds=3 # more expensive, so fewer iterations
         )
 
         assert result is not None

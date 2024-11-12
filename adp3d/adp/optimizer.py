@@ -19,6 +19,7 @@ from chroma.layers.structure.mvn import BackboneMVNGlobular
 # from chroma.layers.structure.sidechain import SideChainBuilder
 from chroma.constants import AA_GEOMETRY, AA20_3
 from tqdm import tqdm
+from adp3d.adp.density import DensityCalculator
 from adp3d.utils.utility import DotDict, try_gpu
 from adp3d.data.sf import (
     ATOM_STRUCTURE_FACTORS,
@@ -224,6 +225,10 @@ class ADP3D:
         else:
             raise ValueError("Density map must be a CCP4, MRC, SF-CIF, or MTZ file.")
 
+        self.density_calculator = DensityCalculator(
+            self.grid, self.center_shift, self.device, em
+        )
+
         # Importing sqrt(covariance matrix) from Chroma
         # These take in Z and C (for _multiply_R) or X and C (for _multiply_R_inverse)
         self.mvn = BackboneMVNGlobular(covariance_model="globular")
@@ -424,14 +429,13 @@ class ADP3D:
     def _gamma(
         self,
         X: torch.Tensor,
-        size: Tuple[int] = (100, 100, 100),
         all_atom: bool = False,
         variance_scale: float = 1.0,
     ) -> torch.Tensor:
         """Compute electron density map of the all-atom coordinates X.
 
         Args:
-            X (torch.Tensor): The input all-atom protein coordinates.
+            X (torch.Tensor): The input all-atom protein coordinates in shape (batch, residues, atoms, 3).
             size (Tuple[int]): The desired size of the output density map.
             all_atom (bool): Whether the input coordinates are all-atom or backbone only.
             variance_scale (float): Multiplier on the Gaussian kernel variance. Use >1 for this to "smear" the
@@ -475,106 +479,12 @@ class ADP3D:
             self.C_bar, "b r -> b (r a)", a=14 if all_atom else 4
         ).squeeze()  # expand to all atoms, squeeze batch dim out
 
-        origin = (
-            torch.tensor([*self.grid.get_position(0, 0, 0)], device=self.device)
-            - self.center_shift
-        )
-        if self.grid.spacing[0] > 0:  # if one is > 0, all are > 0 from GEMMI
-            x = torch.arange(
-                origin[0],
-                origin[0] + self.grid.spacing[0] * size[0],
-                self.grid.spacing[0],
-            )[
-                : size[0]
-            ]  # This gets right size. Size is sometimes off due to precision errors
-            y = torch.arange(
-                origin[1],
-                origin[1] + self.grid.spacing[1] * size[1],
-                self.grid.spacing[1],
-            )[: size[1]]
-            z = torch.arange(
-                origin[2],
-                origin[2] + self.grid.spacing[2] * size[2],
-                self.grid.spacing[2],
-            )[: size[2]]
-        else:
-            x = torch.linspace(origin[0], self.grid.unit_cell.a, size[0])
-            y = torch.linspace(origin[1], self.grid.unit_cell.b, size[1])
-            z = torch.linspace(origin[2], self.grid.unit_cell.c, size[2])
-
-        if x.size()[0] != size[0] or y.size()[0] != size[1] or z.size()[0] != size[2]:
-            raise ValueError(
-                f"Size of the density map is not matching the input size: ({x.size()[0]}, {y.size()[0]}, {z.size()[0]}) is not {size}"
-            )
-
-        grid = torch.meshgrid(x, y, z, indexing="ij")
-        grid = torch.stack(grid, dim=-1).to(self.device)
-
-        four_pi2 = 4 * torch.pi**2
-
-        if self.em:
-            sf = ELECTRON_SCATTERING_FACTORS
-            _range = 5
-        else:
-            sf = ATOM_STRUCTURE_FACTORS
-            _range = 6
-
-        bw_dict = lambda x: torch.tensor(
-            [-four_pi2 / b if b > 1e-4 else 0 for b in sf[x][1][:_range]],
-            device=self.device,
-        )
-        aw_dict = (
-            lambda x: torch.tensor(sf[x][0][:_range], device=self.device)
-            * (-bw_dict(x) / torch.pi) ** 1.5
-        )
-
-        # flatten to shape (x*y*z, 3) to match X shape (residues * atoms, 3)
-        grid_flat = rearrange(grid, "x y z c -> (x y z) c")  # Shape: (x*y*z, 3)
-
-        # pairwise distances between each voxel (grid point) and each atom
-        distances = torch.cdist(grid_flat, X)  # Shape: (x*y*z, residues * atoms)
-
-        density_flat = torch.zeros(
-            grid_flat.size(0), device=self.device
-        )  # Shape: (x*y*z,)
-
-        # Iterate over each element in the protein
-        for i, atom in enumerate(elements):
-            if atom.item() == 5 or C_expand[i].item() != 1:
-                continue
-
-            e = IDX_TO_ELEMENT[atom.item()]
-
-            aw_values = aw_dict(e)  # Shape: (_range,)
-            bw_values = bw_dict(e)  # Shape: (_range,)
-
-            # precomputed distances for this atom across all grid points
-            # (this could be a bit more efficient by not computing distances that are too far away?)
-            # seems fine for now
-            r = distances[:, i]  # Shape: (x*y*z,)
-            aw_expanded = repeat(
-                aw_values, "n -> r n", r=r.shape[0]
-            )  # Shape: (x*y*z, _range)
-            bw_expanded = repeat(
-                bw_values, "n -> r n", r=r.shape[0]
-            )  # Shape: (x*y*z, _range)
-            r_expanded = repeat(r, "r -> r n", n=_range)  # Shape: (x*y*z, _range)
-
-            density_contribution = torch.sum(
-                aw_expanded * torch.exp(bw_expanded * r_expanded**2 / variance_scale),
-                dim=1,
-            )
-
-            # accumulate contributions to the density
-            density_flat += density_contribution
-
-        # back to volume
-        density = rearrange(
-            density_flat, "(x y z) -> x y z", x=size[0], y=size[1], z=size[2]
+        density = self.density_calculator.compute_density(
+            X, elements, C_expand, variance_scale
         )
 
         return density
-    
+
     def ll_density_real(self, X: torch.Tensor) -> torch.Tensor:
         """OLD: Real space analog of ll_density.
         Compute the log likelihood of the density given the atomic coordinates and side chain angles.
@@ -589,11 +499,9 @@ class ADP3D:
         torch.Tensor
             Log likelihood of the density.
         """
-        if len(X.size()) == 4:
-            X = rearrange(X, "b r a c -> b (r a) c")  # b, N, 3
 
         density = self._gamma(
-            X, size=self.y.size(), all_atom=self.all_atom
+            X, all_atom=self.all_atom
         )  # Get density map from denoised coordinates
 
         if density.size() != self.y.size():
@@ -601,7 +509,7 @@ class ADP3D:
 
         diff = density - self.y
 
-        return -torch.linalg.norm(diff)**2
+        return -torch.linalg.norm(diff) ** 2
 
     def ll_density(self, X: torch.Tensor) -> torch.Tensor:
         """Compute the log likelihood of the density given the atomic coordinates and side chain angles.
@@ -617,7 +525,7 @@ class ADP3D:
             Log likelihood of the density.
         """
         if len(X.size()) == 4:
-            X = rearrange(X, "b r a c -> b (r a) c")  # b, N, 3
+            X = rearrange(X, "b r a c -> b (r a) c").squeeze()  # b, N, 3
 
         # if self.density_extension in (".mtz", ".cif"):
 
@@ -632,19 +540,11 @@ class ADP3D:
 
         #     return -torch.linalg.norm(torch.abs(Fprotein) - torch.abs(Fmodel)) ** 2
 
-        density = self._gamma(
-            X, size=self.y.size(), all_atom=self.all_atom
-        )  # Get density map from denoised coordinates
-
-        if density.size() != self.y.size():
-            raise ValueError("Density map and input density map must be the same size.")
-
-        diff = density - self.y
-        diff_fft = torch.fft.fftn(
-            diff, norm="forward"
-        )  # "forward" does 1/N normalization, which we need with DFT
-
-        return torch.sum(torch.real(diff_fft * torch.conj(diff_fft)))
+        elements = rearrange(self._extract_elements(self.all_atom), "r a -> (r a)")
+        C_expand = repeat(
+            self.C_bar, "b r -> b (r a)", a=14 if self.all_atom else 4
+        ).squeeze()
+        return self.density_calculator.compute_ll_density(X, elements, C_expand, self.y)
 
     def grad_ll_density(self, X: torch.Tensor) -> torch.Tensor:
         """Compute the gradient of the log likelihood of the density given the atomic coordinates and side chain angles.
