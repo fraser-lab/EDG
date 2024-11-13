@@ -527,24 +527,24 @@ class ADP3D:
         if len(X.size()) == 4:
             X = rearrange(X, "b r a c -> b (r a) c").squeeze()  # b, N, 3
 
-        # if self.density_extension in (".mtz", ".cif"):
-
-        #     if X.size()[1] != self.input_sfcalculator.n_atoms:
-        #         raise ValueError(
-        #             "Number of atoms in input coordinates must match number of atoms in structure factor calculator."
-        #         )
-        #     Fprotein = self.input_sfcalculator.calc_fprotein(Return=True)
-        #     Fmodel = self.input_sfcalculator.calc_fprotein_batch(
-        #         X, Return=True
-        #     ).squeeze()
-
-        #     return -torch.linalg.norm(torch.abs(Fprotein) - torch.abs(Fmodel)) ** 2
+        # FIXME: MTZ and SF-CIF not implemented
 
         elements = rearrange(self._extract_elements(self.all_atom), "r a -> (r a)")
         C_expand = repeat(
             self.C_bar, "b r -> b (r a)", a=14 if self.all_atom else 4
         ).squeeze()
-        return self.density_calculator.compute_ll_density(X, elements, C_expand, self.y)
+
+        if X.is_cuda: # use autocast for mixed precision, should be a cheaper operation
+            with torch.autocast(device_type="cuda"):
+                result = self.density_calculator.compute_ll_density(
+                    X, elements, C_expand, self.y
+                )
+        else:
+            result = self.density_calculator.compute_ll_density(
+                X, elements, C_expand, self.y
+            )
+
+        return result
 
     def grad_ll_density(self, X: torch.Tensor) -> torch.Tensor:
         """Compute the gradient of the log likelihood of the density given the atomic coordinates and side chain angles.
@@ -560,10 +560,35 @@ class ADP3D:
         torch.Tensor
             Gradient of the log likelihood of the density.
         """
+
+
+        # setup resolution filter
+        
+
         if X.requires_grad == False:
             X = X.clone().detach().requires_grad_(True)  # reset graph history
 
-        result = self.ll_density(X)
+        if len(X.size()) == 4:
+            X = rearrange(X, "b r a c -> b (r a) c").squeeze()  # b, N, 3
+
+        # FIXME: MTZ and SF-CIF not implemented
+
+
+        # take elements and C_expand out of gradient computation
+        elements = rearrange(self._extract_elements(self.all_atom), "r a -> (r a)")
+        C_expand = repeat(
+            self.C_bar, "b r -> b (r a)", a=14 if self.all_atom else 4
+        ).squeeze()
+
+        if X.is_cuda: # use autocast for mixed precision, should be a cheaper operation
+            with torch.autocast(device_type="cuda"):
+                result = self.density_calculator.compute_ll_density(
+                    X, elements, C_expand, self.y
+                )
+        else:
+            result = self.density_calculator.compute_ll_density(
+                X, elements, C_expand, self.y
+            )
 
         return torch.autograd.grad(result, X)[0]
 

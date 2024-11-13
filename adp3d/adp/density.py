@@ -54,6 +54,10 @@ class DensityCalculator:
         # Pre-compute grid coordinates
         self._setup_grid()
 
+        # Precompute filter
+        self.filter = None
+        self.set_filter()
+
     def _setup_grid(self):
         """Store grid coordinates in a flat tensor for efficient computation."""
         origin = (
@@ -181,7 +185,7 @@ class DensityCalculator:
             X, elements, C_expand, variance_scale
         )
 
-        # Reshape back to 3D
+        # Reshape back to 3D # TODO: are things like this a major slowdown?
         return rearrange(
             density_flat,
             "(x y z) -> x y z",
@@ -190,6 +194,27 @@ class DensityCalculator:
             z=self.grid.shape[2],
         )
 
+    def _resolution_filter(self, resolution: float = 2.0) -> torch.Tensor:
+        """Compute simple Gaussian resolution filter for density map."""
+        if resolution <= 0:
+            raise ValueError("Resolution must be greater than 0")
+
+        # we want cutoff frequency to correspond to resolution
+        sigma = resolution / (2 * torch.pi)
+
+        d, h, w = self.grid.shape
+        fd = torch.fft.fftfreq(d, self.grid.spacing[0], device=self.device)
+        fh = torch.fft.fftfreq(h, self.grid.spacing[1], device=self.device)
+        # using rfftn for density, so only need half the frequencies
+        fw = torch.fft.rfftfreq(w, self.grid.spacing[2], device=self.device)
+        f_xx, f_yy, f_zz = torch.meshgrid(fd, fh, fw, indexing="ij")
+        f_sq = (f_xx**2 + f_yy**2 + f_zz**2) / sigma
+
+        return torch.exp(-2 * torch.pi**2 * f_sq)
+    
+    def set_filter(self, resolution: float = 2.0):
+        self.filter = self._resolution_filter(resolution)
+
     def compute_ll_density(
         self,
         X: torch.Tensor,
@@ -197,6 +222,7 @@ class DensityCalculator:
         C_expand: torch.Tensor,
         target_density: torch.Tensor,
         variance_scale: float = 1.0,
+        resolution: float = 2.0,
     ) -> torch.Tensor:
         """Compute log likelihood in Fourier space with minimal memory usage.
 
@@ -211,12 +237,21 @@ class DensityCalculator:
             Mask for atoms to include in density calculation depending on chains in protein.
         target_density : torch.Tensor
             Target density map.
+        variance_scale : float
+            Multiplier on the Gaussian kernel variance. Use >1 for this to "smear" the
+            density out. A value of 10 will give an approximately 10 Angstrom resolution map.
+        resolution : float
+            Resolution to compute the norm over, in Angstroms.
         """
+        if resolution <= 0:
+            raise ValueError("Resolution must be greater than 0")
+
         density = self.compute_density(X, elements, C_expand, variance_scale)
         diff = density - target_density
 
         # Compute FFT in chunks if needed
-        diff_fft = torch.fft.fftn(
+        diff_fft = torch.fft.rfftn( # rfftn is faster for real input
             diff, norm="forward"
         )  # "forward" does 1/N normalization, which we need with DFT
+
         return torch.sum(torch.real(diff_fft * torch.conj(diff_fft)))

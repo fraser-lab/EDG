@@ -168,6 +168,7 @@ key*
 adp3d/utils/qfit_utils.py
 structure_completion_hqs.py
 model_refinement.py
+filtering_experiments.ipynb
 
 # output files
 */output
