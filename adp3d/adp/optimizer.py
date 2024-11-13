@@ -546,7 +546,7 @@ class ADP3D:
 
         return result
 
-    def grad_ll_density(self, X: torch.Tensor) -> torch.Tensor:
+    def grad_ll_density(self, X: torch.Tensor, resolution: float = 2.0) -> torch.Tensor:
         """Compute the gradient of the log likelihood of the density given the atomic coordinates and side chain angles.
 
         Parameters
@@ -563,7 +563,7 @@ class ADP3D:
 
 
         # setup resolution filter
-        
+        self.density_calculator.set_filter(resolution)
 
         if X.requires_grad == False:
             X = X.clone().detach().requires_grad_(True)  # reset graph history
@@ -685,26 +685,27 @@ class ADP3D:
                 momenta[1] * v_i_s + lr_m_s_d[1] * grad_ll_sequence
             )  # NOTE: This should change if a model other than Chroma is used.
 
+            current_resolution = (
+                15 if epoch < 3000 else 15 - (epoch - 3000) / 100
+            )  # TODO: generalize to different epoch counts
+            
             # density
             if self.all_atom:
                 density_grad_transformed = self.multiply_inverse_corr(
-                    self.grad_ll_density(X_aa)[:, :, :4, :],
+                    self.grad_ll_density(X_aa, current_resolution)[:, :, :4, :],
                     C,  # get the backbone coords to update
                 )
             else:
                 density_grad_transformed = self.multiply_inverse_corr(
-                    self.grad_ll_density(X_0), C
+                    self.grad_ll_density(X_0, current_resolution), C
                 )
 
-            current_resolution = (
-                15 if epoch < 3000 else 15 - (epoch - 3000) / 100
-            )  # TODO: generalize to different epoch counts
+            
             lr_density = lr_m_s_d[2] * (current_resolution / map_resolution) ** 3
             v_i_d = momenta[2] * v_i_d + lr_density * density_grad_transformed
 
             # Update denoised coordinates
-            z_t_1 = z_0 + v_i_m + v_i_s + v_i_d  # FIXME
-            # z_t_1 = z_0 + v_i_m + v_i_s
+            z_t_1 = z_0 + v_i_m + v_i_s + v_i_d
 
             # Add noise (this is the same as what OG ADP3D does)
             t1 = _t(epoch + 1, epochs).to(self.device)

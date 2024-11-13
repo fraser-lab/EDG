@@ -249,9 +249,15 @@ class DensityCalculator:
         density = self.compute_density(X, elements, C_expand, variance_scale)
         diff = density - target_density
 
+        if self.filter is None:
+            raise ValueError("Filter not set. Run set_filter() first.")
+
         # Compute FFT in chunks if needed
         diff_fft = torch.fft.rfftn( # rfftn is faster for real input
             diff, norm="forward"
         )  # "forward" does 1/N normalization, which we need with DFT
+
+        # Apply resolution filter
+        diff_fft *= self.filter
 
         return torch.sum(torch.real(diff_fft * torch.conj(diff_fft)))
