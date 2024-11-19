@@ -160,7 +160,7 @@ def test_gamma(sim_data_1az5, device):
     size = density.grid.shape
 
     # test backbone
-    volume = adp._gamma(X, size, all_atom=False)
+    volume = adp._gamma(X, all_atom=False)
 
     assert volume is not None
     assert torch.any(volume > 0)
@@ -187,7 +187,7 @@ def test_gamma(sim_data_1az5, device):
         all_atom=True,
         device=device,
     )
-    volume = adp._gamma(X_aa, size, all_atom=True)
+    volume = adp._gamma(X_aa, all_atom=True)
 
     assert volume is not None
     assert torch.any(volume > 0)

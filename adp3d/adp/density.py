@@ -5,6 +5,7 @@ Created: 11 Nov 2024
 Updated: 11 Nov 2024"""
 
 import torch
+import torch.nn as nn
 import gemmi
 from einops import rearrange, repeat
 from adp3d.data.sf import (
@@ -13,20 +14,25 @@ from adp3d.data.sf import (
     ELEMENTS,
     IDX_TO_ELEMENT,
 )
+import warnings
 
 
-class DensityCalculator:
+class DensityCalculator(nn.Module):
     def __init__(
         self,
         grid: gemmi.FloatGrid,
+        target_density: torch.Tensor,
         center_shift: torch.Tensor,
         device: torch.device,
         em: bool = False,
+        unpad: int = 0,
     ):
+        super(DensityCalculator, self).__init__()
         self.grid = grid
         self.center_shift = center_shift
         self.device = device
         self.em = em
+        self.unpad = unpad
 
         # constants
         self.four_pi2 = 4 * torch.pi**2
@@ -51,10 +57,10 @@ class DensityCalculator:
                 * (-self.bw_dict[e] / torch.pi) ** 1.5
             )
 
-        # Pre-compute grid coordinates
+        # pre-compute grid coordinates
         self._setup_grid()
 
-        # Precompute filter
+        # pre-compute filter
         self.filter = None
         self.set_filter()
 
@@ -154,7 +160,7 @@ class DensityCalculator:
             density_chunk = torch.zeros(grid_chunk.shape[0], device=self.device)
 
             active_atoms = (elements != 5) & (C_expand == 1)
-            for atom_idx in torch.where(active_atoms)[0]:
+            for atom_idx in torch.where(active_atoms)[0]:  # TODO: vectorize
                 e = IDX_TO_ELEMENT[elements[atom_idx].item()]
                 r = distances[:, atom_idx]
 
@@ -195,27 +201,54 @@ class DensityCalculator:
         )
 
     def _resolution_filter(self, resolution: float = 2.0) -> torch.Tensor:
-        """Compute simple Gaussian resolution filter for density map."""
+        """Gaussian filter with cosine cutoff for density map."""
         if resolution <= 0:
             raise ValueError("Resolution must be greater than 0")
 
         # we want cutoff frequency to correspond to resolution
         sigma = resolution / (2 * torch.pi)
+        cutoff_radius = 2 / (torch.pi * sigma)
 
         d, h, w = self.grid.shape
         fd = torch.fft.fftfreq(d, self.grid.spacing[0], device=self.device)
         fh = torch.fft.fftfreq(h, self.grid.spacing[1], device=self.device)
         # using rfftn for density, so only need half the frequencies
         fw = torch.fft.rfftfreq(w, self.grid.spacing[2], device=self.device)
-        f_xx, f_yy, f_zz = torch.meshgrid(fd, fh, fw, indexing="ij")
-        f_sq = (f_xx**2 + f_yy**2 + f_zz**2) / sigma
 
-        return torch.exp(-2 * torch.pi**2 * f_sq)
-    
+        nyquist_d = torch.abs(fd).max()
+        nyquist_h = torch.abs(fh).max()
+        nyquist_w = torch.abs(fw).max()
+        min_nyquist = min(nyquist_d, nyquist_h, nyquist_w)
+
+        if cutoff_radius > min_nyquist:
+            warnings.warn(
+                f"Cutoff radius ({cutoff_radius:.3f}) exceeds the minimum Nyquist frequency ({min_nyquist:.3f}). "
+                f"This may lead to aliasing. Consider using a larger resolution value (current: {resolution})."
+            )
+
+        f_xx, f_yy, f_zz = torch.meshgrid(fd, fh, fw, indexing="ij")
+        f_sq = (f_xx**2 + f_yy**2 + f_zz**2)
+        f_mag = torch.sqrt(f_sq)
+
+        gauss = torch.exp(-2 * torch.pi**2 * f_sq * sigma ** 2)
+
+        # cosine falloff
+        falloff_width = cutoff_radius * 0.2 # can tweak this
+        falloff_mask = (f_mag >= cutoff_radius) & (f_mag < cutoff_radius + falloff_width)
+        t = (f_mag[falloff_mask] - cutoff_radius) / falloff_width
+        gauss[falloff_mask] *= 0.5 * (1 + torch.cos(t * torch.pi))
+
+        # zero high freq (above cutoff and falloff)
+        gauss[f_mag >= cutoff_radius + falloff_width] = 0
+
+        return gauss
+
+
+
     def set_filter(self, resolution: float = 2.0):
         self.filter = self._resolution_filter(resolution)
 
-    def compute_ll_density(
+    def forward(
         self,
         X: torch.Tensor,
         elements: torch.Tensor,
@@ -253,7 +286,7 @@ class DensityCalculator:
             raise ValueError("Filter not set. Run set_filter() first.")
 
         # Compute FFT in chunks if needed
-        diff_fft = torch.fft.rfftn( # rfftn is faster for real input
+        diff_fft = torch.fft.rfftn(  # rfftn is faster for real input
             diff, norm="forward"
         )  # "forward" does 1/N normalization, which we need with DFT
 

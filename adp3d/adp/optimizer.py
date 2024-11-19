@@ -175,47 +175,17 @@ class ADP3D:
         if not self.all_atom:
             self.x_bar = self.x_bar[:, :, :4, :]
 
-        # save backbone only PDB model NOTE: Get rid of this once all atom works
-        Protein.from_XCS(
-            self.x_bar[:, :, :4, :],
-            torch.ones(self.x_bar.size()[1], device=self.device).unsqueeze(0),
-            S,
-        ).to_PDB(f"{os.path.splitext(structure)[0]}_bb.pdb")
-
         self.density_extension = os.path.splitext(y)[1]
         if self.density_extension not in (".ccp4", ".map", ".mtz", ".cif"):
             warnings.warn("Density map must be a CCP4, MRC, SF-CIF, or MTZ file.")
 
-        # deal with SFcalculator
         if self.density_extension in (
             ".mtz",
             ".cif",
-        ):  # NOTE: MTZ or SF-CIF aren't used currently, but will be once all atom or chi sampler is used.
-            structure_bb = gemmi.read_pdb(
-                f"{os.path.splitext(structure)[0]}_bb.pdb"
-            )  # NOTE: Get rid of this once all atom works, and build the density beforehand
-
-            if os.path.splitext(structure)[1] == ".cif":
-                structure = gemmi.make_structure_from_block(
-                    gemmi.cif.read(structure)[0]
-                )
-            else:  # assume PDB
-                structure = gemmi.read_pdb(structure)
-
-            structure_bb.spacegroup_hm = (
-                structure.spacegroup_hm
-            )  # NOTE: Get rid of this once all atom works
-            structure_bb.cell = (
-                structure.cell
-            )  # NOTE: Get rid of this once all atom works
-            # self.input_sfcalculator = ( # FIXME
-            #     SFcalculator(  # NOTE: Get rid of this once all atom works
-            #         pdbmodel=PDBParser(structure_bb),
-            #         dmin=2.0,
-            #         set_experiment=False,
-            #         device=self.device,
-            #     )
-            # )
+        ):  # NOTE: MTZ or SF-CIF aren't used currently
+            raise NotImplementedError(
+                "MTZ and SF-CIF files are not yet supported for density input."
+            )
         elif self.density_extension in (".ccp4", ".map", ".mrc"):
             map = gemmi.read_ccp4_map(y)
             self.grid = map.grid
@@ -335,12 +305,14 @@ class ADP3D:
 
     def grad_ll_incomplete_structure(self, z: torch.Tensor) -> torch.Tensor:
 
-        if z.requires_grad == False:
-            z = z.clone().detach().requires_grad_(True)  # reset graph history
+        with torch.enable_grad():
+            if z.requires_grad == False:
+                z.requires_grad_(True)
 
-        result = self.ll_incomplete_structure(z)
+            result = self.ll_incomplete_structure(z)
+            result.backward()
 
-        return torch.autograd.grad(result, z)[0]
+        return z.grad
 
     def ll_sequence(self, s: torch.Tensor, z: torch.Tensor) -> torch.Tensor:
         """Compute the log likelihood of the sequence given the denoised coordinates.
@@ -534,7 +506,7 @@ class ADP3D:
             self.C_bar, "b r -> b (r a)", a=14 if self.all_atom else 4
         ).squeeze()
 
-        if X.is_cuda: # use autocast for mixed precision, should be a cheaper operation
+        if X.is_cuda:  # use autocast for mixed precision, should be a cheaper operation
             with torch.autocast(device_type="cuda"):
                 result = self.density_calculator.compute_ll_density(
                     X, elements, C_expand, self.y
@@ -561,18 +533,8 @@ class ADP3D:
             Gradient of the log likelihood of the density.
         """
 
-
         # setup resolution filter
         self.density_calculator.set_filter(resolution)
-
-        if X.requires_grad == False:
-            X = X.clone().detach().requires_grad_(True)  # reset graph history
-
-        if len(X.size()) == 4:
-            X = rearrange(X, "b r a c -> b (r a) c").squeeze()  # b, N, 3
-
-        # FIXME: MTZ and SF-CIF not implemented
-
 
         # take elements and C_expand out of gradient computation
         elements = rearrange(self._extract_elements(self.all_atom), "r a -> (r a)")
@@ -580,17 +542,30 @@ class ADP3D:
             self.C_bar, "b r -> b (r a)", a=14 if self.all_atom else 4
         ).squeeze()
 
-        if X.is_cuda: # use autocast for mixed precision, should be a cheaper operation
-            with torch.autocast(device_type="cuda"):
+        if len(X.size()) == 4:
+            X = rearrange(X, "b r a c -> b (r a) c").squeeze()  # b, N, 3
+
+        with torch.enable_grad():
+            X.requires_grad_(True)
+            if X.is_cuda:  # use autocast for mixed precision
+                with torch.autocast(device_type="cuda"):
+                    result = self.density_calculator.compute_ll_density(
+                        X, elements, C_expand, self.y
+                    )
+            else:
                 result = self.density_calculator.compute_ll_density(
                     X, elements, C_expand, self.y
                 )
-        else:
-            result = self.density_calculator.compute_ll_density(
-                X, elements, C_expand, self.y
-            )
-
-        return torch.autograd.grad(result, X)[0]
+            result.backward()
+            if self.all_atom:
+                grad = rearrange(
+                    X.grad, "(b r a) c -> b r a c", r=X.size()[0] // 14, a=14, b=1
+                )  # FIXME: not batchable ATM
+            else:
+                grad = rearrange(
+                    X.grad, "(b r a) c -> b r a c", r=X.size()[0] // 4, a=4, b=1
+                )
+        return grad
 
     def model_refinement_optimizer(
         self,
@@ -659,13 +634,12 @@ class ADP3D:
             # sequence matching
             if epoch >= 3000:
                 with torch.enable_grad():
-                    X_aa = X_aa.clone().detach().requires_grad_(True)
+                    X_aa.requires_grad_(True)
                     ll_sequence = torch.sum(
                         self.sequence_loss(X_aa, C, S, t=0.0)["logp_S"]
                     )  # Get sequence log probability
-                    grad_ll_sequence = torch.autograd.grad(ll_sequence, X_aa)[
-                        0
-                    ]  # Backpropagate to get gradients
+                    ll_sequence.backward()
+                    grad_ll_sequence = X_aa.grad
 
                 grad_ll_sequence = self.multiply_inverse_corr(
                     grad_ll_sequence[:, :, :4, :], C
@@ -688,7 +662,7 @@ class ADP3D:
             current_resolution = (
                 15 if epoch < 3000 else 15 - (epoch - 3000) / 100
             )  # TODO: generalize to different epoch counts
-            
+
             # density
             if self.all_atom:
                 density_grad_transformed = self.multiply_inverse_corr(
@@ -700,7 +674,6 @@ class ADP3D:
                     self.grad_ll_density(X_0, current_resolution), C
                 )
 
-            
             lr_density = lr_m_s_d[2] * (current_resolution / map_resolution) ** 3
             v_i_d = momenta[2] * v_i_d + lr_density * density_grad_transformed
 
