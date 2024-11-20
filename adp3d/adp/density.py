@@ -58,14 +58,15 @@ class DensityCalculator(nn.Module):
             )
 
         # pre-compute grid coordinates
-        self._setup_grid()
+        self._setup_real_grid()
+        self._setup_fourier_grid()
 
         # pre-compute filter
         self.filter = None
         self.set_filter()
 
-    def _setup_grid(self):
-        """Store grid coordinates in a flat tensor for efficient computation."""
+    def _setup_real_grid(self):
+        """Setup flattened real space grid."""
         origin = (
             torch.tensor([*self.grid.get_position(0, 0, 0)], device=self.device)
             - self.center_shift
@@ -111,14 +112,27 @@ class DensityCalculator(nn.Module):
             )
 
         grid = torch.meshgrid(x, y, z, indexing="ij")
-        self.grid_flat = rearrange(torch.stack(grid, dim=-1), "x y z c -> (x y z) c")
+        self.real_grid_flat = rearrange(torch.stack(grid, dim=-1), "x y z c -> (x y z) c")
+
+    def _setup_fourier_grid(self):
+        """Setup Fourier space frequency grid."""
+        nx, ny, nz = self.grid.shape
+        
+        # Compute frequency axes
+        fx = torch.fft.fftshift(torch.fft.fftfreq(nx, self.grid.spacing[0], device=self.device))
+        fy = torch.fft.fftshift(torch.fft.fftfreq(ny, self.grid.spacing[1], device=self.device))
+        fz = torch.fft.fftshift(torch.fft.fftfreq(nz, self.grid.spacing[2], device=self.device))
+        
+        # Create frequency grid
+        fxx, fyy, fzz = torch.meshgrid(fx, fy, fz, indexing='ij')
+        self.freq_grid = torch.stack([fxx, fyy, fzz], dim=-1)
+        self.freq_norm = torch.sqrt(torch.sum(self.freq_grid ** 2, dim=-1))
 
     def _compute_density_chunk(
         self,
         X: torch.Tensor,
         elements: torch.Tensor,
         C_expand: torch.Tensor,
-        variance_scale: float = 1.0,
         chunk_size: int = 1000000,
     ) -> torch.Tensor:
         """Compute density in chunks to reduce memory usage.
@@ -132,9 +146,6 @@ class DensityCalculator(nn.Module):
             Element indices of atoms.
         C_expand : torch.Tensor
             Mask for atoms to include in density calculation depending on chains in protein.
-        variance_scale : float
-            Multiplier on the Gaussian kernel variance. Use >1 for this to "smear" the
-            density out. A value of 10 will give an approximately 10 Angstrom resolution map.
         chunk_size : int
             Number of atoms to process in a single chunk. Lower values reduce memory usage.
 
@@ -143,7 +154,6 @@ class DensityCalculator(nn.Module):
         torch.Tensor
             Flattened density map with all chunks combined.
         """
-        variance_scale = torch.tensor(variance_scale, device=self.device)
 
         n_chunks = (self.grid_flat.shape[0] + chunk_size - 1) // chunk_size
         density_chunks = []
@@ -154,7 +164,7 @@ class DensityCalculator(nn.Module):
             grid_chunk = self.grid_flat[start_idx:end_idx]
 
             # chunk distances
-            distances = torch.cdist(grid_chunk, X)
+            distances = torch.cdist(grid_chunk, X) # this is expensive!!
 
             # flattened chunk grid
             density_chunk = torch.zeros(grid_chunk.shape[0], device=self.device)
@@ -168,7 +178,7 @@ class DensityCalculator(nn.Module):
                 density_contribution = torch.sum(
                     self.aw_dict[e].unsqueeze(0)
                     * torch.exp(
-                        self.bw_dict[e].unsqueeze(0) * r_expanded**2 / variance_scale
+                        self.bw_dict[e].unsqueeze(0) * r_expanded**2
                     ),
                     dim=1,
                 )
@@ -178,17 +188,96 @@ class DensityCalculator(nn.Module):
 
         return torch.cat(density_chunks)
 
-    def compute_density(
+    def _compute_f_density_chunk(self,
+        X: torch.Tensor,
+        elements: torch.Tensor,
+        C_expand: torch.Tensor,
+        chunk_size: int = 1000000,
+    ) -> torch.Tensor:
+        """Compute Fourier transform of density.
+
+        Parameters
+        ----------
+
+        X : torch.Tensor
+            Coordinates of atoms. Shape (n_atoms, 3).
+        elements : torch.Tensor
+            Element indices of atoms.
+        C_expand : torch.Tensor
+            Mask for atoms to include in density calculation depending on chains in protein.
+        chunk_size : int
+            Number of atoms to process in a single chunk. Lower values reduce memory usage.
+
+        Returns
+        -------
+        torch.Tensor
+            Fourier coefficients in 3D array.
+        """
+        active_atoms = (elements != 5) & (C_expand == 1) # (n_active_atoms, )
+        active_X = X[active_atoms] # (n_active_atoms, 3)
+        active_elements = elements[active_atoms] # (n_active_atoms, )
+
+        atom_symbols = [IDX_TO_ELEMENT[e.item()] for e in active_elements] # TODO: handle elements better
+
+        a_coeffs = torch.stack([self.aw_dict[s] for s in atom_symbols], dim=0) # (n_active_atoms, _range)
+        b_coeffs = torch.stack([self.bw_dict[s] for s in atom_symbols], dim=0) # (n_active_atoms, _range)
+
+        nx, ny, nz, _ = self.freq_grid.shape
+        n_freq_points = nx * ny * nz
+        n_chunks = (n_freq_points + chunk_size - 1) // chunk_size
+
+        f_density = torch.zeros(n_freq_points, dtype=torch.complex64, device=self.device)
+
+        for i in range(n_chunks):
+            start_idx = i * chunk_size
+            end_idx = min((i + 1) * chunk_size, n_freq_points)
+
+            freq_chunk = rearrange(self.freq_grid, "x y z c -> (x y z) c")[start_idx:end_idx] # (n_freq_points, 3)
+            freq_norm_chunk = rearrange(self.freq_norm, "x y z -> (x y z)")[start_idx:end_idx] # (n_freq_points, )
+
+            f_density_chunk = torch.zeros(freq_chunk.shape[0], dtype=torch.complex64, device=self.device)
+
+            phase = -2j * torch.pi * torch.einsum('fc,ac->fa', freq_chunk, active_X) # (n_freq_points, n_active_atoms)
+
+            freq_norm_sq = freq_norm_chunk[:, None] ** 2 # (n_freq_points, 1)
+
+            # expand b_coeffs and freq_norm_sq to match: (1, n_active_atoms, _range) and (n_freq_points, 1, 1)
+            gaussian_terms = torch.exp(b_coeffs[None, :, :] * freq_norm_sq[:, None, :]) # (n_freq_points, n_active_atoms, _range)
+
+            # expand a_coeffs to match: (1, n_active_atoms, _range)
+            form_factors = torch.sum(a_coeffs[None, :, :] * gaussian_terms, dim=-1) # (n_freq_points, n_active_atoms)
+
+            f_density_chunk = torch.sum(form_factors * torch.exp(phase), dim=-1) # (n_freq_points, )
+
+            f_density[start_idx:end_idx] = f_density_chunk
+
+        return rearrange(f_density, "(x y z) -> x y z", x=nx, y=ny, z=nz)
+
+
+    def compute_density_real(
         self,
         X: torch.Tensor,
         elements: torch.Tensor,
         C_expand: torch.Tensor,
-        variance_scale: float = 1.0,
     ) -> torch.Tensor:
-        """Compute electron density map with optimized memory usage."""
+        """Compute electron density map with optimized memory usage.
+        
+        Parameters
+        ----------
+        X : torch.Tensor
+            Coordinates of atoms. Shape (n_atoms, 3).
+        elements : torch.Tensor
+            Element indices of atoms.
+        C_expand : torch.Tensor
+            Mask for atoms to include in density calculation depending on chains in protein.
+            
+        Returns
+        -------
+        torch.Tensor
+            3D density map."""
 
         density_flat = self._compute_density_chunk(
-            X, elements, C_expand, variance_scale
+            X, elements, C_expand 
         )
 
         # Reshape back to 3D # TODO: are things like this a major slowdown?
@@ -199,6 +288,20 @@ class DensityCalculator(nn.Module):
             y=self.grid.shape[1],
             z=self.grid.shape[2],
         )
+
+    def compute_density_fourier(
+        self,
+        X: torch.Tensor,
+        elements: torch.Tensor,
+        C_expand: torch.Tensor,
+    ) -> torch.Tensor:
+        """Compute electron density map in Fourier space."""
+
+        f_density = self._compute_f_density_chunk(
+            X, elements, C_expand
+        )
+
+        return f_density
 
     def _resolution_filter(self, resolution: float = 2.0) -> torch.Tensor:
         """Gaussian filter with cosine cutoff for density map."""
@@ -212,8 +315,7 @@ class DensityCalculator(nn.Module):
         d, h, w = self.grid.shape
         fd = torch.fft.fftfreq(d, self.grid.spacing[0], device=self.device)
         fh = torch.fft.fftfreq(h, self.grid.spacing[1], device=self.device)
-        # using rfftn for density, so only need half the frequencies
-        fw = torch.fft.rfftfreq(w, self.grid.spacing[2], device=self.device)
+        fw = torch.fft.fftfreq(w, self.grid.spacing[2], device=self.device)
 
         nyquist_d = torch.abs(fd).max()
         nyquist_h = torch.abs(fh).max()
@@ -239,14 +341,36 @@ class DensityCalculator(nn.Module):
         gauss[falloff_mask] *= 0.5 * (1 + torch.cos(t * torch.pi))
 
         # zero high freq (above cutoff and falloff)
-        gauss[f_mag >= cutoff_radius + falloff_width] = 0
+        mask = torch.ones_like(gauss)
+        mask[f_mag >= cutoff_radius + falloff_width] = 0
+        gauss *= mask
 
-        return gauss
+        return gauss, mask
 
+    def set_filter_and_mask(self, resolution: float = 2.0):
+        self.filter, self.mask = self._resolution_filter(resolution)
 
+    def apply_filter_and_mask(self, f_density: torch.Tensor) -> torch.Tensor:
+        """Apply resolution filter and mask to Fourier density.
+        
+        Parameters
+        ----------
+        f_density : torch.Tensor
+            3D Fourier coefficients of density map.
+            
+        Returns
+        -------
+        torch.Tensor
+            Filtered and masked Fourier coefficients."""
+        if self.filter is None:
+            raise ValueError("Filter not set. Run set_filter() first.")
 
-    def set_filter(self, resolution: float = 2.0):
-        self.filter = self._resolution_filter(resolution)
+        f_density *= self.filter
+
+        return f_density[self.mask]
+
+    def resample_map_to_nyquist(self, f_density: torch.Tensor, resolution: float = 2.0) -> torch.Tensor:
+        raise NotImplementedError
 
     def forward(
         self,
@@ -254,10 +378,9 @@ class DensityCalculator(nn.Module):
         elements: torch.Tensor,
         C_expand: torch.Tensor,
         target_density: torch.Tensor,
-        variance_scale: float = 1.0,
-        resolution: float = 2.0,
+        resolution: float = None,
     ) -> torch.Tensor:
-        """Compute log likelihood in Fourier space with minimal memory usage.
+        """Compute density map up to given resolution.
 
         Parameters
         ----------
@@ -270,25 +393,22 @@ class DensityCalculator(nn.Module):
             Mask for atoms to include in density calculation depending on chains in protein.
         target_density : torch.Tensor
             Target density map.
-        variance_scale : float
-            Multiplier on the Gaussian kernel variance. Use >1 for this to "smear" the
-            density out. A value of 10 will give an approximately 10 Angstrom resolution map.
         resolution : float
             Resolution to compute the norm over, in Angstroms.
         """
         if resolution <= 0:
             raise ValueError("Resolution must be greater than 0")
 
-        density = self.compute_density(X, elements, C_expand, variance_scale)
-        diff = density - target_density
+        if self.filter is None and resolution is not None:
+            warnings.warn("Setting filter based on resolution provided.")
+            self.set_filter_and_mask(resolution)
+        elif self.filter is None:
+            raise ValueError("Filter not set and resolution not provided. Run set_filter() first.")
 
-        if self.filter is None:
-            raise ValueError("Filter not set. Run set_filter() first.")
-
-        # Compute FFT in chunks if needed
-        diff_fft = torch.fft.rfftn(  # rfftn is faster for real input
-            diff, norm="forward"
-        )  # "forward" does 1/N normalization, which we need with DFT
+        f_density = self.compute_density_fourier(X, elements, C_expand)
+        f_density = self.apply_filter_and_mask(f_density)
+        
+        
 
         # Apply resolution filter
         diff_fft *= self.filter
