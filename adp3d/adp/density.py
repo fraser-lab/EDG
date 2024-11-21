@@ -2,10 +2,11 @@
 
 Author: Karson Chrispens
 Created: 11 Nov 2024
-Updated: 11 Nov 2024"""
+Updated: 20 Nov 2024"""
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import gemmi
 from einops import rearrange, repeat
 from adp3d.data.sf import (
@@ -16,12 +17,19 @@ from adp3d.data.sf import (
 )
 import warnings
 
+def to_f_density(map):
+    """FFT a density map."""
+    # f_density
+    return torch.fft.fftshift(torch.fft.fftn(torch.fft.ifftshift(map, dim=(-3,-2,-1)), dim=(-3,-2,-1)), dim=(-3,-2,-1))
+
+def to_density(f_map):
+    # density
+    return torch.fft.fftshift(torch.fft.ifftn(torch.fft.ifftshift(f_map, dim=(-3,-2,-1)), dim=(-3,-2,-1)), dim=(-3,-2,-1))
 
 class DensityCalculator(nn.Module):
     def __init__(
         self,
         grid: gemmi.FloatGrid,
-        target_density: torch.Tensor,
         center_shift: torch.Tensor,
         device: torch.device,
         em: bool = False,
@@ -63,7 +71,7 @@ class DensityCalculator(nn.Module):
 
         # pre-compute filter
         self.filter = None
-        self.set_filter()
+        self.set_filter_and_mask()
 
     def _setup_real_grid(self):
         """Setup flattened real space grid."""
@@ -253,7 +261,6 @@ class DensityCalculator(nn.Module):
 
         return rearrange(f_density, "(x y z) -> x y z", x=nx, y=ny, z=nz)
 
-
     def compute_density_real(
         self,
         X: torch.Tensor,
@@ -313,9 +320,9 @@ class DensityCalculator(nn.Module):
         cutoff_radius = 2 / (torch.pi * sigma)
 
         d, h, w = self.grid.shape
-        fd = torch.fft.fftfreq(d, self.grid.spacing[0], device=self.device)
-        fh = torch.fft.fftfreq(h, self.grid.spacing[1], device=self.device)
-        fw = torch.fft.fftfreq(w, self.grid.spacing[2], device=self.device)
+        fd = torch.fft.fftshift(torch.fft.fftfreq(d, self.grid.spacing[0], device=self.device))
+        fh = torch.fft.fftfreq(torch.fft.fftfreq(h, self.grid.spacing[1], device=self.device))
+        fw = torch.fft.fftshift(torch.fft.fftfreq(w, self.grid.spacing[2], device=self.device))
 
         nyquist_d = torch.abs(fd).max()
         nyquist_h = torch.abs(fh).max()
@@ -369,16 +376,13 @@ class DensityCalculator(nn.Module):
 
         return f_density[self.mask]
 
-    def resample_map_to_nyquist(self, f_density: torch.Tensor, resolution: float = 2.0) -> torch.Tensor:
-        raise NotImplementedError
-
     def forward(
         self,
         X: torch.Tensor,
         elements: torch.Tensor,
         C_expand: torch.Tensor,
-        target_density: torch.Tensor,
         resolution: float = None,
+        real: bool = False,
     ) -> torch.Tensor:
         """Compute density map up to given resolution.
 
@@ -405,12 +409,13 @@ class DensityCalculator(nn.Module):
         elif self.filter is None:
             raise ValueError("Filter not set and resolution not provided. Run set_filter() first.")
 
+        if real:
+            density = self.compute_density_real(X, elements, C_expand)
+            f_density = to_f_density(density)
+            density = to_density(self.apply_filter_and_mask(f_density))
+
         f_density = self.compute_density_fourier(X, elements, C_expand)
         f_density = self.apply_filter_and_mask(f_density)
-        
-        
+    
 
-        # Apply resolution filter
-        diff_fft *= self.filter
-
-        return torch.sum(torch.real(diff_fft * torch.conj(diff_fft)))
+        return f_density
