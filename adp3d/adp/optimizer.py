@@ -19,7 +19,7 @@ from chroma.layers.structure.mvn import BackboneMVNGlobular
 # from chroma.layers.structure.sidechain import SideChainBuilder
 from chroma.constants import AA_GEOMETRY, AA20_3
 from tqdm import tqdm
-from adp3d.adp.density import DensityCalculator
+from adp3d.adp.density import DensityCalculator, to_density, to_f_density
 from adp3d.utils.utility import DotDict, try_gpu
 from adp3d.data.sf import (
     ATOM_STRUCTURE_FACTORS,
@@ -192,6 +192,7 @@ class ADP3D:
             self.y = torch.from_numpy(np.ascontiguousarray(self.grid.array)).to(
                 self.device, dtype=torch.float32
             )
+            self.f_y = to_f_density(self.y)
         else:
             raise ValueError("Density map must be a CCP4, MRC, SF-CIF, or MTZ file.")
 
@@ -402,7 +403,8 @@ class ADP3D:
         self,
         X: torch.Tensor,
         all_atom: bool = False,
-        variance_scale: float = 1.0,
+        resolution: float = 2.0,
+        real: bool = False,
     ) -> torch.Tensor:
         """Compute electron density map of the all-atom coordinates X.
 
@@ -410,14 +412,11 @@ class ADP3D:
             X (torch.Tensor): The input all-atom protein coordinates in shape (batch, residues, atoms, 3).
             size (Tuple[int]): The desired size of the output density map.
             all_atom (bool): Whether the input coordinates are all-atom or backbone only.
-            variance_scale (float): Multiplier on the Gaussian kernel variance. Use >1 for this to "smear" the
-            density out. A value of 10 will give an approximately 10 Angstrom resolution map.
-
+            resolution (float): The resolution of the density map.
+            real (bool): Whether to return the real space density map or the Fourier space density map.
         Returns:
             torch.Tensor: The density map.
         """
-
-        variance_scale = torch.tensor(variance_scale, device=self.device)
 
         if X.size()[2] == 4 and all_atom:
             raise ValueError(
@@ -451,13 +450,11 @@ class ADP3D:
             self.C_bar, "b r -> b (r a)", a=14 if all_atom else 4
         ).squeeze()  # expand to all atoms, squeeze batch dim out
 
-        density = self.density_calculator.compute_density(
-            X, elements, C_expand, variance_scale
-        )
+        density = self.density_calculator.forward(X, elements, C_expand, resolution=resolution, real=real)
 
         return density
 
-    def ll_density_real(self, X: torch.Tensor) -> torch.Tensor:
+    def ll_density_real(self, X: torch.Tensor, resolution: float = 2.0) -> torch.Tensor:
         """OLD: Real space analog of ll_density.
         Compute the log likelihood of the density given the atomic coordinates and side chain angles.
 
@@ -473,8 +470,10 @@ class ADP3D:
         """
 
         density = self._gamma(
-            X, all_atom=self.all_atom
+            X, all_atom=self.all_atom, resolution=resolution, real=True
         )  # Get density map from denoised coordinates
+
+         
 
         if density.size() != self.y.size():
             raise ValueError("Density map and input density map must be the same size.")

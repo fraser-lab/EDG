@@ -23,6 +23,7 @@ def to_f_density(map):
     return torch.fft.fftshift(torch.fft.fftn(torch.fft.ifftshift(map, dim=(-3,-2,-1)), dim=(-3,-2,-1)), dim=(-3,-2,-1))
 
 def to_density(f_map):
+    """Inverse FFT a FFTed density map."""
     # density
     return torch.fft.fftshift(torch.fft.ifftn(torch.fft.ifftshift(f_map, dim=(-3,-2,-1)), dim=(-3,-2,-1)), dim=(-3,-2,-1))
 
@@ -347,7 +348,7 @@ class DensityCalculator(nn.Module):
         t = (f_mag[falloff_mask] - cutoff_radius) / falloff_width
         gauss[falloff_mask] *= 0.5 * (1 + torch.cos(t * torch.pi))
 
-        # zero high freq (above cutoff and falloff)
+        # zero freq above nyquist
         mask = torch.ones_like(gauss)
         mask[f_mag >= cutoff_radius + falloff_width] = 0
         gauss *= mask
@@ -413,9 +414,8 @@ class DensityCalculator(nn.Module):
             density = self.compute_density_real(X, elements, C_expand)
             f_density = to_f_density(density)
             density = to_density(self.apply_filter_and_mask(f_density))
-
-        f_density = self.compute_density_fourier(X, elements, C_expand)
-        f_density = self.apply_filter_and_mask(f_density)
-    
-
-        return f_density
+            return density
+        else:
+            f_density = self.compute_density_fourier(X, elements, C_expand)
+            f_density = self.apply_filter_and_mask(f_density)
+            return f_density
