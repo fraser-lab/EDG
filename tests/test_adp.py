@@ -297,14 +297,7 @@ def test_grad_ll_incomplete_structure(peptides, density_4yuo, device):
     assert not torch.allclose(grad_ll, torch.zeros_like(grad_ll), atol=1e-5)
 
 
-def test_ll_density_and_grad(sim_data_7pzt, sf_cif_7pzt, cif_7pzt, device):
-    # using SFcalculator, currently failing # FIXME
-    # prot = Protein(cif_7pzt).to_XCS(device=device)
-    # adp = ADP3D(y=sf_cif_7pzt, seq=prot[2], structure=cif_7pzt)
-    # X = prot[0]
-    # grad_ll = adp.grad_ll_density(X)  # tests ll_density in this function
-    # assert grad_ll is not None
-    # assert torch.allclose(grad_ll, torch.zeros_like(grad_ll, device=device), atol=0.5)
+def test_ll_density_and_grad(sim_data_7pzt, sf_cif_7pzt, cif_7pzt, device): 
     # ll_density with _gamma
     protein = Protein(sim_data_7pzt[0])
     X, _, S = protein.to_XCS(all_atom=True, device=device)  # backbone coordinates

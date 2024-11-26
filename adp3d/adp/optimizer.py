@@ -198,7 +198,7 @@ class ADP3D:
 
         self.density_calculator = DensityCalculator(
             self.grid, self.center_shift, self.device, em
-        )
+        ) # TODO: add resolution
 
         # Importing sqrt(covariance matrix) from Chroma
         # These take in Z and C (for _multiply_R) or X and C (for _multiply_R_inverse)

@@ -16,32 +16,124 @@ from adp3d.data.sf import (
     IDX_TO_ELEMENT,
 )
 import warnings
+from typing import Union
+
 
 def to_f_density(map):
     """FFT a density map."""
     # f_density
-    return torch.fft.fftshift(torch.fft.fftn(torch.fft.ifftshift(map, dim=(-3,-2,-1)), dim=(-3,-2,-1)), dim=(-3,-2,-1))
+    return torch.fft.fftshift(
+        torch.fft.fftn(torch.fft.ifftshift(map, dim=(-3, -2, -1)), dim=(-3, -2, -1)),
+        dim=(-3, -2, -1),
+    )
+
 
 def to_density(f_map):
     """Inverse FFT a FFTed density map."""
     # density
-    return torch.fft.fftshift(torch.fft.ifftn(torch.fft.ifftshift(f_map, dim=(-3,-2,-1)), dim=(-3,-2,-1)), dim=(-3,-2,-1))
+    return torch.fft.fftshift(
+        torch.fft.ifftn(torch.fft.ifftshift(f_map, dim=(-3, -2, -1)), dim=(-3, -2, -1)),
+        dim=(-3, -2, -1),
+    )
+
+
+def radial_hamming_3d(f_mag, cutoff_radius):
+    """3D radial Hamming filter in Fourier space
+
+    Args:
+        f_mag: Frequency magnitudes from FFT
+        cutoff_radius: Frequency cutoff in same units as frequency coordinates
+
+    Returns:
+        3D tensor containing the Hamming filter
+    """
+    filter = torch.zeros_like(f_mag)
+
+    mask = f_mag <= cutoff_radius
+
+    r_scaled = f_mag[mask] / cutoff_radius  # Scale to [0,1]
+    hamming_vals = 0.54 + 0.46 * torch.cos(torch.pi * r_scaled)
+
+    filter[mask] = hamming_vals
+
+    return filter
+
+
+def downsample_fft(
+    fft: torch.Tensor,
+    original_pixel_size: Union[torch.Tensor, tuple],
+    target_pixel_size: Union[torch.Tensor, tuple],
+) -> torch.Tensor:
+    """
+    Downsample density map in Fourier space # TODO: MAKE BATCHABLE (and this whole file for that matter)
+
+    Args:
+        fft: torch.Tensor
+            Fourier transform (assumed to be fftshifted) of density map
+        original_pixel_size: torch.Tensor or Tuple
+            Current sampling rate in each dimension (e.g. 1/2 Å)
+        target_pixel_size: torch.Tensor or Tuple
+            Desired sampling rate in each dimension (e.g. 2.5 Å)
+    """
+    if isinstance(original_pixel_size, torch.Tensor) and isinstance(
+        target_pixel_size, torch.Tensor
+    ):
+        downsample_factor = target_pixel_size / original_pixel_size
+    elif isinstance(original_pixel_size, tuple) and isinstance(
+        target_pixel_size, tuple
+    ):
+        downsample_factor = torch.tensor(
+            tuple(t / o for t, o in zip(target_pixel_size, original_pixel_size))
+        )
+    else:
+        raise ValueError(
+            "original_pixel_size and target_pixel_size must be either both torch.Tensor or both tuple"
+        )
+
+    original_shape = torch.tensor(fft.shape)
+    new_shape = (original_shape / downsample_factor).long()
+
+    if torch.any(new_shape <= 0):
+        raise ValueError("Downsampling would result in invalid dimensions")
+
+    crops = []
+    for size, orig_size in zip(new_shape, original_shape):
+        start = ((orig_size - size) // 2).item()
+        end = start + size.item()
+        crops.append(slice(start, end))
+
+    downsampled_fft = fft[tuple(crops)]
+
+    return downsampled_fft
+
 
 class DensityCalculator(nn.Module):
+    """
+    Module to calculate electron density map from atomic coordinates.
+    
+    Parameters
+    ----------
+    grid : gemmi.FloatGrid
+        Grid object from gemmi library.
+    center_shift : torch.Tensor
+        Shift to center the grid.
+    device : torch.device
+        Device to run calculations on.
+    em : bool
+        If True, use electron scattering factors instead of atomic structure factors.
+    """
     def __init__(
         self,
         grid: gemmi.FloatGrid,
         center_shift: torch.Tensor,
-        device: torch.device,
+        device: torch.device = torch.device("cpu"),
         em: bool = False,
-        unpad: int = 0,
     ):
         super(DensityCalculator, self).__init__()
         self.grid = grid
         self.center_shift = center_shift
         self.device = device
         self.em = em
-        self.unpad = unpad
 
         # constants
         self.four_pi2 = 4 * torch.pi**2
@@ -121,21 +213,29 @@ class DensityCalculator(nn.Module):
             )
 
         grid = torch.meshgrid(x, y, z, indexing="ij")
-        self.real_grid_flat = rearrange(torch.stack(grid, dim=-1), "x y z c -> (x y z) c")
+        self.real_grid_flat = rearrange(
+            torch.stack(grid, dim=-1), "x y z c -> (x y z) c"
+        )
 
     def _setup_fourier_grid(self):
         """Setup Fourier space frequency grid."""
         nx, ny, nz = self.grid.shape
-        
+
         # Compute frequency axes
-        fx = torch.fft.fftshift(torch.fft.fftfreq(nx, self.grid.spacing[0], device=self.device))
-        fy = torch.fft.fftshift(torch.fft.fftfreq(ny, self.grid.spacing[1], device=self.device))
-        fz = torch.fft.fftshift(torch.fft.fftfreq(nz, self.grid.spacing[2], device=self.device))
-        
+        fx = torch.fft.fftshift(
+            torch.fft.fftfreq(nx, self.grid.spacing[0], device=self.device)
+        )
+        fy = torch.fft.fftshift(
+            torch.fft.fftfreq(ny, self.grid.spacing[1], device=self.device)
+        )
+        fz = torch.fft.fftshift(
+            torch.fft.fftfreq(nz, self.grid.spacing[2], device=self.device)
+        )
+
         # Create frequency grid
-        fxx, fyy, fzz = torch.meshgrid(fx, fy, fz, indexing='ij')
+        fxx, fyy, fzz = torch.meshgrid(fx, fy, fz, indexing="ij")
         self.freq_grid = torch.stack([fxx, fyy, fzz], dim=-1)
-        self.freq_norm = torch.sqrt(torch.sum(self.freq_grid ** 2, dim=-1))
+        self.freq_norm = torch.sqrt(torch.sum(self.freq_grid**2, dim=-1))
 
     def _compute_density_chunk(
         self,
@@ -164,16 +264,16 @@ class DensityCalculator(nn.Module):
             Flattened density map with all chunks combined.
         """
 
-        n_chunks = (self.grid_flat.shape[0] + chunk_size - 1) // chunk_size
+        n_chunks = (self.real_grid_flat.shape[0] + chunk_size - 1) // chunk_size
         density_chunks = []
 
         for i in range(n_chunks):
             start_idx = i * chunk_size
-            end_idx = min((i + 1) * chunk_size, self.grid_flat.shape[0])
-            grid_chunk = self.grid_flat[start_idx:end_idx]
+            end_idx = min((i + 1) * chunk_size, self.real_grid_flat.shape[0])
+            grid_chunk = self.real_grid_flat[start_idx:end_idx]
 
             # chunk distances
-            distances = torch.cdist(grid_chunk, X) # this is expensive!!
+            distances = torch.cdist(grid_chunk, X)  # this is expensive!!
 
             # flattened chunk grid
             density_chunk = torch.zeros(grid_chunk.shape[0], device=self.device)
@@ -186,9 +286,7 @@ class DensityCalculator(nn.Module):
                 r_expanded = repeat(r, "r -> r n", n=self._range)
                 density_contribution = torch.sum(
                     self.aw_dict[e].unsqueeze(0)
-                    * torch.exp(
-                        self.bw_dict[e].unsqueeze(0) * r_expanded**2
-                    ),
+                    * torch.exp(self.bw_dict[e].unsqueeze(0) * r_expanded**2),
                     dim=1,
                 )
                 density_chunk += density_contribution
@@ -197,7 +295,8 @@ class DensityCalculator(nn.Module):
 
         return torch.cat(density_chunks)
 
-    def _compute_f_density_chunk(self,
+    def _compute_f_density_chunk(
+        self,
         X: torch.Tensor,
         elements: torch.Tensor,
         C_expand: torch.Tensor,
@@ -222,41 +321,63 @@ class DensityCalculator(nn.Module):
         torch.Tensor
             Fourier coefficients in 3D array.
         """
-        active_atoms = (elements != 5) & (C_expand == 1) # (n_active_atoms, )
-        active_X = X[active_atoms] # (n_active_atoms, 3)
-        active_elements = elements[active_atoms] # (n_active_atoms, )
+        active_atoms = (elements != 5) & (C_expand == 1)  # (n_active_atoms, )
+        active_X = X[active_atoms]  # (n_active_atoms, 3)
+        active_elements = elements[active_atoms]  # (n_active_atoms, )
 
-        atom_symbols = [IDX_TO_ELEMENT[e.item()] for e in active_elements] # TODO: handle elements better
+        atom_symbols = [
+            IDX_TO_ELEMENT[e.item()] for e in active_elements
+        ]  # TODO: handle elements better
 
-        a_coeffs = torch.stack([self.aw_dict[s] for s in atom_symbols], dim=0) # (n_active_atoms, _range)
-        b_coeffs = torch.stack([self.bw_dict[s] for s in atom_symbols], dim=0) # (n_active_atoms, _range)
+        a_coeffs = torch.stack(
+            [self.aw_dict[s] for s in atom_symbols], dim=0
+        )  # (n_active_atoms, _range)
+        b_coeffs = torch.stack(
+            [self.bw_dict[s] for s in atom_symbols], dim=0
+        )  # (n_active_atoms, _range)
 
         nx, ny, nz, _ = self.freq_grid.shape
         n_freq_points = nx * ny * nz
         n_chunks = (n_freq_points + chunk_size - 1) // chunk_size
 
-        f_density = torch.zeros(n_freq_points, dtype=torch.complex64, device=self.device)
+        f_density = torch.zeros(
+            n_freq_points, dtype=torch.complex64, device=self.device
+        )
 
         for i in range(n_chunks):
             start_idx = i * chunk_size
             end_idx = min((i + 1) * chunk_size, n_freq_points)
 
-            freq_chunk = rearrange(self.freq_grid, "x y z c -> (x y z) c")[start_idx:end_idx] # (n_freq_points, 3)
-            freq_norm_chunk = rearrange(self.freq_norm, "x y z -> (x y z)")[start_idx:end_idx] # (n_freq_points, )
+            freq_chunk = rearrange(self.freq_grid, "x y z c -> (x y z) c")[
+                start_idx:end_idx
+            ]  # (n_freq_points, 3)
+            freq_norm_chunk = rearrange(self.freq_norm, "x y z -> (x y z)")[
+                start_idx:end_idx
+            ]  # (n_freq_points, )
 
-            f_density_chunk = torch.zeros(freq_chunk.shape[0], dtype=torch.complex64, device=self.device)
+            f_density_chunk = torch.zeros(
+                freq_chunk.shape[0], dtype=torch.complex64, device=self.device
+            )
 
-            phase = -2j * torch.pi * torch.einsum('fc,ac->fa', freq_chunk, active_X) # (n_freq_points, n_active_atoms)
+            phase = (
+                -2j * torch.pi * torch.einsum("fc,ac->fa", freq_chunk, active_X)
+            )  # (n_freq_points, n_active_atoms)
 
-            freq_norm_sq = freq_norm_chunk[:, None] ** 2 # (n_freq_points, 1)
+            freq_norm_sq = freq_norm_chunk[:, None, None] ** 2  # (n_freq_points, 1, 1)
 
             # expand b_coeffs and freq_norm_sq to match: (1, n_active_atoms, _range) and (n_freq_points, 1, 1)
-            gaussian_terms = torch.exp(b_coeffs[None, :, :] * freq_norm_sq[:, None, :]) # (n_freq_points, n_active_atoms, _range)
+            gaussian_terms = torch.exp(
+                b_coeffs[None, :, :] * freq_norm_sq / self.four_pi2 # scale to match frequency
+            )  # (n_freq_points, n_active_atoms, _range)
 
             # expand a_coeffs to match: (1, n_active_atoms, _range)
-            form_factors = torch.sum(a_coeffs[None, :, :] * gaussian_terms, dim=-1) # (n_freq_points, n_active_atoms)
+            form_factors = torch.sum(
+                a_coeffs[None, :, :] * gaussian_terms, dim=-1
+            )  # (n_freq_points, n_active_atoms)
 
-            f_density_chunk = torch.sum(form_factors * torch.exp(phase), dim=-1) # (n_freq_points, )
+            f_density_chunk = torch.sum(
+                form_factors * torch.exp(phase), dim=-1
+            )  # (n_freq_points, )
 
             f_density[start_idx:end_idx] = f_density_chunk
 
@@ -269,7 +390,7 @@ class DensityCalculator(nn.Module):
         C_expand: torch.Tensor,
     ) -> torch.Tensor:
         """Compute electron density map with optimized memory usage.
-        
+
         Parameters
         ----------
         X : torch.Tensor
@@ -278,15 +399,13 @@ class DensityCalculator(nn.Module):
             Element indices of atoms.
         C_expand : torch.Tensor
             Mask for atoms to include in density calculation depending on chains in protein.
-            
+
         Returns
         -------
         torch.Tensor
             3D density map."""
 
-        density_flat = self._compute_density_chunk(
-            X, elements, C_expand 
-        )
+        density_flat = self._compute_density_chunk(X, elements, C_expand)
 
         # Reshape back to 3D # TODO: are things like this a major slowdown?
         return rearrange(
@@ -305,75 +424,73 @@ class DensityCalculator(nn.Module):
     ) -> torch.Tensor:
         """Compute electron density map in Fourier space."""
 
-        f_density = self._compute_f_density_chunk(
-            X, elements, C_expand
-        )
+        f_density = self._compute_f_density_chunk(X, elements, C_expand)
 
         return f_density
 
     def _resolution_filter(self, resolution: float = 2.0) -> torch.Tensor:
-        """Gaussian filter with cosine cutoff for density map."""
+        """Hamming filter in 3D Fourier space to limit resolution."""
         if resolution <= 0:
             raise ValueError("Resolution must be greater than 0")
 
         # we want cutoff frequency to correspond to resolution
-        sigma = resolution / (2 * torch.pi)
-        cutoff_radius = 2 / (torch.pi * sigma)
+        cutoff_radius = 1 / resolution
 
-        d, h, w = self.grid.shape
-        fd = torch.fft.fftshift(torch.fft.fftfreq(d, self.grid.spacing[0], device=self.device))
-        fh = torch.fft.fftfreq(torch.fft.fftfreq(h, self.grid.spacing[1], device=self.device))
-        fw = torch.fft.fftshift(torch.fft.fftfreq(w, self.grid.spacing[2], device=self.device))
+        nyquist = 2 / resolution
+        nyquist_d = 1 / (2 * self.grid.spacing[0])
+        nyquist_h = 1 / (2 * self.grid.spacing[1])
+        nyquist_w = 1 / (2 * self.grid.spacing[2])
 
-        nyquist_d = torch.abs(fd).max()
-        nyquist_h = torch.abs(fh).max()
-        nyquist_w = torch.abs(fw).max()
-        min_nyquist = min(nyquist_d, nyquist_h, nyquist_w)
-
-        if cutoff_radius > min_nyquist:
+        if any(
+            cutoff_radius > nyquist_x for nyquist_x in [nyquist_d, nyquist_h, nyquist_w]
+        ):
             warnings.warn(
-                f"Cutoff radius ({cutoff_radius:.3f}) exceeds the minimum Nyquist frequency ({min_nyquist:.3f}). "
+                f"Cutoff radius ({cutoff_radius:.3f}) exceeds the Nyquist frequency ({nyquist:.3f}). "
                 f"This may lead to aliasing. Consider using a larger resolution value (current: {resolution})."
             )
 
-        f_xx, f_yy, f_zz = torch.meshgrid(fd, fh, fw, indexing="ij")
-        f_sq = (f_xx**2 + f_yy**2 + f_zz**2)
-        f_mag = torch.sqrt(f_sq)
+        mask = self.freq_norm < cutoff_radius
 
-        gauss = torch.exp(-2 * torch.pi**2 * f_sq * sigma ** 2)
+        filter = radial_hamming_3d(self.freq_norm, cutoff_radius)
 
-        # cosine falloff
-        falloff_width = cutoff_radius * 0.2 # can tweak this
-        falloff_mask = (f_mag >= cutoff_radius) & (f_mag < cutoff_radius + falloff_width)
-        t = (f_mag[falloff_mask] - cutoff_radius) / falloff_width
-        gauss[falloff_mask] *= 0.5 * (1 + torch.cos(t * torch.pi))
-
-        # zero freq above nyquist
-        mask = torch.ones_like(gauss)
-        mask[f_mag >= cutoff_radius + falloff_width] = 0
-        gauss *= mask
-
-        return gauss, mask
+        return filter, mask
 
     def set_filter_and_mask(self, resolution: float = 2.0):
         self.filter, self.mask = self._resolution_filter(resolution)
 
-    def apply_filter_and_mask(self, f_density: torch.Tensor) -> torch.Tensor:
+    def apply_filter_and_mask(
+        self, f_density: torch.Tensor, shape_back: bool = False
+    ) -> torch.Tensor:
         """Apply resolution filter and mask to Fourier density.
-        
+
         Parameters
         ----------
         f_density : torch.Tensor
             3D Fourier coefficients of density map.
-            
+        shape_back : bool
+            If True, return the reshaped density map.
+
         Returns
         -------
         torch.Tensor
-            Filtered and masked Fourier coefficients."""
+            Filtered and masked Fourier coefficients, shape (n_masked, ).
+            If shape_back is True, returns the Fourier coefficients reshaped to (mask_x, mask_y, mask_z).
+        """
         if self.filter is None:
             raise ValueError("Filter not set. Run set_filter() first.")
 
         f_density *= self.filter
+
+        if shape_back:
+
+            indices = torch.nonzero(self.mask)
+            min_x, min_y, min_z = indices.min(dim=0).values
+            max_x, max_y, max_z = indices.max(dim=0).values
+            reduced_f_density = f_density[
+                min_x : max_x + 1, min_y : max_y + 1, min_z : max_z + 1
+            ]
+
+            return reduced_f_density
 
         return f_density[self.mask]
 
@@ -400,20 +517,28 @@ class DensityCalculator(nn.Module):
             Target density map.
         resolution : float
             Resolution to compute the norm over, in Angstroms.
+
+        Returns
+        -------
+        torch.Tensor
+            If real, returns the real space density map (shape: (nx, ny, nz)).
+            If not, returns the Fourier coefficients (shape: (n_masked, )).
         """
         if resolution <= 0:
             raise ValueError("Resolution must be greater than 0")
 
         if self.filter is None and resolution is not None:
-            warnings.warn("Setting filter based on resolution provided.")
+            print("Setting filter based on resolution provided.")
             self.set_filter_and_mask(resolution)
         elif self.filter is None:
-            raise ValueError("Filter not set and resolution not provided. Run set_filter() first.")
+            raise ValueError(
+                "Filter not set and resolution not provided. Run set_filter() first."
+            )
 
         if real:
             density = self.compute_density_real(X, elements, C_expand)
             f_density = to_f_density(density)
-            density = to_density(self.apply_filter_and_mask(f_density))
+            density = torch.abs(to_density(self.apply_filter_and_mask(f_density, shape_back=True)))
             return density
         else:
             f_density = self.compute_density_fourier(X, elements, C_expand)
