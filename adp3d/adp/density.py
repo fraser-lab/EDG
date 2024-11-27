@@ -106,6 +106,9 @@ def downsample_fft(
 
     return downsampled_fft
 
+def normalize(t: torch.Tensor) -> torch.Tensor:
+    """Normalize tensor to a Gaussian."""
+    return (t - t.mean()) / t.std()
 
 class DensityCalculator(nn.Module):
     """
@@ -119,6 +122,8 @@ class DensityCalculator(nn.Module):
         Shift to center the grid.
     device : torch.device
         Device to run calculations on.
+    resolution : float
+        Resolution to compute the map to, in Angstroms.
     em : bool
         If True, use electron scattering factors instead of atomic structure factors.
     """
@@ -127,6 +132,7 @@ class DensityCalculator(nn.Module):
         grid: gemmi.FloatGrid,
         center_shift: torch.Tensor,
         device: torch.device = torch.device("cpu"),
+        resolution: float = 2.0,
         em: bool = False,
     ):
         super(DensityCalculator, self).__init__()
@@ -162,9 +168,8 @@ class DensityCalculator(nn.Module):
         self._setup_real_grid()
         self._setup_fourier_grid()
 
-        # pre-compute filter
-        self.filter = None
-        self.set_filter_and_mask()
+        # pre-compute filter and mask
+        self.set_filter_and_mask(resolution)
 
     def _setup_real_grid(self):
         """Setup flattened real space grid."""
@@ -407,7 +412,7 @@ class DensityCalculator(nn.Module):
 
         density_flat = self._compute_density_chunk(X, elements, C_expand)
 
-        # Reshape back to 3D # TODO: are things like this a major slowdown?
+        # Reshape back to 3D
         return rearrange(
             density_flat,
             "(x y z) -> x y z",
@@ -462,6 +467,7 @@ class DensityCalculator(nn.Module):
         self, f_density: torch.Tensor, shape_back: bool = False
     ) -> torch.Tensor:
         """Apply resolution filter and mask to Fourier density.
+        NOTE: If shape_back is True, the returned tensor will NOT be comparable to a non-shape_back density.
 
         Parameters
         ----------
@@ -508,7 +514,7 @@ class DensityCalculator(nn.Module):
         ----------
 
         X : torch.Tensor
-            Coordinates of atoms.
+            Coordinates of atoms, shape (n_atoms, 3).
         elements : torch.Tensor
             Element indices of atoms.
         C_expand : torch.Tensor
@@ -516,7 +522,7 @@ class DensityCalculator(nn.Module):
         target_density : torch.Tensor
             Target density map.
         resolution : float
-            Resolution to compute the norm over, in Angstroms.
+            Resolution to compute the map to, in Angstroms.
 
         Returns
         -------
@@ -527,8 +533,7 @@ class DensityCalculator(nn.Module):
         if resolution <= 0:
             raise ValueError("Resolution must be greater than 0")
 
-        if self.filter is None and resolution is not None:
-            print("Setting filter based on resolution provided.")
+        if resolution is not None:
             self.set_filter_and_mask(resolution)
         elif self.filter is None:
             raise ValueError(
@@ -539,8 +544,10 @@ class DensityCalculator(nn.Module):
             density = self.compute_density_real(X, elements, C_expand)
             f_density = to_f_density(density)
             density = torch.abs(to_density(self.apply_filter_and_mask(f_density, shape_back=True)))
+            density = normalize(density)
             return density
         else:
             f_density = self.compute_density_fourier(X, elements, C_expand)
             f_density = self.apply_filter_and_mask(f_density)
+            f_density = normalize(f_density)
             return f_density

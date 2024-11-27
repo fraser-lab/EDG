@@ -19,14 +19,9 @@ from chroma.layers.structure.mvn import BackboneMVNGlobular
 # from chroma.layers.structure.sidechain import SideChainBuilder
 from chroma.constants import AA_GEOMETRY, AA20_3
 from tqdm import tqdm
-from adp3d.adp.density import DensityCalculator, to_density, to_f_density
-from adp3d.utils.utility import DotDict, try_gpu
-from adp3d.data.sf import (
-    ATOM_STRUCTURE_FACTORS,
-    ELECTRON_SCATTERING_FACTORS,
-    ELEMENTS,
-    IDX_TO_ELEMENT,
-)
+from adp3d.adp.density import DensityCalculator, to_density, to_f_density, normalize
+from adp3d.utils.utility import try_gpu
+from adp3d.data.sf import ELEMENTS
 
 
 def identity_submatrices(N) -> Tuple[torch.Tensor]:
@@ -189,16 +184,23 @@ class ADP3D:
         elif self.density_extension in (".ccp4", ".map", ".mrc"):
             map = gemmi.read_ccp4_map(y)
             self.grid = map.grid
-            self.y = torch.from_numpy(np.ascontiguousarray(self.grid.array)).to(
-                self.device, dtype=torch.float32
+            if self.grid.spacing == (0.0, 0.0, 0.0):
+                self.grid.set_size_from_spacing(
+                    self.grid.unit_cell.a / self.grid.nu,
+                    rounding=gemmi.GridSizeRounding(0),
+                )
+            self.y = normalize(
+                torch.from_numpy(np.ascontiguousarray(self.grid.array)).to(
+                    self.device, dtype=torch.float32
+                )
             )
-            self.f_y = to_f_density(self.y)
+            self.f_y = normalize(to_f_density(self.y))
         else:
             raise ValueError("Density map must be a CCP4, MRC, SF-CIF, or MTZ file.")
 
         self.density_calculator = DensityCalculator(
-            self.grid, self.center_shift, self.device, em
-        ) # TODO: add resolution
+            self.grid, self.center_shift, self.device, em=em
+        )
 
         # Importing sqrt(covariance matrix) from Chroma
         # These take in Z and C (for _multiply_R) or X and C (for _multiply_R_inverse)
@@ -450,74 +452,19 @@ class ADP3D:
             self.C_bar, "b r -> b (r a)", a=14 if all_atom else 4
         ).squeeze()  # expand to all atoms, squeeze batch dim out
 
-        density = self.density_calculator.forward(X, elements, C_expand, resolution=resolution, real=real)
+        density = self.density_calculator.forward(
+            X, elements, C_expand, resolution=resolution, real=real
+        )
 
         return density
 
-    def ll_density_real(self, X: torch.Tensor, resolution: float = 2.0) -> torch.Tensor:
-        """OLD: Real space analog of ll_density.
-        Compute the log likelihood of the density given the atomic coordinates and side chain angles.
-
-        Parameters
-        ----------
-        X : torch.Tensor
-            Denoised coordinates.
-
-        Returns
-        -------
-        torch.Tensor
-            Log likelihood of the density.
-        """
-
-        density = self._gamma(
-            X, all_atom=self.all_atom, resolution=resolution, real=True
-        )  # Get density map from denoised coordinates
-
-         
-
-        if density.size() != self.y.size():
-            raise ValueError("Density map and input density map must be the same size.")
-
-        diff = density - self.y
-
-        return -torch.linalg.norm(diff) ** 2
-
-    def ll_density(self, X: torch.Tensor) -> torch.Tensor:
-        """Compute the log likelihood of the density given the atomic coordinates and side chain angles.
-
-        Parameters
-        ----------
-        X : torch.Tensor
-            Denoised coordinates.
-
-        Returns
-        -------
-        torch.Tensor
-            Log likelihood of the density.
-        """
-        if len(X.size()) == 4:
-            X = rearrange(X, "b r a c -> b (r a) c").squeeze()  # b, N, 3
-
-        # FIXME: MTZ and SF-CIF not implemented
-
-        elements = rearrange(self._extract_elements(self.all_atom), "r a -> (r a)")
-        C_expand = repeat(
-            self.C_bar, "b r -> b (r a)", a=14 if self.all_atom else 4
-        ).squeeze()
-
-        if X.is_cuda:  # use autocast for mixed precision, should be a cheaper operation
-            with torch.autocast(device_type="cuda"):
-                result = self.density_calculator.compute_ll_density(
-                    X, elements, C_expand, self.y
-                )
-        else:
-            result = self.density_calculator.compute_ll_density(
-                X, elements, C_expand, self.y
-            )
-
-        return result
-
-    def grad_ll_density(self, X: torch.Tensor, resolution: float = 2.0) -> torch.Tensor:
+    def grad_ll_density(
+        self,
+        X: torch.Tensor,
+        all_atom: bool = False,
+        resolution: float = 2.0,
+        real: bool = False,
+    ) -> torch.Tensor:
         """Compute the gradient of the log likelihood of the density given the atomic coordinates and side chain angles.
 
         Parameters
@@ -533,37 +480,78 @@ class ADP3D:
         """
 
         # setup resolution filter
-        self.density_calculator.set_filter(resolution)
+        self.density_calculator.set_filter_and_mask(resolution)
 
         # take elements and C_expand out of gradient computation
-        elements = rearrange(self._extract_elements(self.all_atom), "r a -> (r a)")
-        C_expand = repeat(
-            self.C_bar, "b r -> b (r a)", a=14 if self.all_atom else 4
-        ).squeeze()
-
+        if X.size()[2] == 4 and all_atom:
+            raise ValueError(
+                "Input coordinates are backbone only, all_atom must be False."
+            )
         if len(X.size()) == 4:
-            X = rearrange(X, "b r a c -> b (r a) c").squeeze()  # b, N, 3
+            X = rearrange(
+                X, "b r a c -> b (r a) c"
+            ).squeeze()  # if b = 1, should result in (r a, c)
+        else:
+            X = X.squeeze()  # assuming already in shape (r a, c)
+
+        if len(X.size()) != 2:
+            raise ValueError(
+                "Input coordinates must be of shape (residues * atoms, 3). Batched X is not yet supported in _gamma."
+            )
+
+        if all_atom and X.size()[0] != self.x_bar.size()[1] * self.x_bar.size()[2]:
+            print(X.size(), self.x_bar.size())
+            raise ValueError(
+                "Number of atoms in input coordinates must match number of atoms in structure."
+            )
+        elif not all_atom and X.size()[0] != self.x_bar.size()[1] * 4:
+            print(X.size(), self.x_bar.size())
+            raise ValueError(
+                "Number of atoms in input coordinates must match number of backbone atoms in structure."
+            )
+
+        elements = rearrange(self._extract_elements(all_atom), "r a -> (r a)")
+        C_expand = repeat(
+            self.C_bar, "b r -> b (r a)", a=14 if all_atom else 4
+        ).squeeze()  # expand to all atoms, squeeze batch dim out
+
+        if real:
+            y = torch.abs(
+                to_density(
+                    self.density_calculator.apply_filter_and_mask(
+                        self.f_y, shape_back=True
+                    )
+                )
+            )
+        else:
+            f_y = self.density_calculator.apply_filter_and_mask(self.f_y)
 
         with torch.enable_grad():
             X.requires_grad_(True)
             if X.is_cuda:  # use autocast for mixed precision
                 with torch.autocast(device_type="cuda"):
-                    result = self.density_calculator.compute_ll_density(
-                        X, elements, C_expand, self.y
+                    density = self.density_calculator.forward(
+                        X, elements, C_expand, resolution=resolution, real=real
                     )
             else:
-                result = self.density_calculator.compute_ll_density(
-                    X, elements, C_expand, self.y
+                density = self.density_calculator.forward(
+                    X, elements, C_expand, resolution=resolution, real=real
                 )
+            result = (
+                -torch.sum((density - y) ** 2)
+                if real
+                else -torch.sum(torch.abs(density - f_y))
+            )
             result.backward()
-            if self.all_atom:
-                grad = rearrange(
-                    X.grad, "(b r a) c -> b r a c", r=X.size()[0] // 14, a=14, b=1
-                )  # FIXME: not batchable ATM
-            else:
-                grad = rearrange(
-                    X.grad, "(b r a) c -> b r a c", r=X.size()[0] // 4, a=4, b=1
-                )
+
+        if self.all_atom:
+            grad = rearrange(
+                X.grad, "(b r a) c -> b r a c", r=X.size()[0] // 14, a=14, b=1
+            )  # FIXME: not batchable ATM
+        else:
+            grad = rearrange(
+                X.grad, "(b r a) c -> b r a c", r=X.size()[0] // 4, a=4, b=1
+            )
         return grad
 
     def model_refinement_optimizer(
@@ -625,7 +613,7 @@ class ADP3D:
             z_0 = self.multiply_inverse_corr(X_0, C)
 
             # sample chi angles
-            if epoch % 100 == 0:  # TODO: implement all atom
+            if epoch % 100 == 0:
                 X_aa, _, _, _ = self.sequence_chi_sampler(
                     X_0, C, S, t=0.0, return_scores=True, resample_chi=True
                 )
@@ -642,7 +630,7 @@ class ADP3D:
 
                 grad_ll_sequence = self.multiply_inverse_corr(
                     grad_ll_sequence[:, :, :4, :], C
-                )  # Get gradient of log likelihood of sequence in whitened space # TODO: remove :4 once all atom is implemented
+                )  # Get gradient of log likelihood of sequence in whitened space
             else:
                 grad_ll_sequence = torch.zeros_like(z_0, device=self.device)
 
@@ -665,12 +653,17 @@ class ADP3D:
             # density
             if self.all_atom:
                 density_grad_transformed = self.multiply_inverse_corr(
-                    self.grad_ll_density(X_aa, current_resolution)[:, :, :4, :],
+                    self.grad_ll_density(
+                        X_aa, all_atom=True, resolution=current_resolution
+                    )[:, :, :4, :],
                     C,  # get the backbone coords to update
                 )
             else:
                 density_grad_transformed = self.multiply_inverse_corr(
-                    self.grad_ll_density(X_0, current_resolution), C
+                    self.grad_ll_density(
+                        X_0, all_atom=False, resolution=current_resolution
+                    ),
+                    C,
                 )
 
             lr_density = lr_m_s_d[2] * (current_resolution / map_resolution) ** 3

@@ -18,20 +18,6 @@ def device():
 
 
 @pytest.fixture
-def compare(benchmark):
-    def _compare(funcs, args):
-        for func in funcs:
-            benchmark.pedantic(
-                func,
-                args=args,
-                iterations=10,
-                rounds=3,
-            )
-
-    return _compare
-
-
-@pytest.fixture
 def cif_4yuo():
     file = str(
         Path(Path(adp3d.__file__).parent.parent, "tests", "resources", "4yuo.cif")
@@ -160,7 +146,7 @@ def test_gamma(sim_data_1az5, device):
     size = density.grid.shape
 
     # test backbone
-    volume = adp._gamma(X, all_atom=False)
+    volume = adp._gamma(X, resolution=2.0, real=True, all_atom=False)
 
     assert volume is not None
     assert torch.any(volume > 0)
@@ -187,7 +173,7 @@ def test_gamma(sim_data_1az5, device):
         all_atom=True,
         device=device,
     )
-    volume = adp._gamma(X_aa, all_atom=True)
+    volume = adp._gamma(X_aa, resolution=2.0, real=True, all_atom=True)
 
     assert volume is not None
     assert torch.any(volume > 0)
@@ -298,7 +284,6 @@ def test_grad_ll_incomplete_structure(peptides, density_4yuo, device):
 
 
 def test_ll_density_and_grad(sim_data_7pzt, sf_cif_7pzt, cif_7pzt, device): 
-    # ll_density with _gamma
     protein = Protein(sim_data_7pzt[0])
     X, _, S = protein.to_XCS(all_atom=True, device=device)  # backbone coordinates
     flat_X = rearrange(X, "b r a c -> b (r a) c").squeeze()
@@ -315,13 +300,11 @@ def test_ll_density_and_grad(sim_data_7pzt, sf_cif_7pzt, cif_7pzt, device):
         device=device,
     )
 
-    ll_density = adp.ll_density(X)
-    assert ll_density is not None
-    assert torch.allclose(
-        ll_density, torch.zeros_like(ll_density, device=device), atol=0.1
-    )
+    grad_ll = adp.grad_ll_density(X, all_atom=True, resolution=4.0, real=False)
+    assert grad_ll is not None
+    assert torch.allclose(grad_ll, torch.zeros_like(grad_ll, device=device), atol=0.3)
 
-    grad_ll = adp.grad_ll_density(X)
+    grad_ll = adp.grad_ll_density(X, all_atom=True, resolution=4.0, real=True)
     assert grad_ll is not None
     assert torch.allclose(grad_ll, torch.zeros_like(grad_ll, device=device), atol=0.3)
 

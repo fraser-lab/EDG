@@ -47,8 +47,6 @@ if [ -z "${xray_data_labels}" ]; then
   exit 1;
 else
   echo "data labels: ${xray_data_labels}"
-  # Start writing refinement parameters into a parameter file
-  echo "refinement.input.xray_data.labels=$xray_data_labels" > ${pdb_name}_single_refine.params
 fi
 
 #_____________________________DETERMINE R FREE FLAGS______________________________
@@ -58,21 +56,35 @@ for field in ${rfreetypes}; do
   if grep -F -q -w $field <<< "${mtzmetadata}"; then
     gen_Rfree=False;
     echo "Rfree column: ${field}";
-    echo "refinement.input.xray_data.r_free_flags.label=${field}" >> ${pdb_name}_single_refine.params
+    r_free_flags="${field}";
     break
   fi
 done
-echo "refinement.input.xray_data.r_free_flags.generate=${gen_Rfree}" >> ${pdb_name}_single_refine.params
-
-
-
-
+echo "data_manager {" > ${pdb_name}_single_refine.params
+echo "    miller_array {" >> ${pdb_name}_single_refine.params
+echo "        labels {" >> ${pdb_name}_single_refine.params
+echo "            name = \"$xray_data_labels\"" >> ${pdb_name}_single_refine.params
+echo "            type = x_ray" >> ${pdb_name}_single_refine.params
+echo "        }" >> ${pdb_name}_single_refine.params
+echo "        labels {" >> ${pdb_name}_single_refine.params
+echo "            name = \"$r_free_flags\"" >> ${pdb_name}_single_refine.params
+echo "            type = x_ray" >> ${pdb_name}_single_refine.params
+echo "        }" >> ${pdb_name}_single_refine.params
+echo "    }" >> ${pdb_name}_single_refine.params
+echo "    fmodel {" >> ${pdb_name}_single_refine.params
+echo "        xray_data {" >> ${pdb_name}_single_refine.params
+echo "            r_free_flags {" >> ${pdb_name}_single_refine.params
+echo "                generate = ${gen_Rfree}" >> ${pdb_name}_single_refine.params
+echo "            }" >> ${pdb_name}_single_refine.params
+echo "        }" >> ${pdb_name}_single_refine.params
+echo "    }" >> ${pdb_name}_single_refine.params
+echo "}" >> ${pdb_name}_single_refine.params
 
 
 #__________________________________FINAL REFINEMENT__________________________________
 # Write refinement parameters into parameters file
 echo "refinement.refine.strategy=*individual_sites *individual_adp *occupancies"  >> ${pdb_name}_single_refine.params
-echo "refinement.output.prefix=${pdb_name}_single" >> ${pdb_name}_single_refine.params
+echo "output.prefix=${pdb_name}_single" >> ${pdb_name}_single_refine.params
 echo "refinement.main.number_of_macro_cycles=5"  >> ${pdb_name}_single_refine.params
 echo "refinement.main.nqh_flips=True"            >> ${pdb_name}_single_refine.params
 echo "refinement.refine.${adp}"                  >> ${pdb_name}_single_refine.params

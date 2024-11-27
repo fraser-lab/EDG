@@ -180,3 +180,4 @@ tests/resources/*_bb.*
 
 # large files
 *.mrc
+*.map*

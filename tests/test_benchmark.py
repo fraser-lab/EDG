@@ -52,8 +52,9 @@ class TestOptimizationsWithSetup:
         )
         self.resolution = 2.0
         self.adp.density_calculator.set_filter_and_mask(self.resolution)
-        self.adp.f_y = self.adp.density_calculator.apply_filter_and_mask(self.adp.f_y, True)
-        self.adp.y = torch.abs(to_density(self.adp.f_y))
+        get_to_y = self.adp.density_calculator.apply_filter_and_mask(self.adp.f_y, True)
+        self.adp.f_y = self.adp.density_calculator.apply_filter_and_mask(self.adp.f_y, False)
+        self.adp.y = torch.abs(to_density(get_to_y))
         self.elements = rearrange(self.adp._extract_elements(all_atom=True), "r a -> (r a)")
 
     @pytest.mark.benchmark(group="ll_density")
