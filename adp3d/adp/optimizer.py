@@ -252,10 +252,10 @@ class ADP3D:
         mask[(self.C_bar != 1).reshape(-1)] = 0.0  # TODO: this requires CIF right now
         mask = repeat(mask, "m -> (m repeat)", repeat=4)
         self.A = torch.diag(mask)
+        self.A = self.A[self.A.any(dim=1)]
 
         # Precompute SVD for incomplete structure log likelihood
         AR = self.A @ self.R
-        AR = AR[AR.any(dim=1)]
         # U shape (m, m), S shape (m, n), V_T shape (n, n)
         self.U, S_, self.V_T = torch.linalg.svd(AR)
         if len(S_.size()) == 1:
@@ -315,7 +315,7 @@ class ADP3D:
             result = self.ll_incomplete_structure(z)
             result.backward()
 
-        return z.grad
+        return z.grad, result
 
     def ll_sequence(self, s: torch.Tensor, z: torch.Tensor) -> torch.Tensor:
         """Compute the log likelihood of the sequence given the denoised coordinates.
@@ -527,7 +527,7 @@ class ADP3D:
             f_y = self.density_calculator.apply_filter_and_mask(self.f_y)
 
         with torch.enable_grad():
-            X.requires_grad_(True)
+            X = X.clone().detach().requires_grad_(True)
             if X.is_cuda:  # use autocast for mixed precision
                 with torch.autocast(device_type="cuda"):
                     density = self.density_calculator.forward(
@@ -542,17 +542,18 @@ class ADP3D:
                 if real
                 else -torch.sum(torch.abs(density - f_y))
             )
-            result.backward()
+            result.backward() # FIXME: something is breaking here...
 
-        if self.all_atom:
-            grad = rearrange(
-                X.grad, "(b r a) c -> b r a c", r=X.size()[0] // 14, a=14, b=1
-            )  # FIXME: not batchable ATM
-        else:
-            grad = rearrange(
-                X.grad, "(b r a) c -> b r a c", r=X.size()[0] // 4, a=4, b=1
-            )
-        return grad
+            if self.all_atom:
+                grad = rearrange(
+                    X.grad, "(b r a) c -> b r a c", r=X.size()[0] // 14, a=14, b=1
+                )  # FIXME: not batchable ATM
+            else:
+                grad = rearrange(
+                    X.grad, "(b r a) c -> b r a c", r=X.size()[0] // 4, a=4, b=1
+                )
+
+        return grad, result
 
     def model_refinement_optimizer(
         self,
@@ -595,6 +596,10 @@ class ADP3D:
             )  # NOTE: self.C_bar provides correct chains and masking
         S = self.seq
 
+        loss_d = []
+        loss_s = []
+        loss_m = []
+
         # FIXME fix chroma CIF I/O
         Protein.from_XCS(X, C, S).to_PDB(os.path.join(output_dir, "init.pdb"))
 
@@ -602,7 +607,8 @@ class ADP3D:
         v_i_s = torch.zeros(X.size(), device=self.device)
         v_i_d = torch.zeros(X.size(), device=self.device)
 
-        for epoch in tqdm(range(epochs), desc="Model Refinement"):
+        pbar = tqdm(range(epochs), desc="Model Refinement")
+        for epoch in pbar:
             # Denoise coordinates
             t = _t(epoch, epochs).to(self.device)
 
@@ -632,14 +638,18 @@ class ADP3D:
                     grad_ll_sequence[:, :, :4, :], C
                 )  # Get gradient of log likelihood of sequence in whitened space
             else:
+                ll_sequence = torch.tensor(0.0, device=self.device)
                 grad_ll_sequence = torch.zeros_like(z_0, device=self.device)
 
             ### Accumulate gradients
 
             # incomplete structure
+            incomplete_structure_grad, ll_incomplete_structure = self.grad_ll_incomplete_structure(
+                z_0
+            )
             v_i_m = momenta[0] * v_i_m + lr_m_s_d[
                 0
-            ] * self.grad_ll_incomplete_structure(z_0)
+            ] * incomplete_structure_grad
 
             # sequence
             v_i_s = (
@@ -652,18 +662,20 @@ class ADP3D:
 
             # density
             if self.all_atom:
+                density_grad, density_loss = self.grad_ll_density(
+                    X_aa, all_atom=True, resolution=current_resolution
+                )
                 density_grad_transformed = self.multiply_inverse_corr(
-                    self.grad_ll_density(
-                        X_aa, all_atom=True, resolution=current_resolution
-                    )[:, :, :4, :],
+                    density_grad[:, :, :4, :],
                     C,  # get the backbone coords to update
                 )
             else:
+                density_grad, density_loss = self.grad_ll_density(
+                    X_0, all_atom=False, resolution=current_resolution
+                )
                 density_grad_transformed = self.multiply_inverse_corr(
-                    self.grad_ll_density(
-                        X_0, all_atom=False, resolution=current_resolution
-                    ),
-                    C,
+                    density_grad[:, :, :4, :],
+                    C,  # get the backbone coords to update
                 )
 
             lr_density = lr_m_s_d[2] * (current_resolution / map_resolution) ** 3
@@ -678,11 +690,17 @@ class ADP3D:
             X = self.multiply_corr(alpha * z_t_1 + sigma * torch.randn_like(z_t_1), C)
 
             if (
-                epoch % 100 == 0
+                epoch % 50 == 0
             ):  # ~40 structure is minimum for a good diffusion trajectory
                 Protein.from_XCS(X, C, S).to_PDB(
                     os.path.join(output_dir, f"output_epoch_{epoch}.pdb")
                 )
+            pbar.set_postfix({"d": density_loss.item(), "s": ll_sequence.item(), "m": ll_incomplete_structure.item()})
+            loss_d.append(density_loss.item())
+            loss_s.append(ll_sequence.item())
+            loss_m.append(ll_incomplete_structure.item())
+
+
 
         MAP_protein = Protein.from_XCS(X, C, S)
 

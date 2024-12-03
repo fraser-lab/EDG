@@ -266,7 +266,7 @@ def test_grad_ll_incomplete_structure(peptides, density_4yuo, device):
     z = adp.multiply_inverse_corr(
         complete_peptide_XCS[0] - adp.center_shift, complete_peptide_XCS[1]
     ).to(device)
-    grad_ll = adp.grad_ll_incomplete_structure(z)
+    grad_ll, _ = adp.grad_ll_incomplete_structure(z)
     assert grad_ll is not None
     assert torch.allclose(grad_ll, torch.zeros_like(grad_ll), atol=1e-5)
 
@@ -278,7 +278,7 @@ def test_grad_ll_incomplete_structure(peptides, density_4yuo, device):
         device=device,
     )  # NOTE: density is arbitrary here (just needs to be not None), but if type-checked later in development this might throw an error
     # z stays the same, ll w.r.t. complete structure
-    grad_ll = adp.grad_ll_incomplete_structure(z)
+    grad_ll, _ = adp.grad_ll_incomplete_structure(z)
     assert grad_ll is not None
     assert not torch.allclose(grad_ll, torch.zeros_like(grad_ll), atol=1e-5)
 
@@ -300,11 +300,11 @@ def test_ll_density_and_grad(sim_data_7pzt, sf_cif_7pzt, cif_7pzt, device):
         device=device,
     )
 
-    grad_ll = adp.grad_ll_density(X, all_atom=True, resolution=4.0, real=False)
+    grad_ll, loss = adp.grad_ll_density(X, all_atom=True, resolution=4.0, real=False)
     assert grad_ll is not None
     assert torch.allclose(grad_ll, torch.zeros_like(grad_ll, device=device), atol=0.3)
 
-    grad_ll = adp.grad_ll_density(X, all_atom=True, resolution=4.0, real=True)
+    grad_ll, loss = adp.grad_ll_density(X, all_atom=True, resolution=4.0, real=True)
     assert grad_ll is not None
     assert torch.allclose(grad_ll, torch.zeros_like(grad_ll, device=device), atol=0.3)
 
