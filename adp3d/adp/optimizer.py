@@ -22,6 +22,7 @@ from tqdm import tqdm
 from adp3d.adp.density import DensityCalculator, to_density, to_f_density, normalize
 from adp3d.utils.utility import try_gpu
 from adp3d.data.sf import ELEMENTS
+from adp3d.data.io import export_density_map, ma_cif_to_XCS
 
 
 def identity_submatrices(N) -> Tuple[torch.Tensor]:
@@ -142,9 +143,14 @@ class ADP3D:
         self.protein = protein
 
         self.seq = seq.to(self.device)
-        self.x_bar, self.C_bar, S = Protein(structure).to_XCS(
-            all_atom=True, device=self.device
-        )
+        try:
+            self.x_bar, self.C_bar, _ = Protein(structure).to_XCS(
+                all_atom=True, device=self.device
+            )
+        except ValueError:
+            self.x_bar, self.C_bar = ma_cif_to_XCS(structure, self.seq.size()[1], all_atom = self.all_atom)
+            self.x_bar = self.x_bar.to(self.device)
+            self.C_bar = self.C_bar.to(self.device)
 
         # processing coordinates
         # TODO: (LATER PROCESS CHROMA I/O SO UNMODELED ATOMS ARE nan)
@@ -158,7 +164,6 @@ class ADP3D:
         self.x_bar = self.x_bar[torch.abs(self.C_bar) == 1].unsqueeze(
             0
         )  # get only chain 1
-        S = S[torch.abs(self.C_bar) == 1].unsqueeze(0)  # get only chain 1
 
         # TODO: consider later maintaining only one sequence tensor
         self.seq = self.seq[torch.abs(self.C_bar) == 1].unsqueeze(0)  # get only chain 1
@@ -184,11 +189,11 @@ class ADP3D:
         elif self.density_extension in (".ccp4", ".map", ".mrc"):
             map = gemmi.read_ccp4_map(y)
             self.grid = map.grid
-            if self.grid.spacing == (0.0, 0.0, 0.0):
-                self.grid.set_size_from_spacing(
-                    self.grid.unit_cell.a / self.grid.nu,
-                    rounding=gemmi.GridSizeRounding(0),
-                )
+            # if self.grid.spacing == (0.0, 0.0, 0.0):
+            #     self.grid.set_size_from_spacing(
+            #         self.grid.unit_cell.a / self.grid.nu,
+            #         rounding=gemmi.GridSizeRounding(0),
+            #     ) # TODO: fix this
             self.y = normalize(
                 torch.from_numpy(np.ascontiguousarray(self.grid.array)).to(
                     self.device, dtype=torch.float32
@@ -516,10 +521,12 @@ class ADP3D:
         ).squeeze()  # expand to all atoms, squeeze batch dim out
 
         if real:
-            y = torch.abs(
-                to_density(
-                    self.density_calculator.apply_filter_and_mask(
-                        self.f_y, shape_back=True
+            y = normalize(
+                torch.abs(
+                    to_density(
+                        self.density_calculator.apply_filter_and_mask(
+                            self.f_y, shape_back=True
+                        )
                     )
                 )
             )
@@ -530,19 +537,23 @@ class ADP3D:
             X = X.clone().detach().requires_grad_(True)
             if X.is_cuda:  # use autocast for mixed precision
                 with torch.autocast(device_type="cuda"):
-                    density = self.density_calculator.forward(
-                        X, elements, C_expand, resolution=resolution, real=real
+                    density = normalize(
+                        self.density_calculator.forward(
+                            X, elements, C_expand, resolution=resolution, real=real
+                        )
                     )
             else:
-                density = self.density_calculator.forward(
-                    X, elements, C_expand, resolution=resolution, real=real
+                density = normalize(
+                    self.density_calculator.forward(
+                        X, elements, C_expand, resolution=resolution, real=real
+                    )
                 )
             result = (
                 -torch.sum((density - y) ** 2)
                 if real
-                else -torch.sum(torch.abs(density - f_y))
+                else -torch.sum(torch.abs(density - f_y) ** 2)
             )
-            result.backward() # FIXME: something is breaking here...
+            result.backward()
 
             if self.all_atom:
                 grad = rearrange(
@@ -558,11 +569,11 @@ class ADP3D:
     def model_refinement_optimizer(
         self,
         epochs: int = 4000,
-        lr_m_s_d: List[float] = [1e-1, 1e-5, 3e-5],
+        lr_m_s_d: List[float] = [1e-2, 1e-5, 1e-2],
         momenta: List[float] = [9e-1] * 3,
         map_resolution: float = 2.0,
         output_dir: str = "output",
-    ) -> Protein:
+    ) -> Tuple[Protein, List[float], List[float], List[float]]:
         """Use gradient descent with momentum to optimize log likelihood functions for model refinement task along with denoised coordinates.
 
         Parameters
@@ -574,13 +585,16 @@ class ADP3D:
             first for incomplete *m*odel, then *s*equence, then *d*ensity. By default [1e-1, 1e-5, 3e-5]
         momenta : List[float], optional
             Momenta for gradient descent updates, by default [9e-1]*3
+        map_resolution : float, optional
+            Resolution to compare the density map at by the end of the resolution schedule, by default 2.0.
         output_dir : str, optional
             Output directory for saving refined protein structures, by default "output
 
         Returns
         -------
-        Protein
+        Protein, List[float], List[float], List[float]
             Denoised and data matched protein structure.
+            List of log likelihoods. Order is [incomplete structure, density, sequence].
         """
         os.makedirs(output_dir, exist_ok=True)
 
@@ -621,7 +635,7 @@ class ADP3D:
             # sample chi angles
             if epoch % 100 == 0:
                 X_aa, _, _, _ = self.sequence_chi_sampler(
-                    X_0, C, S, t=0.0, return_scores=True, resample_chi=True
+                    X_0, C, S, t=0.0, return_scores=False, resample_chi=True
                 )
 
             # sequence matching
@@ -644,12 +658,10 @@ class ADP3D:
             ### Accumulate gradients
 
             # incomplete structure
-            incomplete_structure_grad, ll_incomplete_structure = self.grad_ll_incomplete_structure(
-                z_0
+            incomplete_structure_grad, ll_incomplete_structure = (
+                self.grad_ll_incomplete_structure(z_0)
             )
-            v_i_m = momenta[0] * v_i_m + lr_m_s_d[
-                0
-            ] * incomplete_structure_grad
+            v_i_m = momenta[0] * v_i_m + lr_m_s_d[0] * incomplete_structure_grad
 
             # sequence
             v_i_s = (
@@ -695,13 +707,20 @@ class ADP3D:
                 Protein.from_XCS(X, C, S).to_PDB(
                     os.path.join(output_dir, f"output_epoch_{epoch}.pdb")
                 )
-            pbar.set_postfix({"d": density_loss.item(), "s": ll_sequence.item(), "m": ll_incomplete_structure.item()})
-            loss_d.append(density_loss.item())
-            loss_s.append(ll_sequence.item())
-            loss_m.append(ll_incomplete_structure.item())
+            pbar.set_postfix(
+                {
+                    "d": density_loss.item(),
+                    "s": ll_sequence.item(),
+                    "m": ll_incomplete_structure.item(),
+                }
+            )
+            loss_m.append(ll_incomplete_structure.item() * lr_m_s_d[0])
+            loss_d.append(density_loss.item() * lr_density)
+            loss_s.append(ll_sequence.item() * lr_m_s_d[1])
 
+        X_aa = self.sequence_chi_sampler(
+            X, C, S, t=0.0, return_scores=False, resample_chi=True
+        )[0]
+        MAP_protein = Protein.from_XCS(X_aa, C, S)
 
-
-        MAP_protein = Protein.from_XCS(X, C, S)
-
-        return MAP_protein
+        return MAP_protein, loss_m, loss_d, loss_s

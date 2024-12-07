@@ -167,7 +167,7 @@ key*
 # files no longer needed
 adp3d/utils/qfit_utils.py
 structure_completion_hqs.py
-model_refinement.py
+scattering_vector_test.py
 filtering_experiments.ipynb
 filtering_test.ipynb
 _jh_scripts/

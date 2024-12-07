@@ -283,7 +283,7 @@ def test_grad_ll_incomplete_structure(peptides, density_4yuo, device):
     assert not torch.allclose(grad_ll, torch.zeros_like(grad_ll), atol=1e-5)
 
 
-def test_ll_density_and_grad(sim_data_7pzt, sf_cif_7pzt, cif_7pzt, device): 
+def test_ll_density_and_grad(sim_data_7pzt, device): 
     protein = Protein(sim_data_7pzt[0])
     X, _, S = protein.to_XCS(all_atom=True, device=device)  # backbone coordinates
     flat_X = rearrange(X, "b r a c -> b (r a) c").squeeze()
