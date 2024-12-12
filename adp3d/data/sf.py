@@ -10,7 +10,7 @@ as they do not exactly match up with those in the IUCr Vol C tables.
 
 ELEMENTS = {"H": 0, "C": 1, "N": 2, "O": 3, "S": 4, "nan": 5}  # protein elements
 
-IDX_TO_ELEMENT = {v: k for k, v in ELEMENTS.items()}
+IDX_TO_ELEMENT = ["H", "C", "N", "O", "S"] # NOTE: Cannot be dict for TorchScript compilation
 
 ATOM_STRUCTURE_FACTORS = {
     "H": [

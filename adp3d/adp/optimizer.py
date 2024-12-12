@@ -86,6 +86,57 @@ def _t(epoch: int, total_epochs: int) -> torch.Tensor:
     ).float()
 
 
+def _resolution_schedule(
+    epoch: int,
+    total_epochs: int,
+    start: float = 2.0,
+    end: float = 2.0,
+    activate_epoch: int = 0,
+) -> float:
+    """Resolution schedule for the model refinement task.
+
+    Parameters
+    ----------
+    epoch : int
+        Current epoch.
+    total_epochs : int
+        Total number of epochs.
+    start : float, optional
+        Starting resolution, by default 2.0.
+    end : float, optional
+        Ending resolution, by default 2.0.
+
+    Returns
+    -------
+    float
+        Current resolution.
+    """
+    if epoch < activate_epoch:
+        return start
+    a = (end - start) / (total_epochs - activate_epoch)
+    b = start - activate_epoch * a
+    return a * epoch + b
+
+
+@torch.jit.script
+def cos_similarity(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+    """Computes the cosine similarity between two tensors.
+
+    Parameters
+    ----------
+    a : torch.Tensor
+    b : torch.Tensor
+
+    Returns
+    -------
+    torch.Tensor
+        Scaled scalar product of a and b.
+    """
+    return torch.real(
+        torch.sum(a * torch.conj(b)) / torch.linalg.norm(a) / torch.linalg.norm(b)
+    )
+
+
 class ADP3D:
     def __init__(
         self,
@@ -148,7 +199,9 @@ class ADP3D:
                 all_atom=True, device=self.device
             )
         except ValueError:
-            self.x_bar, self.C_bar = ma_cif_to_XCS(structure, self.seq.size()[1], all_atom = self.all_atom)
+            self.x_bar, self.C_bar = ma_cif_to_XCS(
+                structure, self.seq.size()[1], all_atom=self.all_atom
+            )
             self.x_bar = self.x_bar.to(self.device)
             self.C_bar = self.C_bar.to(self.device)
 
@@ -203,8 +256,8 @@ class ADP3D:
         else:
             raise ValueError("Density map must be a CCP4, MRC, SF-CIF, or MTZ file.")
 
-        self.density_calculator = DensityCalculator(
-            self.grid, self.center_shift, self.device, em=em
+        self.density_calculator = torch.jit.script(
+            DensityCalculator(self.grid, self.center_shift, self.device, em=em)
         )
 
         # Importing sqrt(covariance matrix) from Chroma
@@ -413,7 +466,7 @@ class ADP3D:
         resolution: float = 2.0,
         real: bool = False,
     ) -> torch.Tensor:
-        """Compute electron density map of the all-atom coordinates X.
+        """Compute electron density map of the coordinates X.
 
         Args:
             X (torch.Tensor): The input all-atom protein coordinates in shape (batch, residues, atoms, 3).
@@ -469,6 +522,7 @@ class ADP3D:
         all_atom: bool = False,
         resolution: float = 2.0,
         real: bool = False,
+        loss: str = "l2",
     ) -> torch.Tensor:
         """Compute the gradient of the log likelihood of the density given the atomic coordinates and side chain angles.
 
@@ -477,6 +531,14 @@ class ADP3D:
 
         X : torch.Tensor
             Denoised coordinates.
+        all_atom : bool, optional
+            Whether the coordinates are all-atom or backbone only, by default False.
+        resolution : float, optional
+            The resolution of the density map, by default 2.0.
+        real : bool, optional
+            Whether to return the real space density map or the Fourier space density map, by default False.
+        loss : str, optional
+            Loss function to use for the density map, by default "l2". Options are "l2" and "cosine" for L2 norm and cosine similarity, respectively.
 
         Returns
         -------
@@ -543,16 +605,17 @@ class ADP3D:
                         )
                     )
             else:
-                density = normalize(
-                    self.density_calculator.forward(
-                        X, elements, C_expand, resolution=resolution, real=real
-                    )
+                density = self.density_calculator.forward(
+                    X, elements, C_expand, resolution=resolution, real=real
                 )
-            result = (
-                -torch.sum((density - y) ** 2)
-                if real
-                else -torch.sum(torch.abs(density - f_y) ** 2)
-            )
+            if loss == "l2":
+                result = (
+                    -torch.sum((density - y) ** 2)
+                    if real
+                    else -torch.sum(torch.abs(density - f_y) ** 2)
+                )
+            elif loss == "cosine":
+                result = -(cos_similarity(density, y) if real else cos_similarity(density, f_y))
             result.backward()
 
             if self.all_atom:
@@ -615,7 +678,7 @@ class ADP3D:
         loss_m = []
 
         # FIXME fix chroma CIF I/O
-        Protein.from_XCS(X, C, S).to_PDB(os.path.join(output_dir, "init.pdb"))
+        Protein.from_XCS(X + self.center_shift, C, S).to_PDB(os.path.join(output_dir, "init.pdb"))
 
         v_i_m = torch.zeros(X.size(), device=self.device)
         v_i_s = torch.zeros(X.size(), device=self.device)
@@ -634,7 +697,7 @@ class ADP3D:
 
             # sample chi angles
             if epoch % 100 == 0:
-                X_aa, _, _, _ = self.sequence_chi_sampler(
+                X_aa, _, _ = self.sequence_chi_sampler(
                     X_0, C, S, t=0.0, return_scores=False, resample_chi=True
                 )
 
@@ -668,14 +731,18 @@ class ADP3D:
                 momenta[1] * v_i_s + lr_m_s_d[1] * grad_ll_sequence
             )  # NOTE: This should change if a model other than Chroma is used.
 
-            current_resolution = (
-                15 if epoch < 3000 else 15 - (epoch - 3000) / 100
-            )  # TODO: generalize to different epoch counts
+            current_resolution = _resolution_schedule(
+                epoch, epochs, start=10.0, end=map_resolution, activate_epoch=0
+            )
 
             # density
             if self.all_atom:
                 density_grad, density_loss = self.grad_ll_density(
-                    X_aa, all_atom=True, resolution=current_resolution
+                    X_aa,
+                    all_atom=True,
+                    resolution=current_resolution,
+                    real=True,  # TODO: change to fourier space eventually
+                    loss="cosine",
                 )
                 density_grad_transformed = self.multiply_inverse_corr(
                     density_grad[:, :, :4, :],
@@ -683,7 +750,11 @@ class ADP3D:
                 )
             else:
                 density_grad, density_loss = self.grad_ll_density(
-                    X_0, all_atom=False, resolution=current_resolution
+                    X_0,
+                    all_atom=False,
+                    resolution=current_resolution,
+                    real=True,  # TODO: change to fourier space eventually
+                    loss="cosine",
                 )
                 density_grad_transformed = self.multiply_inverse_corr(
                     density_grad[:, :, :4, :],
@@ -704,7 +775,7 @@ class ADP3D:
             if (
                 epoch % 50 == 0
             ):  # ~40 structure is minimum for a good diffusion trajectory
-                Protein.from_XCS(X, C, S).to_PDB(
+                Protein.from_XCS(X + self.center_shift, C, S).to_PDB(
                     os.path.join(output_dir, f"output_epoch_{epoch}.pdb")
                 )
             pbar.set_postfix(
@@ -721,6 +792,13 @@ class ADP3D:
         X_aa = self.sequence_chi_sampler(
             X, C, S, t=0.0, return_scores=False, resample_chi=True
         )[0]
+        X_aa += self.center_shift
         MAP_protein = Protein.from_XCS(X_aa, C, S)
+        final_density = self._gamma(X_aa, all_atom=True, resolution=map_resolution)
+        export_density_map(
+            final_density,
+            self.grid,
+            os.path.join(output_dir, "final_density.ccp4"),
+        )
 
         return MAP_protein, loss_m, loss_d, loss_s

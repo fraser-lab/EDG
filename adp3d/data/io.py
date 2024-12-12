@@ -41,6 +41,7 @@ def export_density_map(density: torch.Tensor, grid: Union[dict, DotDict, gemmi.F
     ccp4.grid = gemmi.FloatGrid(
         density_np, cell=unit_cell, spacegroup=spacegroup
     )
+    ccp4.setup(np.NAN, gemmi.MapSetup.ReorderOnly)
     ccp4.update_ccp4_header()
     ccp4.write_ccp4_map(output_path)
 

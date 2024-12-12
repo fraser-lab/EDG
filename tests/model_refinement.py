@@ -12,8 +12,9 @@ _, _, S = protein.to_XCS()
 adp = adp3d.ADP3D(density_file, S, structure_file, all_atom = True, em = True)
 
 epochs = 4000
+lr_m_s_d = [1e-2, 1e-5, 1]
 
-test_prot, loss_m, loss_d, loss_s = adp.model_refinement_optimizer(epochs=epochs, output_dir=sys.argv[4])
+test_prot, loss_m, loss_d, loss_s = adp.model_refinement_optimizer(epochs=epochs, output_dir=sys.argv[4], map_resolution=3.4)
 
 test_prot.to_PDB(os.path.join(sys.argv[4], 'final.pdb'))
 
