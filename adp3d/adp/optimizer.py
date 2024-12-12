@@ -794,7 +794,7 @@ class ADP3D:
         )[0]
         X_aa += self.center_shift
         MAP_protein = Protein.from_XCS(X_aa, C, S)
-        final_density = self._gamma(X_aa, all_atom=True, resolution=map_resolution)
+        final_density = torch.real(self._gamma(X_aa, all_atom=True, resolution=map_resolution, real=True))
         export_density_map(
             final_density,
             self.grid,
