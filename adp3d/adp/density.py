@@ -111,22 +111,19 @@ def downsample_fft(
 
 
 def normalize(t: torch.Tensor) -> torch.Tensor:
-    """Normalize tensor to a Gaussian."""
+    """Normalize tensor to a Gaussian with mean 0 and std dev 1."""
+    if t.numel() == 0 or t.ndim == 0:
+        return t
 
-    is_complex = t.dtype in [torch.complex32, torch.complex64, torch.complex128]
-    if not is_complex:
-        return (t - t.mean()) / t.std()
+    if t.dtype not in [torch.complex32, torch.complex64, torch.complex128]:
+        return (t - t.mean()) / (t.std(unbiased=False) + 1e-8)
 
-    amplitudes = torch.abs(t)
+    real_part = (t.real - t.real.mean()) / (t.real.std(unbiased=False) + 1e-8)
+    imag_part = (t.imag - t.imag.mean()) / (t.imag.std(unbiased=False) + 1e-8)
 
-    mask = amplitudes != 0
-    mean = torch.mean(amplitudes[mask])
-    std = torch.std(amplitudes[mask])
-
-    normalized = (amplitudes - mean) / (std + 1e-10)
-
-    phases = torch.angle(t)
-    return normalized * torch.exp(1j * phases)
+    return torch.view_as_complex(
+        torch.cat([real_part[..., None], imag_part[..., None]], -1)
+    )
 
 
 class DensityCalculator(nn.Module):
@@ -194,7 +191,6 @@ class DensityCalculator(nn.Module):
         # pre-compute filter and mask
         self.set_filter_and_mask(resolution)
 
-    
     def _setup_coeffs(self):
         """Setup coefficients for density calculation."""
         # for Fourier space
@@ -425,8 +421,12 @@ class DensityCalculator(nn.Module):
             start_idx = i * chunk_size
             end_idx = min((i + 1) * chunk_size, n_freq_points)
 
-            freq_chunk = self.freq_grid.reshape(-1, 3)[start_idx:end_idx]  # (n_freq_points, 3)
-            freq_norm_chunk = self.freq_norm.reshape(-1)[start_idx:end_idx]  # (n_freq_points, )
+            freq_chunk = self.freq_grid.reshape(-1, 3)[
+                start_idx:end_idx
+            ]  # (n_freq_points, 3)
+            freq_norm_chunk = self.freq_norm.reshape(-1)[
+                start_idx:end_idx
+            ]  # (n_freq_points, )
 
             f_density_chunk = torch.zeros(
                 freq_chunk.shape[0], dtype=torch.complex64, device=self.device
@@ -558,11 +558,9 @@ class DensityCalculator(nn.Module):
             indices = torch.nonzero(self.mask)
             mins = indices.min(dim=0).values
             maxs = indices.max(dim=0).values
-            
+
             reduced_f_density = f_density[
-                mins[0]:maxs[0] + 1,
-                mins[1]:maxs[1] + 1,
-                mins[2]:maxs[2] + 1
+                mins[0] : maxs[0] + 1, mins[1] : maxs[1] + 1, mins[2] : maxs[2] + 1
             ]
 
             return reduced_f_density
@@ -604,7 +602,7 @@ class DensityCalculator(nn.Module):
             If real, returns the real space density map (shape: (nx, ny, nz)).
             If not, returns the Fourier coefficients (shape: (n_masked, )).
         """
-        if resolution <= 0.:
+        if resolution <= 0.0:
             raise ValueError("Resolution must be greater than 0")
 
         self.set_filter_and_mask(resolution)

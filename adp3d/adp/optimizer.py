@@ -615,7 +615,9 @@ class ADP3D:
                     else -torch.sum(torch.abs(density - f_y) ** 2)
                 )
             elif loss == "cosine":
-                result = -(cos_similarity(density, y) if real else cos_similarity(density, f_y))
+                result = -(
+                    cos_similarity(density, y) if real else cos_similarity(density, f_y)
+                )
             result.backward()
 
             if self.all_atom:
@@ -678,7 +680,9 @@ class ADP3D:
         loss_m = []
 
         # FIXME fix chroma CIF I/O
-        Protein.from_XCS(X + self.center_shift, C, S).to_PDB(os.path.join(output_dir, "init.pdb"))
+        Protein.from_XCS(X + self.center_shift, C, S).to_PDB(
+            os.path.join(output_dir, "init.pdb")
+        )
 
         v_i_m = torch.zeros(X.size(), device=self.device)
         v_i_s = torch.zeros(X.size(), device=self.device)
@@ -732,7 +736,7 @@ class ADP3D:
             )  # NOTE: This should change if a model other than Chroma is used.
 
             current_resolution = _resolution_schedule(
-                epoch, epochs, start=10.0, end=map_resolution, activate_epoch=0
+                epoch, epochs, start=15.0, end=map_resolution, activate_epoch=0
             )
 
             # density
@@ -785,16 +789,18 @@ class ADP3D:
                     "m": ll_incomplete_structure.item(),
                 }
             )
-            loss_m.append(ll_incomplete_structure.item() * lr_m_s_d[0])
-            loss_d.append(density_loss.item() * lr_density)
-            loss_s.append(ll_sequence.item() * lr_m_s_d[1])
+            loss_m.append(ll_incomplete_structure.item())
+            loss_d.append(density_loss.item())
+            loss_s.append(ll_sequence.item())
 
         X_aa = self.sequence_chi_sampler(
             X, C, S, t=0.0, return_scores=False, resample_chi=True
         )[0]
         X_aa += self.center_shift
         MAP_protein = Protein.from_XCS(X_aa, C, S)
-        final_density = torch.real(self._gamma(X_aa, all_atom=True, resolution=map_resolution, real=True))
+        final_density = torch.real(
+            self._gamma(X_aa, all_atom=True, resolution=map_resolution, real=True)
+        )
         export_density_map(
             final_density,
             self.grid,
