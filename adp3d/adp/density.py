@@ -493,7 +493,7 @@ class DensityCalculator(nn.Module):
     ) -> torch.Tensor:
         """Compute electron density map in Fourier space."""
 
-        f_density = self._compute_f_density_chunk(X, elements, C_expand)
+        f_density = self._compute_f_density_chunk(X, elements, C_expand, chunk_size=100000)
 
         f_density = f_density.reshape(self.nx, self.ny, self.nz)
         return f_density

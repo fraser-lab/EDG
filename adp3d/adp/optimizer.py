@@ -194,16 +194,11 @@ class ADP3D:
         self.protein = protein
 
         self.seq = seq.to(self.device)
-        try:
-            self.x_bar, self.C_bar, _ = Protein(structure).to_XCS(
-                all_atom=True, device=self.device
-            )
-        except ValueError:
-            self.x_bar, self.C_bar = ma_cif_to_XCS(
-                structure, self.seq.size()[1], all_atom=self.all_atom
-            )
-            self.x_bar = self.x_bar.to(self.device)
-            self.C_bar = self.C_bar.to(self.device)
+        self.x_bar, self.C_bar, _ = ma_cif_to_XCS(
+            structure, all_atom=self.all_atom
+        )
+        self.x_bar = self.x_bar.to(self.device)
+        self.C_bar = self.C_bar.to(self.device)
 
         # processing coordinates
         # TODO: (LATER PROCESS CHROMA I/O SO UNMODELED ATOMS ARE nan)
@@ -241,12 +236,10 @@ class ADP3D:
             )
         elif self.density_extension in (".ccp4", ".map", ".mrc"):
             map = gemmi.read_ccp4_map(y)
+            map.setup(np.nan, gemmi.MapSetup.ReorderOnly) # necessary to get the proper spacing
             self.grid = map.grid
-            # if self.grid.spacing == (0.0, 0.0, 0.0):
-            #     self.grid.set_size_from_spacing(
-            #         self.grid.unit_cell.a / self.grid.nu,
-            #         rounding=gemmi.GridSizeRounding(0),
-            #     ) # TODO: fix this
+            if map.grid.spacing == (0.0, 0.0, 0.0):
+                raise ValueError("Spacing of the density map is zero. Make sure your input map is properly processed.")
             self.y = normalize(
                 torch.from_numpy(np.ascontiguousarray(self.grid.array)).to(
                     self.device, dtype=torch.float32
@@ -271,8 +264,8 @@ class ADP3D:
             1
         ]  # Number of residues (from sequence, since we want total number in the correlation matrix)
         a = (
-            self.x_bar.size()[2] if not self.all_atom else 4
-        )  # Number of atoms in one residue
+            4 # Chroma only diffuses on backbone
+        )  # Number of atoms in one residue (backbone only)
         N = r * a  # Number of atoms in the protein backbone
         identity_matrices, overhang_matrix = identity_submatrices(N)
         overhang = N % 3
@@ -511,7 +504,7 @@ class ADP3D:
         ).squeeze()  # expand to all atoms, squeeze batch dim out
 
         density = self.density_calculator.forward(
-            X, elements, C_expand, resolution=resolution, real=real
+            X, elements, C_expand, resolution=resolution, real=real, to_normalize=True
         )
 
         return density
@@ -615,8 +608,12 @@ class ADP3D:
                     else -torch.sum(torch.abs(density - f_y) ** 2)
                 )
             elif loss == "cosine":
-                result = -(
-                    cos_similarity(density, y) if real else cos_similarity(density, f_y)
+                result = (
+                    cos_similarity(density, y)
+                    if real
+                    else cos_similarity(
+                        density, f_y
+                    )  # this may break due to torch.abs on the cos_similarity when in Fourier space
                 )
             result.backward()
 
@@ -796,11 +793,12 @@ class ADP3D:
         X_aa = self.sequence_chi_sampler(
             X, C, S, t=0.0, return_scores=False, resample_chi=True
         )[0]
-        X_aa += self.center_shift
-        MAP_protein = Protein.from_XCS(X_aa, C, S)
         final_density = torch.real(
             self._gamma(X_aa, all_atom=True, resolution=map_resolution, real=True)
         )
+        X_aa += self.center_shift
+        MAP_protein = Protein.from_XCS(X_aa, C, S)
+
         export_density_map(
             final_density,
             self.grid,

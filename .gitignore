@@ -177,6 +177,7 @@ _jh_scripts/
 tests/adp3d_test.ipynb
 tests/resources/*_bb.*
 *output_test*
+_notebooks/
 
 # large files
 *.mrc
