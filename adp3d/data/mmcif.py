@@ -93,7 +93,7 @@ class ParsedStructure:
 
     data: Structure
     info: StructureInfo
-    covalents: list[int]
+    # covalents: list[int] # NOTE: not sure why this is here, connections seems to contain all covalents
 
 
 ####################################################################################################
