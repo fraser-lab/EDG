@@ -21,7 +21,7 @@ from chroma.constants import AA_GEOMETRY, AA20_3
 from tqdm import tqdm
 from adp3d.adp.density import DensityCalculator, to_density, to_f_density, normalize
 from adp3d.utils.utility import try_gpu
-from adp3d.data.sf import ELEMENTS
+from adp3d.data.sf import ATOMIC_NUM_TO_ELEMENT 
 from adp3d.data.io import export_density_map, ma_cif_to_XCS
 
 
@@ -425,32 +425,7 @@ class ADP3D:
             Extracted elements for each residue, shape (residues, (4 or 14) elements), in order of Chroma's AA_GEOMETRY definition.
         """
 
-        bb_elements = [ELEMENTS[a] for a in ["N", "C", "C", "O"]]
-        if all_atom:
-            elements = torch.zeros(
-                self.seq.size()[1], 14, device=self.device, dtype=torch.int8
-            )  # 14 is max number of atoms in residue from chroma
-            # assign each residue elements to all atoms
-            seq = self.seq[
-                0, :
-            ]  # TODO: put this in init eventually, going to need to change all instances where dim 1 of seq is accessed
-            for i in range(seq.size()[0]):
-                atoms = AA_GEOMETRY[AA20_3[seq[i]]]["atoms"]
-                residue_elements = bb_elements + [ELEMENTS[a[:1]] for a in atoms]
-                # pad up to 14
-                residue_elements += [5] * (
-                    14 - len(residue_elements)
-                )  # 5 is the "nan" element # TODO: this can be done better I think
-                elements[i] = torch.tensor(residue_elements, device=self.device)
-        else:
-            elements = torch.zeros(
-                self.seq.size()[1], 4, device=self.device, dtype=torch.int8
-            )  # backbone elements
-
-            # assign each residue elements to backbone atoms
-            for i in range(self.seq.size()[1]):
-                elements[i] = torch.tensor(bb_elements, device=self.device)
-        return elements
+        pass # TODO: DELETE AS NO LONGER NEEDED W/O CHROMA
 
     def _gamma(
         self,

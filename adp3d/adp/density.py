@@ -12,7 +12,7 @@ from einops import rearrange
 from adp3d.data.sf import (
     ATOM_STRUCTURE_FACTORS,
     ELECTRON_SCATTERING_FACTORS,
-    IDX_TO_ELEMENT,
+    ATOMIC_NUM_TO_ELEMENT,
 )
 import warnings
 from typing import Union, Tuple, List
@@ -167,9 +167,9 @@ class DensityCalculator(nn.Module):
 
         # element dictionaries
         if torch.jit.is_scripting():
-            self.element_symbols = torch.jit.Attribute(IDX_TO_ELEMENT, List[str])
+            self.element_symbols = torch.jit.Attribute(ATOMIC_NUM_TO_ELEMENT, List[str])
         else:
-            self.element_symbols = IDX_TO_ELEMENT
+            self.element_symbols = ATOMIC_NUM_TO_ELEMENT
 
         self._setup_coeffs()
 
@@ -201,7 +201,7 @@ class DensityCalculator(nn.Module):
         self.aw_dict = {}
         self.bw_dict = {}
 
-        for e in self.element_symbols:
+        for e in self.element_symbols[1:]: # skip ? element
             self.a_dict[e] = torch.tensor(
                 self.sf[e][0][: self._range],
                 device=self.device,
@@ -259,10 +259,6 @@ class DensityCalculator(nn.Module):
                 origin[2], self.grid.unit_cell.c, self.nz, device=self.device
             )
 
-        # grid_z, grid_y, grid_x = torch.meshgrid(z, y, x, indexing="ij")
-        # self.real_grid_flat = rearrange(
-        #     torch.stack([grid_x, grid_y, grid_z], dim=-1), "x y z c -> (x y z) c"
-        # )
         grid_x, grid_y, grid_z = torch.meshgrid(x, y, z, indexing="ij")
         self.real_grid_flat = rearrange(
             torch.stack([grid_x, grid_y, grid_z], dim=-1), "x y z c -> (x y z) c"
@@ -283,9 +279,6 @@ class DensityCalculator(nn.Module):
         )
 
         # Create frequency grid
-        # fzz, fyy, fxx = torch.meshgrid(fz, fy, fx, indexing="ij")
-        # self.freq_grid = torch.stack([fxx, fyy, fzz], dim=-1)
-        # self.freq_norm = torch.linalg.norm(self.freq_grid, dim=-1)
         fxx, fyy, fzz = torch.meshgrid(fx, fy, fz, indexing="ij")
         self.freq_grid = torch.stack([fxx, fyy, fzz], dim=-1)
         self.freq_norm = torch.linalg.norm(self.freq_grid, dim=-1)
@@ -294,7 +287,6 @@ class DensityCalculator(nn.Module):
         self,
         X: torch.Tensor,
         elements: torch.Tensor,
-        C_expand: torch.Tensor,
         chunk_size: int = 1000000,
     ) -> torch.Tensor:
         """Compute density in chunks to reduce memory usage.
@@ -306,8 +298,6 @@ class DensityCalculator(nn.Module):
             Coordinates of atoms. Shape (n_atoms, 3).
         elements : torch.Tensor
             Element indices of atoms.
-        C_expand : torch.Tensor
-            Mask for atoms to include in density calculation depending on chains in protein.
         chunk_size : int
             Number of atoms to process in a single chunk. Lower values reduce memory usage.
 
@@ -319,12 +309,8 @@ class DensityCalculator(nn.Module):
 
         n_chunks = (self.real_grid_flat.shape[0] + chunk_size - 1) // chunk_size
 
-        active_atoms = (elements != 5) & (C_expand == 1)  # (n_active_atoms, )
-        active_X = X[active_atoms]  # (n_active_atoms, 3)
-        active_elements = elements[active_atoms]  # (n_active_atoms, )
-
         atom_symbols = [
-            self.element_symbols[e.item()] for e in active_elements
+            self.element_symbols[e.item()] for e in elements
         ]  # TODO: handle elements better
 
         aw_coeffs = torch.stack(
@@ -343,7 +329,7 @@ class DensityCalculator(nn.Module):
 
             # chunk distances
             distances = torch.cdist(
-                grid_chunk, active_X, p=2.0
+                grid_chunk, X, p=2.0
             )  # (n_grid_points, n_active_atoms)
 
             # flattened chunk grid
@@ -373,7 +359,6 @@ class DensityCalculator(nn.Module):
         self,
         X: torch.Tensor,
         elements: torch.Tensor,
-        C_expand: torch.Tensor,
         chunk_size: int = 1000000,
     ) -> torch.Tensor:
         """Compute Fourier transform of density.
@@ -385,8 +370,6 @@ class DensityCalculator(nn.Module):
             Coordinates of atoms. Shape (n_atoms, 3).
         elements : torch.Tensor
             Element indices of atoms.
-        C_expand : torch.Tensor
-            Mask for atoms to include in density calculation depending on chains in protein.
         chunk_size : int
             Number of atoms to process in a single chunk. Lower values reduce memory usage.
 
@@ -395,13 +378,10 @@ class DensityCalculator(nn.Module):
         torch.Tensor
             Fourier coefficients in 3D array.
         """
-        active_atoms = (elements != 5) & (C_expand == 1)  # (n_active_atoms, )
-        active_X = X[active_atoms]  # (n_active_atoms, 3)
-        active_elements = elements[active_atoms]  # (n_active_atoms, )
 
         atom_symbols = [
-            self.element_symbols[e.item()] for e in active_elements
-        ]  # TODO: handle elements better
+            self.element_symbols[e.item()] for e in elements
+        ] # TODO: handle elements better
 
         a_coeffs = torch.stack(
             [self.a_dict[s] for s in atom_symbols], dim=0
@@ -433,7 +413,7 @@ class DensityCalculator(nn.Module):
             )
 
             phase = (
-                -2j * torch.pi * torch.einsum("fc,ac->fa", freq_chunk, active_X)
+                -2j * torch.pi * torch.einsum("fc,ac->fa", freq_chunk, X)
             )  # (n_freq_points, n_active_atoms)
 
             freq_norm_sq = freq_norm_chunk[:, None, None] ** 2  # (n_freq_points, 1, 1)
@@ -460,7 +440,6 @@ class DensityCalculator(nn.Module):
         self,
         X: torch.Tensor,
         elements: torch.Tensor,
-        C_expand: torch.Tensor,
     ) -> torch.Tensor:
         """Compute electron density map with optimized memory usage.
 
@@ -470,8 +449,6 @@ class DensityCalculator(nn.Module):
             Coordinates of atoms. Shape (n_atoms, 3).
         elements : torch.Tensor
             Element indices of atoms.
-        C_expand : torch.Tensor
-            Mask for atoms to include in density calculation depending on chains in protein.
 
         Returns
         -------
@@ -479,7 +456,7 @@ class DensityCalculator(nn.Module):
             3D density map."""
 
         density_flat = self._compute_density_chunk(
-            X, elements, C_expand, chunk_size=100000
+            X, elements, chunk_size=100000
         )
 
         # Reshape back to 3D
@@ -489,11 +466,10 @@ class DensityCalculator(nn.Module):
         self,
         X: torch.Tensor,
         elements: torch.Tensor,
-        C_expand: torch.Tensor,
     ) -> torch.Tensor:
         """Compute electron density map in Fourier space."""
 
-        f_density = self._compute_f_density_chunk(X, elements, C_expand, chunk_size=100000)
+        f_density = self._compute_f_density_chunk(X, elements, chunk_size=100000)
 
         f_density = f_density.reshape(self.nx, self.ny, self.nz)
         return f_density
@@ -548,9 +524,6 @@ class DensityCalculator(nn.Module):
         if self.filter is None:
             raise ValueError("Filter not set. Run set_filter_and_mask() first.")
 
-        # if f_density.shape != self.filter.shape:
-        #     f_density = f_density.reshape(*self.filter.shape)
-
         f_density *= self.filter
 
         if shape_back:
@@ -571,7 +544,6 @@ class DensityCalculator(nn.Module):
         self,
         X: torch.Tensor,
         elements: torch.Tensor,
-        C_expand: torch.Tensor,
         resolution: float = 2.0,
         real: bool = False,
         to_normalize: bool = False,
@@ -585,8 +557,6 @@ class DensityCalculator(nn.Module):
             Coordinates of atoms, shape (n_atoms, 3).
         elements : torch.Tensor
             Element indices of atoms.
-        C_expand : torch.Tensor
-            Mask for atoms to include in density calculation depending on chains in protein.
         target_density : torch.Tensor
             Target density map.
         resolution : float
@@ -608,13 +578,13 @@ class DensityCalculator(nn.Module):
         self.set_filter_and_mask(resolution)
 
         if real:
-            density = self.compute_density_real(X, elements, C_expand)
+            density = self.compute_density_real(X, elements)
             f_density = to_f_density(density)
             density = torch.abs(
                 to_density(self.apply_filter_and_mask(f_density, shape_back=True))
             )
             return normalize(density) if to_normalize else density
         else:
-            f_density = self.compute_density_fourier(X, elements, C_expand)
+            f_density = self.compute_density_fourier(X, elements)
             f_density = self.apply_filter_and_mask(f_density)
             return normalize(f_density) if to_normalize else f_density

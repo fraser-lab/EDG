@@ -15,6 +15,7 @@ from typing import Union, Tuple
 from adp3d.utils.utility import DotDict
 from Bio.PDB.MMCIF2Dict import MMCIF2Dict
 from chroma.constants import AA20_3, AA_GEOMETRY
+from boltz.data.types import Structure
 
 
 def export_density_map(
@@ -135,3 +136,25 @@ def ma_cif_to_XCS(
         old_idx = idx
 
     return X, C.reshape(1, -1), S.reshape(1, -1)
+
+
+def structure_to_density_input(
+    structure: Structure,
+) -> Tuple[torch.Tensor, torch.Tensor, float]:
+    """Turn a Boltz-1 Structure object into a data needed to compute density and coordinate updates based on density.
+
+    Parameters
+    ----------
+    structure : Structure
+        Boltz-1 Structure object describing the structure.
+
+    Returns
+    -------
+    Tuple[torch.Tensor, torch.Tensor, float]
+        Tensor of Cartesian coordinates, tensor of elements in Boltz-1 elements encoding, and resolution of the structure.
+    """
+    atoms = structure.data.atoms
+    mask_not_present = atoms["is_present"]
+    coords = torch.from_numpy(atoms["coords"][mask_not_present]).float()
+    elements = torch.from_numpy(atoms["element"][mask_not_present]).long()
+    return coords, elements, structure.info.resolution
