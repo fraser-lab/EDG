@@ -178,6 +178,7 @@ tests/adp3d_test.ipynb
 tests/resources/*_bb.*
 *output_test*
 _notebooks/
+_old/
 
 # large files
 *.mrc

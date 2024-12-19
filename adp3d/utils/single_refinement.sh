@@ -1,3 +1,7 @@
+#!/usr/bin/env bash
+
+source /home/misc/software/phenix/phenix-1.21-5190/phenix_env.sh
+
 # Assert required files exist
 mapfile=$1
 pdb=$2
@@ -66,10 +70,12 @@ echo "        labels {" >> ${pdb_name}_single_refine.params
 echo "            name = \"$xray_data_labels\"" >> ${pdb_name}_single_refine.params
 echo "            type = x_ray" >> ${pdb_name}_single_refine.params
 echo "        }" >> ${pdb_name}_single_refine.params
-echo "        labels {" >> ${pdb_name}_single_refine.params
-echo "            name = \"$r_free_flags\"" >> ${pdb_name}_single_refine.params
-echo "            type = x_ray" >> ${pdb_name}_single_refine.params
-echo "        }" >> ${pdb_name}_single_refine.params
+if [ "${gen_Rfree}" = "False" ]; then
+    echo "        labels {" >> ${pdb_name}_single_refine.params
+    echo "            name = \"$r_free_flags\"" >> ${pdb_name}_single_refine.params
+    echo "            type = x_ray" >> ${pdb_name}_single_refine.params
+    echo "        }" >> ${pdb_name}_single_refine.params
+fi
 echo "    }" >> ${pdb_name}_single_refine.params
 echo "    fmodel {" >> ${pdb_name}_single_refine.params
 echo "        xray_data {" >> ${pdb_name}_single_refine.params
