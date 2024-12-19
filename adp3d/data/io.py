@@ -151,10 +151,10 @@ def structure_to_density_input(
     Returns
     -------
     Tuple[torch.Tensor, torch.Tensor, float]
-        Tensor of Cartesian coordinates, tensor of elements in Boltz-1 elements encoding, and resolution of the structure.
+        Tensor of Cartesian coordinates, tensor of elements in Boltz-1 elements encoding, and resolution of the structure (or 2.0 if not present).
     """
     atoms = structure.data.atoms
     mask_not_present = atoms["is_present"]
     coords = torch.from_numpy(atoms["coords"][mask_not_present]).float()
     elements = torch.from_numpy(atoms["element"][mask_not_present]).long()
-    return coords, elements, structure.info.resolution
+    return coords, elements, structure.info.resolution if structure.info.resolution > 0 else 2.0
