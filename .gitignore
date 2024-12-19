@@ -164,13 +164,14 @@ cython_debug/
 # API keys
 key*
 
-# files no longer needed
+# files no longer neededss
 adp3d/utils/qfit_utils.py
 structure_completion_hqs.py
 axel_test.py
 filtering_experiments.ipynb
 *_test.ipynb
 _jh_scripts/
+.status.pkl
 
 # output files
 */output
@@ -179,6 +180,13 @@ tests/resources/*_bb.*
 *output_test*
 _notebooks/
 _old/
+
+# ignore non-cif, pdb, mtz, or param files in tests/resources
+tests/resources/**/*.def
+tests/resources/**/*.eff
+tests/resources/**/*.geo
+tests/resources/**/*.log
+tests/resources/**/*.pdb
 
 # large files
 *.mrc
