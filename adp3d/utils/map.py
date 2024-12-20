@@ -24,7 +24,7 @@ from functools import partial
 @dataclass
 class ProcessingConfig:
     """Configuration for structure factor processing pipeline.
-    
+
     Parameters
     ----------
     output_dir : str
@@ -48,9 +48,11 @@ class ProcessingConfig:
     em : bool, optional
         Whether the input should be processed as a CryoEM map.
     """
+
     output_dir: str
     selection: str
     refinement_script: str
+    map_box_script: str
     ignore_symmetry_conflicts: bool = True
     mask_atoms: bool = True
     wrapping: bool = True
@@ -69,19 +71,20 @@ class ProcessingConfig:
 
 class ProcessingError(Exception):
     """Custom exception for processing errors."""
+
     pass
 
 
 class SFProcessor:
     """Structure factor processing pipeline.
-    
+
     Handles downloading, conversion, refinement, and map calculation for
     structure factor data from the RCSB PDB.
     """
-    
+
     def __init__(self, config: ProcessingConfig):
         """Initialize the processor with configuration.
-        
+
         Parameters
         ----------
         config : ProcessingConfig
@@ -90,10 +93,10 @@ class SFProcessor:
         self.config = config
         self.processed_dir = Path(config.output_dir) / "processed"
         self.processed_dir.mkdir(parents=True, exist_ok=True)
-        
+
         # Setup logging
         self.setup_logging()
-        
+
         # Initialize thread pool for parallel processing
         self.executor = ThreadPoolExecutor(max_workers=config.max_workers)
 
@@ -102,22 +105,19 @@ class SFProcessor:
         self.log_file = self.processed_dir / "processing.log"
         logging.basicConfig(
             level=logging.INFO,
-            format='%(asctime)s - %(levelname)s - %(message)s',
-            handlers=[
-                logging.FileHandler(self.log_file),
-                logging.StreamHandler()
-            ]
+            format="%(asctime)s - %(levelname)s - %(message)s",
+            handlers=[logging.FileHandler(self.log_file), logging.StreamHandler()],
         )
         self.logger = logging.getLogger(__name__)
 
     def process_structures(self, pdb_ids: List[str]) -> Dict[str, bool]:
         """Process multiple structures in parallel.
-        
+
         Parameters
         ----------
         pdb_ids : List[str]
             List of PDB IDs to process.
-            
+
         Returns
         -------
         Dict[str, bool]
@@ -125,11 +125,12 @@ class SFProcessor:
         """
         process_fn = partial(self.process_structure_safe)
         results = {}
-        
+
         with self.executor as executor:
-            futures = {executor.submit(process_fn, pdb_id): pdb_id 
-                      for pdb_id in pdb_ids}
-            
+            futures = {
+                executor.submit(process_fn, pdb_id): pdb_id for pdb_id in pdb_ids
+            }
+
             for future in futures:
                 pdb_id = futures[future]
                 try:
@@ -138,12 +139,12 @@ class SFProcessor:
                 except Exception as e:
                     self.logger.error(f"Failed to process {pdb_id}: {str(e)}")
                     results[pdb_id] = False
-                    
+
         return results
 
     def process_structure_safe(self, pdb_id: str) -> None:
         """Safely process a single structure with error handling.
-        
+
         Parameters
         ----------
         pdb_id : str
@@ -159,7 +160,7 @@ class SFProcessor:
 
     def process_structure(self, pdb_id: str) -> None:
         """Process a single structure through the pipeline.
-        
+
         Parameters
         ----------
         pdb_id : str
@@ -169,21 +170,23 @@ class SFProcessor:
         cif_file = self.download_mmcif(pdb_id)
         mtz_file = self.convert_to_mtz(sf_file)
         self.logger.info(f"Converted {pdb_id} to MTZ: {mtz_file}")
-        
+
         refined_files = self.refine_structure(mtz_file, cif_file)
         p1_mtz = self.expand_to_p1(refined_files["mtz"])
         self.calculate_map(refined_files["cif"], p1_mtz)
 
-    def run_subprocess(self, cmd: List[str], description: str) -> subprocess.CompletedProcess:
+    def run_subprocess(
+        self, cmd: List[str], description: str, log_output: bool = False
+    ) -> subprocess.CompletedProcess:
         """Run a subprocess command with logging.
-        
+
         Parameters
         ----------
         cmd : List[str]
             Command to execute.
         description : str
             Description of the command for logging.
-            
+
         Returns
         -------
         subprocess.CompletedProcess
@@ -196,9 +199,12 @@ class SFProcessor:
                 check=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                text=True
+                text=True,
             )
-            self.logger.debug(f"Command output:\n{result.stdout}")
+            if log_output:
+                self.logger.info(f"Command output:\n{result.stdout}")
+            else:
+                self.logger.debug(f"Command output:\n{result.stdout}")
             return result
         except subprocess.CalledProcessError as e:
             self.logger.error(f"Command failed with exit code {e.returncode}")
@@ -207,12 +213,12 @@ class SFProcessor:
 
     def download_sf(self, pdb_id: str) -> Path:
         """Download structure factors from RCSB.
-        
+
         Parameters
         ----------
         pdb_id : str
             PDB ID to download.
-            
+
         Returns
         -------
         Path
@@ -229,15 +235,15 @@ class SFProcessor:
                 raise ProcessingError(f"Failed to download {pdb_id}") from e
 
         return output_file
-    
+
     def download_mmcif(self, pdb_id: str) -> Path:
         """Download mmCIF file from RCSB.
-        
+
         Parameters
         ----------
         pdb_id : str
             PDB ID to download.
-            
+
         Returns
         -------
         Path
@@ -257,12 +263,12 @@ class SFProcessor:
 
     def convert_to_mtz(self, sf_file: Path) -> Path:
         """Convert structure factor CIF to MTZ.
-        
+
         Parameters
         ----------
         sf_file : Path
             Input CIF file.
-            
+
         Returns
         -------
         Path
@@ -273,24 +279,24 @@ class SFProcessor:
             rblock = gemmi.as_refln_blocks(doc)[0]
             cif2mtz = gemmi.CifToMtz()
             mtz = cif2mtz.convert_block_to_mtz(rblock)
-            
+
             output_file = sf_file.with_suffix(".mtz")
             mtz.write_to_file(str(output_file))
             return output_file
-            
+
         except Exception as e:
             raise ProcessingError(f"Failed to convert {sf_file} to MTZ") from e
 
     def refine_structure(self, mtz_file: Path, cif_file: Path) -> Dict[str, Path]:
         """Refine structure with provided script.
-        
+
         Parameters
         ----------
         mtz_file : Path
             Input MTZ file.
         cif_file : Path
             Downloaded mmCIF file being processed.
-            
+
         Returns
         -------
         Dict[str, Path]
@@ -299,7 +305,7 @@ class SFProcessor:
         cmd = [self.config.refinement_script, str(mtz_file), str(cif_file)]
         self.run_subprocess(cmd, "structure refinement")
 
-        output_prefix = f"{cif_file}-refined"
+        output_prefix = f"{Path(mtz_file).stem}_single_001"
         return {
             "cif": self.processed_dir / f"{output_prefix}.cif",
             "mtz": self.processed_dir / f"{output_prefix}.mtz",
@@ -307,12 +313,12 @@ class SFProcessor:
 
     def expand_to_p1(self, mtz_file: Path) -> Path:
         """Expand MTZ file to P1 space group.
-        
+
         Parameters
         ----------
         mtz_file : Path
             Input MTZ file.
-            
+
         Returns
         -------
         Path
@@ -325,35 +331,35 @@ class SFProcessor:
             output_file = mtz_file.with_name(f"{mtz_file.stem}_P1.mtz")
             mtz.write_to_file(str(output_file))
             return output_file
-            
+
         except Exception as e:
             raise ProcessingError(f"Failed to expand {mtz_file} to P1") from e
 
     def calculate_map(self, model_file: Path, mtz_file: Path) -> Path:
         """Calculate electron density map.
-        
+
         Parameters
         ----------
         model_file : Path
             Input model file.
         mtz_file : Path
             Input MTZ file.
-            
+
         Returns
         -------
         Path
             Path to output map file.
         """
         cmd = [
-            "phenix.map_box",
-            str(model_file),
-            str(mtz_file),
-            f'label={",".join(self.config.mtz_labels)}',
-            f"ignore_symmetry_conflicts={str(self.config.ignore_symmetry_conflicts)}",
-            f"mask_atoms={str(self.config.mask_atoms)}",
-            f"wrapping={str(self.config.wrapping)}",
-            f'selection="{self.config.selection}"',
+            self.config.map_box_script, # this script only outputs in the same directory as it is run, so need stem in the input models
+            str(model_file.name),
+            str(mtz_file.name),
+            ",".join(self.config.mtz_labels),
+            str(self.config.ignore_symmetry_conflicts),
+            str(self.config.mask_atoms),
+            str(self.config.wrapping),
+            f'"{self.config.selection}"',
+            str(model_file.parent), 
         ]
-        
-        self.run_subprocess(cmd, "map calculation")
-        return model_file
+
+        self.run_subprocess(cmd, "map calculation", log_output=True)

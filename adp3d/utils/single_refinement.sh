@@ -1,11 +1,18 @@
 #!/usr/bin/env bash
 
-source /home/misc/software/phenix/phenix-1.21-5190/phenix_env.sh
+source /home/misc/software/phenix/phenix-1.21-5190/phenix_env.sh # TODO: find a fix for this
 
 # Assert required files exist
 mapfile=$1
 pdb=$2
-pdb_name="${mapfile%.mtz}"
+pdb_name="${mapfile%.mtz}" # takes basename from MTZ file
+
+#__________________________________DETECT IF REFINE HAS ALREADY BEEN RUN_____________________________________________
+if [ -f "${pdb_name}_single_001.mtz" ]; then
+  echo >&2 "Refinement has already been run for ${pdb_name}.";
+  echo >&2 "If you want to run it again, please delete the existing ${pdb_name}_single_refine.mtz file.";
+  exit 0;
+fi
 
 #__________________________________DETERMINE RESOLUTION AND (AN)ISOTROPIC REFINEMENT__________________________________
 mtzmetadata=`phenix.mtz.dump "${pdb_name}.mtz"`
