@@ -1,16 +1,24 @@
 #!/usr/bin/env bash
 
-source /home/misc/software/phenix/phenix-1.21-5190/phenix_env.sh # TODO: find a fix for this
+PHENIX_ENV="/home/misc/software/phenix/phenix-1.21-5190/phenix_env.sh" # TODO: set path to phenix environment file
+if [ -f $PHENIX_ENV ]; then
+    source $PHENIX_ENV
+else
+    echo "Error: PHENIX environment file not found at $PHENIX_ENV"
+    exit 1
+fi
 
 # Assert required files exist
 mapfile=$1
 pdb=$2
+fasta=$3
 pdb_name="${mapfile%.mtz}" # takes basename from MTZ file
 
 #__________________________________DETECT IF REFINE HAS ALREADY BEEN RUN_____________________________________________
-if [ -f "${pdb_name}_single_001.mtz" ]; then
+if [ -f "$(dirname ${pdb_name})/processed/$(basename ${pdb_name})_single_001.mtz" ]; then
   echo >&2 "Refinement has already been run for ${pdb_name}.";
-  echo >&2 "If you want to run it again, please delete the existing ${pdb_name}_single_refine.mtz file.";
+  echo >&2 "If you want to run it again, please delete the existing";
+  echo >&2 "$(dirname ${pdb_name})/processed/$(basename ${pdb_name})_single_refine.mtz file.";
   exit 0;
 fi
 
@@ -104,9 +112,26 @@ echo "refinement.refine.${adp}"                  >> ${pdb_name}_single_refine.pa
 echo "refinement.output.write_maps=False"        >> ${pdb_name}_single_refine.params
 echo "refinement.hydrogens.refine=riding"        >> ${pdb_name}_single_refine.params
 echo "refinement.main.ordered_solvent=True"      >> ${pdb_name}_single_refine.params
-echo "refinement.main.nproc=4"                  >> ${pdb_name}_single_refine.params
+echo "refinement.main.nproc=4"                  >> ${pdb_name}_single_refine.params # check nproc
 echo "refinement.main.optimize_mask=True"        >> ${pdb_name}_single_refine.params
 echo "refinement.target_weights.optimize_xyz_weight=true"  >> ${pdb_name}_single_refine.params
 echo "refinement.target_weights.optimize_adp_weight=true"  >> ${pdb_name}_single_refine.params
 
 phenix.refine "${pdb}" "${pdb_name}.mtz" "${pdb_name}_single_refine.params" --overwrite
+
+#__________________________________CLEAN UP__________________________________
+rm -f ${pdb_name}_single_refine.params
+rm -f ${pdb_name}_single_001.log
+rm -f ${pdb_name}_single_001.eff
+rm -f ${pdb_name}_single_001.geo
+rm -f ${pdb_name}_single_002.def
+rm -f ${pdb_name}_single_001.pdb
+rm -f ${pdb_name}_single_data.mtz
+
+PARENT=$(dirname "${pdb}")
+mv $PARENT/*_single_001* $PARENT/processed
+cif_path="${PARENT}/processed/$(basename $pdb_name)_single_001.cif"
+
+#__________________________________PREP SEQUENCE FOR BOLTZ-LIKE PROCESSING__________________________________
+cd $PARENT/processed
+mmtbx.prepare_pdb_deposition "${cif_path}" "${fasta}"

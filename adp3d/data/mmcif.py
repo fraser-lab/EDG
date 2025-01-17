@@ -151,7 +151,7 @@ def get_resolution(block: gemmi.cif.Block) -> float:
         "_reflns.d_resolution_high",
     ):
         with contextlib.suppress(Exception):
-            resolution = float(block.find_value(tag=res_key))
+            resolution = float(block.find([res_key])[0].str(0))
             break
     return resolution
 
@@ -747,7 +747,7 @@ def parse_polymer(  # noqa: C901, PLR0915, PLR0912
         entity=entity,
         residues=parsed,
         type=chain_type,
-        sequence=sequence,
+        sequence=gemmi.one_letter_code(sequence),
     )
 
 
@@ -877,6 +877,7 @@ def parse_mmcif(  # noqa: C901, PLR0915, PLR0912
 
     # Parse entities
     # Create mapping from subchain id to entity
+    structure.setup_entities()
     entities: dict[str, gemmi.Entity] = {}
     entity_ids: dict[str, int] = {}
     for entity_id, entity in enumerate(structure.entities):

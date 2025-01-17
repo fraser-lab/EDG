@@ -1,6 +1,12 @@
 #!/bin/bash
 
-source /home/misc/software/phenix/phenix-1.21-5190/phenix_env.sh # TODO: find a fix for this
+PHENIX_ENV="/home/misc/software/phenix/phenix-1.21-5190/phenix_env.sh" # TODO: set path to phenix environment file
+if [ -f $PHENIX_ENV ]; then
+    source $PHENIX_ENV
+else
+    echo "Error: PHENIX environment file not found at $PHENIX_ENV"
+    exit 1
+fi
 
 model_file=$1
 mtz_file=$2

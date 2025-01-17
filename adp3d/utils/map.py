@@ -12,13 +12,12 @@
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Tuple
 import subprocess
 import urllib.request
 import gemmi
 import logging
-from concurrent.futures import ThreadPoolExecutor
-from functools import partial
+import os
 
 
 @dataclass
@@ -71,7 +70,6 @@ class ProcessingConfig:
 
 class ProcessingError(Exception):
     """Custom exception for processing errors."""
-
     pass
 
 
@@ -91,14 +89,12 @@ class SFProcessor:
             Processing configuration parameters.
         """
         self.config = config
+        self.download_dir = Path(config.output_dir)
         self.processed_dir = Path(config.output_dir) / "processed"
         self.processed_dir.mkdir(parents=True, exist_ok=True)
 
         # Setup logging
         self.setup_logging()
-
-        # Initialize thread pool for parallel processing
-        self.executor = ThreadPoolExecutor(max_workers=config.max_workers)
 
     def setup_logging(self) -> None:
         """Configure logging for the processing pipeline."""
@@ -110,54 +106,6 @@ class SFProcessor:
         )
         self.logger = logging.getLogger(__name__)
 
-    def process_structures(self, pdb_ids: List[str]) -> Dict[str, bool]:
-        """Process multiple structures in parallel.
-
-        Parameters
-        ----------
-        pdb_ids : List[str]
-            List of PDB IDs to process.
-
-        Returns
-        -------
-        Dict[str, bool]
-            Dictionary mapping PDB IDs to processing success status.
-        """
-        process_fn = partial(self.process_structure_safe)
-        results = {}
-
-        with self.executor as executor:
-            futures = {
-                executor.submit(process_fn, pdb_id): pdb_id for pdb_id in pdb_ids
-            }
-
-            for future in futures:
-                pdb_id = futures[future]
-                try:
-                    future.result()
-                    results[pdb_id] = True
-                except Exception as e:
-                    self.logger.error(f"Failed to process {pdb_id}: {str(e)}")
-                    results[pdb_id] = False
-
-        return results
-
-    def process_structure_safe(self, pdb_id: str) -> None:
-        """Safely process a single structure with error handling.
-
-        Parameters
-        ----------
-        pdb_id : str
-            PDB ID to process.
-        """
-        try:
-            self.logger.info(f"Starting processing for {pdb_id}")
-            self.process_structure(pdb_id)
-            self.logger.info(f"Completed processing for {pdb_id}")
-        except Exception as e:
-            self.logger.error(f"Error processing {pdb_id}: {str(e)}")
-            raise ProcessingError(f"Failed to process {pdb_id}") from e
-
     def process_structure(self, pdb_id: str) -> None:
         """Process a single structure through the pipeline.
 
@@ -167,14 +115,14 @@ class SFProcessor:
             PDB ID to process.
         """
         sf_file = self.download_sf(pdb_id)
-        cif_file = self.download_mmcif(pdb_id)
+        cif_file, fasta_file = self.download_mmcif_and_sequence(pdb_id)
         mtz_file = self.convert_to_mtz(sf_file)
         self.logger.info(f"Converted {pdb_id} to MTZ: {mtz_file}")
 
-        refined_files = self.refine_structure(mtz_file, cif_file)
+        refined_files = self.refine_structure(mtz_file, cif_file, fasta_file)
         p1_mtz = self.expand_to_p1(refined_files["mtz"])
         self.calculate_map(refined_files["cif"], p1_mtz)
-
+        
     def run_subprocess(
         self, cmd: List[str], description: str, log_output: bool = False
     ) -> subprocess.CompletedProcess:
@@ -225,7 +173,7 @@ class SFProcessor:
             Path to downloaded file.
         """
         sf_url = f"https://files.rcsb.org/download/{pdb_id}-sf.cif"
-        output_file = self.processed_dir / f"{pdb_id}-sf.cif"
+        output_file = self.download_dir / f"{pdb_id}-sf.cif"
 
         if not output_file.exists():
             try:
@@ -236,8 +184,8 @@ class SFProcessor:
 
         return output_file
 
-    def download_mmcif(self, pdb_id: str) -> Path:
-        """Download mmCIF file from RCSB.
+    def download_mmcif_and_sequence(self, pdb_id: str) -> Tuple[Path, Path]:
+        """Download mmCIF file and FASTA from RCSB.
 
         Parameters
         ----------
@@ -246,11 +194,13 @@ class SFProcessor:
 
         Returns
         -------
-        Path
+        Tuple[Path, Path]
             Path to downloaded file.
         """
         mmcif_url = f"https://files.rcsb.org/download/{pdb_id}.cif"
-        output_file = self.processed_dir / f"{pdb_id}.cif"
+        fasta_url = f"https://www.rcsb.org/fasta/entry/{pdb_id}"
+        output_file = self.download_dir / f"{pdb_id}.cif"
+        fasta_file = self.download_dir / f"{pdb_id}.fa"
 
         if not output_file.exists():
             try:
@@ -258,8 +208,15 @@ class SFProcessor:
                 self.logger.info(f"Downloaded {pdb_id} mmCIF")
             except urllib.error.URLError as e:
                 raise ProcessingError(f"Failed to download {pdb_id}") from e
+            
+        if not fasta_file.exists():
+            try:
+                urllib.request.urlretrieve(fasta_url, fasta_file)
+                self.logger.info(f"Downloaded {pdb_id} FASTA")
+            except urllib.error.URLError as e:
+                raise ProcessingError(f"Failed to download {pdb_id} FASTA") from e
 
-        return output_file
+        return output_file, fasta_file
 
     def convert_to_mtz(self, sf_file: Path) -> Path:
         """Convert structure factor CIF to MTZ.
@@ -287,7 +244,7 @@ class SFProcessor:
         except Exception as e:
             raise ProcessingError(f"Failed to convert {sf_file} to MTZ") from e
 
-    def refine_structure(self, mtz_file: Path, cif_file: Path) -> Dict[str, Path]:
+    def refine_structure(self, mtz_file: Path, cif_file: Path, fasta_file: Path) -> Dict[str, Path]:
         """Refine structure with provided script.
 
         Parameters
@@ -302,7 +259,7 @@ class SFProcessor:
         Dict[str, Path]
             Paths to refined output files.
         """
-        cmd = [self.config.refinement_script, str(mtz_file), str(cif_file)]
+        cmd = [self.config.refinement_script, str(mtz_file), str(cif_file), str(fasta_file)]
         self.run_subprocess(cmd, "structure refinement")
 
         output_prefix = f"{Path(mtz_file).stem}_single_001"

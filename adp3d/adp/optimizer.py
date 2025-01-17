@@ -148,7 +148,8 @@ class DensityGuidedDiffusion:
             real=True,
             to_normalize=True
         )
-        return cos_similarity(model_map, self.y)
+        # SiLU (swish) to penalize the model going out into solvent, but not penalize being not in exactly the density as much
+        return torch.linalg.norm(torch.nn.SiLU(torch.flatten(self.y) - torch.flatten(model_map)))
 
     def optimize( # FIXME: scaffold, doesn't work
         self,
