@@ -134,4 +134,4 @@ cif_path="${PARENT}/processed/$(basename $pdb_name)_single_001.cif"
 
 #__________________________________PREP SEQUENCE FOR BOLTZ-LIKE PROCESSING__________________________________
 cd $PARENT/processed
-mmtbx.prepare_pdb_deposition "${cif_path}" "${fasta}"
+mmtbx.prepare_pdb_deposition "$(basename ${cif_path})" "../$(basename ${fasta})"

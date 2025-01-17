@@ -164,7 +164,7 @@ cython_debug/
 # API keys
 key*
 
-# files no longer neededss
+# files no longer needed
 adp3d/utils/qfit_utils.py
 structure_completion_hqs.py
 axel_test.py
@@ -191,3 +191,6 @@ tests/resources/**/*.pdb
 # large files
 *.mrc
 *.map*
+
+# stuff I don't want on working tree
+future/

@@ -14,7 +14,7 @@ adp = adp3d.ADP3D(density_file, S, structure_file, all_atom=True, em=True)
 epochs = 4000
 lr_m_s_d = [1e-2, 1e-5, 1]
 
-test_prot, loss_m, loss_d, loss_s = adp.model_refinement_optimizer(
+test_prot, loss_m, loss_d, loss_s = adp.model_refinement_optimizer( # loss is multiplied by learning rate here
     epochs=epochs, lr_m_s_d=lr_m_s_d, output_dir=sys.argv[4], map_resolution=3.4
 )
 
