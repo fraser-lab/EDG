@@ -33,23 +33,17 @@ class TestOptimizationsWithSetup:
     @pytest.fixture(autouse=True)
     def setup(self, sim_data_7pzt):
         device = try_gpu()
-        protein = Protein(sim_data_7pzt[0])
-        X, C, S = protein.to_XCS(all_atom=True, device=device)  # backbone coordinates
-        flat_X = rearrange(X, "b r a c -> b (r a) c").squeeze()
-        mask = flat_X != 0
-        values = torch.where(mask, flat_X, torch.tensor(float("nan")))
-        center_shift = torch.nanmean(values, dim=0)
-        X -= center_shift  # centering
-        self.flat_X = rearrange(X, "b r a c -> b (r a) c").squeeze()
+        coords, elements, resolution = structure_to_density_input(sim_data_7pzt[0])
+        self.coords = coords.to(device)
+        self.elements = elements.to(device)
         self.adp = adp3d.ADP3D(
             y=sim_data_7pzt[1],
-            seq=S,
             structure=sim_data_7pzt[0],
             all_atom=True,
             em=True,
             device=device,
         )
-        self.resolution = 2.0
+        self.resolution = resolution
         self.adp.density_calculator.set_filter_and_mask(self.resolution)
         get_to_y = self.adp.density_calculator.apply_filter_and_mask(self.adp.f_y, True)
         self.adp.f_y = self.adp.density_calculator.apply_filter_and_mask(self.adp.f_y, False)
@@ -58,27 +52,27 @@ class TestOptimizationsWithSetup:
 
     @pytest.mark.benchmark(group="ll_density")
     def test_ll_density_real(self, benchmark):
-        flat_X = self.flat_X.clone().detach().requires_grad_(True)
+        coords = self.coords.clone().detach().requires_grad_(True)
         result = benchmark.pedantic(
-            self.adp.density_calculator.forward, args=(flat_X, self.elements, self.resolution, True), iterations=10, rounds=3
+            self.adp.density_calculator.forward, args=(coords, self.elements, self.resolution, True), iterations=10, rounds=3
         )
         assert result is not None
 
     @pytest.mark.benchmark(group="ll_density")
     def test_ll_density_fourier(self, benchmark):
-        flat_X = self.flat_X.clone().detach().requires_grad_(True)
+        coords = self.coords.clone().detach().requires_grad_(True)
         result = benchmark.pedantic(
-            self.adp.density_calculator.forward, args=(flat_X, self.elements, self.resolution, False), iterations=10, rounds=3
+            self.adp.density_calculator.forward, args=(coords, self.elements, self.resolution, False), iterations=10, rounds=3
         )
         assert result is not None
 
     @pytest.mark.benchmark(group="grad_ll_density")
     def test_grad_ll_density_real(self, benchmark):
         def grad_ll_density_real():
-            flat_X = self.flat_X.clone().detach().requires_grad_(True)
-            density = self.adp.density_calculator.forward(flat_X, self.elements, self.resolution, True)
+            coords = self.coords.clone().detach().requires_grad_(True)
+            density = self.adp.density_calculator.forward(coords, self.elements, self.resolution, True)
             loss = torch.sum((self.adp.y - density) ** 2)
-            return torch.autograd.grad(loss, flat_X)[0]
+            return torch.autograd.grad(loss, coords)[0]
         
         result = benchmark.pedantic(
             grad_ll_density_real, iterations=3, rounds=3 # more expensive, so fewer iterations
@@ -89,10 +83,10 @@ class TestOptimizationsWithSetup:
     @pytest.mark.benchmark(group="grad_ll_density")
     def test_grad_ll_density_fourier(self, benchmark):
         def grad_ll_density_fourier():
-            flat_X = self.flat_X.clone().detach().requires_grad_(True)
-            f_density = self.adp.density_calculator.forward(flat_X, self.elements, self.resolution, False)
+            coords = self.coords.clone().detach().requires_grad_(True)
+            f_density = self.adp.density_calculator.forward(coords, self.elements, self.resolution, False)
             loss = torch.sum(torch.abs((torch.flatten(self.adp.f_y) - f_density)))
-            return torch.autograd.grad(loss, flat_X)[0]
+            return torch.autograd.grad(loss, coords)[0]
 
         result = benchmark.pedantic(
             grad_ll_density_fourier, iterations=3, rounds=3 # more expensive, so fewer iterations
