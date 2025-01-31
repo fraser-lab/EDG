@@ -866,7 +866,7 @@ def parse_mmcif(  # noqa: C901, PLR0915, PLR0912
     structure.merge_chain_parts()
     structure.remove_waters()
     structure.remove_hydrogens()
-    structure.remove_alternative_conformations()
+    structure.remove_alternative_conformations() # will need to address this later
     structure.remove_empty_chains()
 
     # Expand assembly 1
@@ -877,7 +877,6 @@ def parse_mmcif(  # noqa: C901, PLR0915, PLR0912
 
     # Parse entities
     # Create mapping from subchain id to entity
-    structure.setup_entities()
     entities: dict[str, gemmi.Entity] = {}
     entity_ids: dict[str, int] = {}
     for entity_id, entity in enumerate(structure.entities):

@@ -23,7 +23,7 @@ from boltz.data.types import Structure
 from adp3d.adp.density import DensityCalculator, normalize, to_f_density
 from adp3d.data.io import export_density_map, structure_to_density_input
 from adp3d.data.mmcif import parse_mmcif
-from adp3d.adp.single_step_diffusion import single_diffusion_step
+from adp3d.adp.diffusion import DiffusionStepper
 from adp3d.utils.utility import try_gpu
 
 @torch.jit.script
@@ -119,6 +119,8 @@ class DensityGuidedDiffusion:
             DensityCalculator(self.grid, self.center_shift, self.device, em=em)
         )
 
+        stepper = DiffusionStepper(Path("~/.boltz/boltz1_conf.pkl"), "data.json") # TODO: FIX
+
     def density_score( # FIXME: scaffold, doesn't work
         self,
         coords: torch.Tensor,
@@ -192,6 +194,8 @@ class DensityGuidedDiffusion:
 
         for i, sigma_t in enumerate(sigmas):
             density_score = self.density_score(coords, elements) # FIXME: update coords with this
+
+
             
             step_coords, _ = single_diffusion_step(
                 self.model,
