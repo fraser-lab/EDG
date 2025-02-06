@@ -1122,11 +1122,11 @@ def parse_mmcif(  # noqa: C901, PLR0915, PLR0912
 
     return ParsedStructure(data=data, info=info)
 
-def residue_to_atom_selector(
+def residue_to_atom_selector( 
+    structure: Structure,
     residue_names: Optional[Union[str, Sequence[str]]] = None,
     residue_indices: Optional[Union[int, Sequence[int]]] = None,
     chain_id: str = "",
-    structure: Structure = None,
     require_present: bool = True
 ) -> NDArray[np.bool_]:
     """Create an atom mask array for specified residues in a given chain.
@@ -1136,14 +1136,14 @@ def residue_to_atom_selector(
     
     Parameters
     ----------
+    structure : Structure
+        Structure containing atom and residue information
     residue_names : Optional[Union[str, Sequence[str]]], optional
         Name or sequence of residue names to select (e.g., ["PHE", "TYR", "TRP"])
     residue_indices : Optional[Union[int, Sequence[int]]], optional
         Index or sequence of residue indices to select, **0 indexed** based on renumbered chain
     chain_id : str
         Chain identifier to select from
-    structure : Structure
-        Structure containing atom and residue information
     require_present : bool, optional
         Only include atoms that are present in structure, by default True
         
@@ -1167,7 +1167,7 @@ def residue_to_atom_selector(
     ...     chain_id="A1",
     ...     structure=structure
     ... )
-    >>> phe_coords = structure.data.atoms["coords"][mask]
+    >>> phe_coords = structure.atoms["coords"][mask]
     """
     if residue_names is None and residue_indices is None:
         raise ValueError("Must provide either residue_names or residue_indices")
@@ -1177,18 +1177,18 @@ def residue_to_atom_selector(
     if isinstance(residue_indices, (int, np.integer)):
         residue_indices = [residue_indices]
         
-    chain_mask = structure.data.chains["name"] == chain_id
+    chain_mask = structure.chains["name"] == chain_id
     if not np.any(chain_mask):
         raise ValueError(
             f"Chain {chain_id} not found in structure. "
-            f"Available chains: {structure.data.chains['name']}"
+            f"Available chains: {structure.chains['name']}"
         )
     chain_idx = np.where(chain_mask)[0][0]
-    chain = structure.data.chains[chain_idx]
+    chain = structure.chains[chain_idx]
     
     res_start = chain["res_idx"] 
     res_end = res_start + chain["res_num"]
-    chain_residues = structure.data.residues[res_start:res_end]
+    chain_residues = structure.residues[res_start:res_end]
     
     res_mask = np.zeros(len(chain_residues), dtype=bool)
     
@@ -1200,7 +1200,7 @@ def residue_to_atom_selector(
         
     if residue_indices is not None:
         max_idx = chain["res_num"] - 1
-        if max(residue_indices) > max_idx:
+        if any(idx > max_idx.item() for idx in residue_indices):
             raise ValueError(
                 f"Residue index {max(residue_indices)} out of range "
                 f"for chain {chain_id} (max: {max_idx})"
@@ -1212,13 +1212,13 @@ def residue_to_atom_selector(
     
     selected_residues = chain_residues[res_mask]
     
-    atom_mask = np.zeros(len(structure.data.atoms), dtype=bool)
+    atom_mask = np.zeros(len(structure.atoms), dtype=bool)
     for residue in selected_residues:
         atom_start = residue["atom_idx"]
         atom_end = atom_start + residue["atom_num"]
         atom_mask[atom_start:atom_end] = True
         
     if require_present:
-        atom_mask &= structure.data.atoms["is_present"]
+        atom_mask &= structure.atoms["is_present"]
         
     return atom_mask
