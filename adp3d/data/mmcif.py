@@ -867,7 +867,7 @@ def parse_mmcif(  # noqa: C901, PLR0915, PLR0912
     structure.merge_chain_parts()
     structure.remove_waters()
     structure.remove_hydrogens()
-    structure.remove_alternative_conformations() # TODO: will need to address this later
+    structure.remove_alternative_conformations()  # TODO: will need to address this later
     structure.remove_empty_chains()
 
     # Expand assembly 1
@@ -1122,18 +1122,19 @@ def parse_mmcif(  # noqa: C901, PLR0915, PLR0912
 
     return ParsedStructure(data=data, info=info)
 
-def residue_to_atom_selector( 
+
+def residue_to_atom_selector(
     structure: Structure,
     residue_names: Optional[Union[str, Sequence[str]]] = None,
     residue_indices: Optional[Union[int, Sequence[int]]] = None,
     chain_id: str = "",
-    require_present: bool = True
+    require_present: bool = True,
 ) -> NDArray[np.bool_]:
     """Create an atom mask array for specified residues in a given chain.
-    
+
     Selects atoms based on residue names and/or 0-indexed indices within a chain.
     Optimized for NumPy operations with efficient boolean array manipulations.
-    
+
     Parameters
     ----------
     structure : Structure
@@ -1146,19 +1147,19 @@ def residue_to_atom_selector(
         Chain identifier to select from
     require_present : bool, optional
         Only include atoms that are present in structure, by default True
-        
+
     Returns
     -------
     numpy.ndarray
         Boolean array mask of length equal to number of atoms in structure
-        
+
     Raises
     ------
     ValueError
         If neither residue_names nor residue_indices is provided
         If specified chain_id is not found
         If specified residue indices are out of range
-        
+
     Examples
     --------
     >>> # Select PHE residues and get coordinates
@@ -1171,12 +1172,12 @@ def residue_to_atom_selector(
     """
     if residue_names is None and residue_indices is None:
         raise ValueError("Must provide either residue_names or residue_indices")
-        
+
     if isinstance(residue_names, str):
         residue_names = [residue_names]
     if isinstance(residue_indices, (int, np.integer)):
         residue_indices = [residue_indices]
-        
+
     chain_mask = structure.chains["name"] == chain_id
     if not np.any(chain_mask):
         raise ValueError(
@@ -1185,19 +1186,19 @@ def residue_to_atom_selector(
         )
     chain_idx = np.where(chain_mask)[0][0]
     chain = structure.chains[chain_idx]
-    
-    res_start = chain["res_idx"] 
+
+    res_start = chain["res_idx"]
     res_end = res_start + chain["res_num"]
     chain_residues = structure.residues[res_start:res_end]
-    
+
     res_mask = np.zeros(len(chain_residues), dtype=bool)
-    
+
     if residue_names is not None:
         name_mask = np.zeros_like(res_mask)
         for name in residue_names:
-            name_mask |= (chain_residues["name"] == name)
+            name_mask |= chain_residues["name"] == name
         res_mask |= name_mask
-        
+
     if residue_indices is not None:
         max_idx = chain["res_num"] - 1
         if any(idx > max_idx.item() for idx in residue_indices):
@@ -1205,20 +1206,23 @@ def residue_to_atom_selector(
                 f"Residue index {max(residue_indices)} out of range "
                 f"for chain {chain_id} (max: {max_idx})"
             )
-        
+
         idx_mask = np.zeros_like(res_mask)
         idx_mask[residue_indices] = True
-        res_mask &= idx_mask if residue_names is not None else idx_mask
-    
+        if residue_names is not None:
+            res_mask &= idx_mask
+        else:
+            res_mask = idx_mask
+
     selected_residues = chain_residues[res_mask]
-    
+
     atom_mask = np.zeros(len(structure.atoms), dtype=bool)
     for residue in selected_residues:
         atom_start = residue["atom_idx"]
         atom_end = atom_start + residue["atom_num"]
         atom_mask[atom_start:atom_end] = True
-        
+
     if require_present:
         atom_mask &= structure.atoms["is_present"]
-        
+
     return atom_mask
