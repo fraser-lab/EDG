@@ -16,6 +16,9 @@ from adp3d.utils.utility import DotDict
 from Bio.PDB.MMCIF2Dict import MMCIF2Dict
 from chroma.constants import AA20_3, AA_GEOMETRY
 from boltz.data.types import Structure
+from pathlib import Path
+from dataclasses import replace
+from boltz.data.write.mmcif import to_mmcif
 
 
 def export_density_map(
@@ -64,10 +67,80 @@ def export_density_map(
     ccp4.write_ccp4_map(output_path)
 
 
+def write_mmcif(
+    coords: torch.Tensor,
+    structure: Structure,
+    output_path: Path,
+    elements: torch.Tensor = None,
+):
+    """
+    Write one or more mmCIF files from a batch of coordinates and a structure.
+
+    Parameters
+    ----------
+    coords : torch.Tensor
+        Tensor of shape [batch, n_atoms, 3] or [n_atoms, 3] containing atomic coordinates.
+    structure : Structure
+        A Structure object containing atom, residue, and chain information.
+    output_path : Path
+        The base file path for the output mmCIF files. For a batch, a suffix
+        '_{batch_index}' will be appended to the base name.
+    elements : torch.Tensor, optional
+        An optional tensor containing atomix numbers for each atom.
+        This can either be of shape [n_atoms] (to be used for all structures) or
+        [batch, n_atoms] (to provide distinct elements per structure).
+    """
+    base_path = Path(output_path)
+    batch_size = coords.shape[0] if coords.ndim == 3 else 1
+    elements_batch_size = elements.shape[0] if elements is not None and elements.ndim == 2 else 1
+
+    if elements is not None and batch_size != elements_batch_size:
+        raise ValueError(
+            f"Batch size or number of atoms in coords and elements must match. coords: {coords.shape} elements: {elements.shape}"
+        )
+
+    for i in range(batch_size):
+        model_coords = coords[i] if batch_size > 1 else coords
+        model_coords_np = (
+            model_coords.cpu().numpy() if model_coords.is_cuda else model_coords.numpy()
+        )
+
+        atoms = structure.atoms.copy()
+        atoms["coords"] = model_coords_np
+        atoms["is_present"] = True
+
+        # If element information is provided, update the atom table accordingly
+        if elements is not None:
+            # If elements are provided for each model separately, use those elements
+            if elements.ndim == 2:
+                elem_tensor = elements[i]
+            else:
+                elem_tensor = elements
+            model_elements_np = (
+                elem_tensor.cpu().numpy()
+                if elem_tensor.is_cuda
+                else elem_tensor.numpy()
+            )
+            atoms["elements"] = model_elements_np
+
+        new_structure = replace(structure, atoms=atoms)
+
+        mmcif_str = to_mmcif(new_structure)
+
+        # Construct the output file path by appending _{i} before the extension
+        new_output_path = base_path.with_name(f"{base_path.stem}_{i}{base_path.suffix}") if batch_size > 1 else base_path
+
+        # Make sure the directory exists
+        new_output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        with new_output_path.open("w") as f:
+            f.write(mmcif_str)
+
+
 def ma_cif_to_XCS(
     path: str, all_atom: bool = False
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Missing atoms CIF to X tensor. Implemented from Axel's code.
+    """Missing atoms CIF to X tensor. Changed from Axel's code.
 
     NOTE: Cannot handle HETATM records.
 
@@ -88,7 +161,9 @@ def ma_cif_to_XCS(
     try:
         label_seq_id = np.array(dict["_atom_site.label_seq_id"], np.int32)
     except ValueError:
-        raise ValueError("label_seq_id contains \".\" characters, suggesting HETATMs are present. This function cannot handle HETATMs.")
+        raise ValueError(
+            'label_seq_id contains "." characters, suggesting HETATMs are present. This function cannot handle HETATMs.'
+        )
 
     label_atom_id = np.array(dict["_atom_site.label_atom_id"])
     label_comp_id = np.array(dict["_atom_site.label_comp_id"])
@@ -111,12 +186,16 @@ def ma_cif_to_XCS(
     for idx, element, aa, chain, x, y, z in zip(
         label_seq_id, label_atom_id, label_comp_id, auth_asym_id, xs, ys, zs
     ):
-        if idx != old_idx: # idx starts at 1, so this will be true for the first atom of each residue
+        if (
+            idx != old_idx
+        ):  # idx starts at 1, so this will be true for the first atom of each residue
             atom_idx = 0
             atoms = AA_GEOMETRY[aa]["atoms"] if all_atom else ["N", "CA", "C", "O"]
 
         if atom_idx >= len(atoms):
-            print(f"Too many atoms for residue {idx}, {aa}, {chain}") # TODO: Fix later with hydrogens??
+            print(
+                f"Too many atoms for residue {idx}, {aa}, {chain}"
+            )  # TODO: Fix later with hydrogens??
             continue
 
         if idx > n_residues:
@@ -140,6 +219,7 @@ def ma_cif_to_XCS(
 
 def structure_to_density_input(
     structure: Structure,
+    coords: torch.Tensor = None,
 ) -> Tuple[torch.Tensor, torch.Tensor, float]:
     """Turn a Boltz-1 Structure object into a data needed to compute density and coordinate updates based on density.
 
@@ -147,6 +227,8 @@ def structure_to_density_input(
     ----------
     structure : Structure
         Boltz-1 Structure object describing the structure.
+    coords : torch.Tensor, optional
+        Cartesian coordinates of atoms in the structure, by default None. Used to initialize density input from diffusion output.
 
     Returns
     -------
@@ -157,4 +239,8 @@ def structure_to_density_input(
     mask_not_present = atoms["is_present"]
     coords = torch.from_numpy(atoms["coords"][mask_not_present]).float()
     elements = torch.from_numpy(atoms["element"][mask_not_present]).long()
-    return coords, elements, structure.info.resolution if structure.info.resolution > 0 else 2.0
+    return (
+        coords,
+        elements,
+        structure.info.resolution if structure.info.resolution > 0 else 2.0,
+    )
