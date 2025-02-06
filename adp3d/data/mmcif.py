@@ -1,6 +1,7 @@
 import contextlib
 from dataclasses import dataclass, replace
-from typing import Optional
+from typing import Optional, Union, Sequence
+from numpy.typing import NDArray
 
 import gemmi
 import numpy as np
@@ -866,7 +867,7 @@ def parse_mmcif(  # noqa: C901, PLR0915, PLR0912
     structure.merge_chain_parts()
     structure.remove_waters()
     structure.remove_hydrogens()
-    structure.remove_alternative_conformations() # will need to address this later
+    structure.remove_alternative_conformations() # TODO: will need to address this later
     structure.remove_empty_chains()
 
     # Expand assembly 1
@@ -1120,3 +1121,104 @@ def parse_mmcif(  # noqa: C901, PLR0915, PLR0912
     )
 
     return ParsedStructure(data=data, info=info)
+
+def residue_to_atom_selector(
+    residue_names: Optional[Union[str, Sequence[str]]] = None,
+    residue_indices: Optional[Union[int, Sequence[int]]] = None,
+    chain_id: str = "",
+    structure: Structure = None,
+    require_present: bool = True
+) -> NDArray[np.bool_]:
+    """Create an atom mask array for specified residues in a given chain.
+    
+    Selects atoms based on residue names and/or 0-indexed indices within a chain.
+    Optimized for NumPy operations with efficient boolean array manipulations.
+    
+    Parameters
+    ----------
+    residue_names : Optional[Union[str, Sequence[str]]], optional
+        Name or sequence of residue names to select (e.g., ["PHE", "TYR", "TRP"])
+    residue_indices : Optional[Union[int, Sequence[int]]], optional
+        Index or sequence of residue indices to select, **0 indexed** based on renumbered chain
+    chain_id : str
+        Chain identifier to select from
+    structure : Structure
+        Structure containing atom and residue information
+    require_present : bool, optional
+        Only include atoms that are present in structure, by default True
+        
+    Returns
+    -------
+    numpy.ndarray
+        Boolean array mask of length equal to number of atoms in structure
+        
+    Raises
+    ------
+    ValueError
+        If neither residue_names nor residue_indices is provided
+        If specified chain_id is not found
+        If specified residue indices are out of range
+        
+    Examples
+    --------
+    >>> # Select PHE residues and get coordinates
+    >>> mask = residue_selector(
+    ...     residue_names="PHE",
+    ...     chain_id="A1",
+    ...     structure=structure
+    ... )
+    >>> phe_coords = structure.data.atoms["coords"][mask]
+    """
+    if residue_names is None and residue_indices is None:
+        raise ValueError("Must provide either residue_names or residue_indices")
+        
+    if isinstance(residue_names, str):
+        residue_names = [residue_names]
+    if isinstance(residue_indices, (int, np.integer)):
+        residue_indices = [residue_indices]
+        
+    chain_mask = structure.data.chains["name"] == chain_id
+    if not np.any(chain_mask):
+        raise ValueError(
+            f"Chain {chain_id} not found in structure. "
+            f"Available chains: {structure.data.chains['name']}"
+        )
+    chain_idx = np.where(chain_mask)[0][0]
+    chain = structure.data.chains[chain_idx]
+    
+    res_start = chain["res_idx"] 
+    res_end = res_start + chain["res_num"]
+    chain_residues = structure.data.residues[res_start:res_end]
+    
+    res_mask = np.zeros(len(chain_residues), dtype=bool)
+    
+    if residue_names is not None:
+        name_mask = np.zeros_like(res_mask)
+        for name in residue_names:
+            name_mask |= (chain_residues["name"] == name)
+        res_mask |= name_mask
+        
+    if residue_indices is not None:
+        max_idx = chain["res_num"] - 1
+        if max(residue_indices) > max_idx:
+            raise ValueError(
+                f"Residue index {max(residue_indices)} out of range "
+                f"for chain {chain_id} (max: {max_idx})"
+            )
+        
+        idx_mask = np.zeros_like(res_mask)
+        idx_mask[residue_indices] = True
+        res_mask &= idx_mask if residue_names is not None else idx_mask
+    
+    selected_residues = chain_residues[res_mask]
+    
+    atom_mask = np.zeros(len(structure.data.atoms), dtype=bool)
+    for residue in selected_residues:
+        atom_start = residue["atom_idx"]
+        atom_end = atom_start + residue["atom_num"]
+        atom_mask[atom_start:atom_end] = True
+        
+    if require_present:
+        atom_mask &= structure.data.atoms["is_present"]
+        
+    return atom_mask
