@@ -13,7 +13,10 @@ from dataclasses import asdict, dataclass
 from adp3d.utils.utility import try_gpu
 from boltz.main import check_inputs, process_inputs, BoltzProcessedInput
 from boltz.data.module.inference import BoltzInferenceDataModule
-from boltz.data.types import Manifest
+from boltz.data.types import Manifest, Structure
+from boltz.data.feature.pad import pad_dim
+import numpy as np
+from numpy.typing import NDArray
 
 
 @dataclass
@@ -21,8 +24,10 @@ class PredictArgs:
     """Arguments for model prediction."""
 
     recycling_steps: int = 3  # default in Boltz1
-    sampling_steps: int = 1
-    diffusion_samples: int = 1 # number of samples you want to generate, will be used as multiplicity
+    sampling_steps: int = 200
+    diffusion_samples: int = (
+        1  # number of samples you want to generate, will be used as multiplicity
+    )
     write_confidence_summary: bool = True
     write_full_pae: bool = False
     write_full_pde: bool = False
@@ -45,6 +50,7 @@ class DiffusionStepper:
         model: Optional[Boltz1] = None,
         use_msa_server: bool = True,
         predict_args: PredictArgs = PredictArgs(),
+        diffusion_args: BoltzDiffusionParams = BoltzDiffusionParams(),
         device: Optional[torch.device] = None,
     ) -> None:
         """Load Boltz-1 pretrained model weights and components from checkpoint.
@@ -63,6 +69,9 @@ class DiffusionStepper:
             Whether to use the MSA server, by default True.
         predict_args : PredictArgs, optional
             Arguments for model prediction, by default PredictArgs().
+        diffusion_args : BoltzDiffusionParams, optional
+            Diffusion parameters, by default BoltzDiffusionParams(). step_scale is most useful,
+            set to a lower value (default 1.638) to get more diversity.
         device : Optional[torch.device], optional
             Device to load the model to, by default None.
 
@@ -77,7 +86,6 @@ class DiffusionStepper:
             checkpoint_path
         ).parent  # NOTE: assumes checkpoint and ccd dictionary get downloaded to the same place
 
-        diffusion_params = BoltzDiffusionParams()
         if model is not None:
             self.model = model.to(self.device).eval()
         else:
@@ -87,7 +95,7 @@ class DiffusionStepper:
                     strict=True,
                     predict_args=asdict(predict_args),
                     map_location="cpu",
-                    diffusion_process_args=asdict(diffusion_params),
+                    diffusion_process_args=asdict(diffusion_args),
                     ema=False,
                 )
                 .to(self.device)
@@ -168,13 +176,13 @@ class DiffusionStepper:
         """
         return self.data_module.transfer_batch_to_device(
             next(iter(self.data_module.predict_dataloader())), self.device, 0
-        )  # NOTE: assumes batch size of 1
+        )  # FIXME: I generally assume batch size of 1, which will break in the future.
 
     def compute_representations(
         self,
         feats: Dict[str, torch.Tensor],
         recycling_steps: Optional[int] = None,
-    ) -> Dict[str, torch.Tensor]:
+    ) -> None:
         """Compute and cache main trunk representations.
 
         Parameters
@@ -183,11 +191,6 @@ class DiffusionStepper:
             Input feats containing model features
         recycling_steps : Optional[int], optional
             Override default number of recycling steps, by default None
-
-        Returns
-        -------
-        Dict[str, torch.Tensor]
-            Dictionary containing cached model representations
         """
         recycling_steps = recycling_steps or self.model.predict_args["recycling_steps"]
 
@@ -234,11 +237,114 @@ class DiffusionStepper:
                 "feats": feats,
             }
 
+    def initialize_partial_diffusion(
+        self,
+        structure: Union[Structure, torch.Tensor],
+        noising_steps: int = 0,
+        num_samples: Optional[int] = None,
+        sampling_steps: Optional[int] = None,
+        selector: NDArray[np.bool_] = None,
+    ) -> None:
+        """
+        Initialize with a partial diffusion setup, starting from some initial set of coordinates. This allows denoising from
+        a partially noised input, which is useful for perturbing from some base set of coordinates for an ensemble.
+
+        Parameters
+        ----------
+        structure : Union[Structure, torch.Tensor]
+            Initial structure or set of atomic coordinates. If not a tensor, it is assumed to
+            have an attribute (e.g. `atom_coords`) that contains the coordinates.
+        noising_steps : int, optional
+            Number of noising steps.
+        num_samples : Optional[int], optional
+            Number of samples to generate (used to determine diffusion multiplicity),
+            by default the value from predict_args.
+        sampling_steps : Optional[int], optional
+            Total number of sampling steps in the diffusion process,
+            by default the value from the model's structure_module.
+        selector : NDArray[np.bool_], optional
+            Selector mask for atoms to be noised, by default None (all atoms are noised).
+        """
+        self.diffusion_trajectory = {}
+
+        batch = self.prepare_feats_from_datamodule_batch()
+        self.compute_representations(batch)
+
+        num_sampling_steps = default(
+            sampling_steps, self.model.structure_module.num_sampling_steps
+        )
+        diffusion_samples = default(
+            num_samples, self.model.predict_args["diffusion_samples"]
+        )
+
+        if noising_steps < 0 or num_sampling_steps - noising_steps <= 0:
+            raise ValueError(
+                f"Invalid number of noising steps: ({noising_steps}) or sampling steps: ({num_sampling_steps})."
+            )
+        self.current_step = num_sampling_steps - noising_steps
+
+        atom_mask = self.cached_representations["feats"]["atom_pad_mask"]
+        atom_mask = atom_mask.repeat_interleave(diffusion_samples, 0)
+
+        shape = (*atom_mask.shape, 3)
+
+        # get the schedule, which is returned as (sigma, gamma) tuple, and pair up with the next sigma and gamma
+        sigmas = self.model.structure_module.sample_schedule(num_sampling_steps)
+        gammas = torch.where(
+            sigmas > self.model.structure_module.gamma_min,
+            self.model.structure_module.gamma_0,
+            0.0,
+        )
+        sigmas_and_gammas = list(zip(sigmas[:-1], sigmas[1:], gammas[1:]))
+
+        # atom position is noise at the beginning
+        atom_coords = (
+            torch.tensor(structure.atoms["coords"], device=self.device)
+            .unsqueeze(0)
+            .repeat(diffusion_samples, 1, 1)
+        )
+        atom_coords = pad_dim(atom_coords, 1, shape[1] - atom_coords.shape[1])
+        eps = self.model.structure_module.noise_scale * sigmas[-noising_steps - 1] * torch.randn(shape, device=self.device)
+
+        if selector is not None:
+            selector = torch.from_numpy(selector).to(self.device)
+            selector = pad_dim(selector, 0, shape[1] - selector.shape[0])
+            atom_coords[:, selector, :] += eps[:, selector, :]
+        else:
+            atom_coords += eps
+
+        atom_coords_denoised = None
+        token_repr = None
+        token_a = None
+
+        self.cached_diffusion_init = {
+            "atom_coords": atom_coords,
+            "atom_mask": atom_mask,
+            "token_repr": token_repr,
+            "token_a": token_a,
+            "atom_coords_denoised": atom_coords_denoised,
+            "sigmas_and_gammas": sigmas_and_gammas,
+            "diffusion_samples": diffusion_samples,
+            "num_sampling_steps": num_sampling_steps,
+        }
+
     def initialize_diffusion(
         self,
         num_samples: Optional[int] = None,
         sampling_steps: Optional[int] = None,
-    ) -> torch.Tensor:
+    ) -> None:
+        """Initialize the diffusion process.
+
+        Parameters
+        ----------
+        num_samples : Optional[int], optional
+            Number of samples to generate, by default the number from predict_args in initialization
+        sampling_steps : Optional[int], optional
+            Number of sampling steps, by default the number from predict_args in initialization
+        """
+
+        self.current_step = 0
+        self.diffusion_trajectory = {}
 
         batch = self.prepare_feats_from_datamodule_batch()
         self.compute_representations(batch)
@@ -285,18 +391,24 @@ class DiffusionStepper:
     def step(
         self,
         atom_coords: torch.Tensor,
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+        return_denoised: bool = False,
+        augmentation: bool = True,
+    ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         """Execute a single diffusion denoising step.
 
         Parameters
         ----------
         atom_coords : torch.Tensor
             Current atomic coordinates of shape (batch, num_atoms, 3)
+        return_denoised : bool, optional
+            Whether to return the fully denoised coordinate prediction, by default False
+        augmentation : bool, optional
+            Whether to apply augmentation, by default True
 
         Returns
         -------
-        torch.Tensor
-            Denoised atomic coordinates after a single step in the trajectory.
+        torch.Tensor or Tuple[torch.Tensor, torch.Tensor]
+            Denoised atomic coordinates after a single step in the trajectory, and optionally the fully denoised coordinate prediction.
         """
         # Get cached representations
         s = self.cached_representations["s"]
@@ -306,7 +418,9 @@ class DiffusionStepper:
             "relative_position_encoding"
         ]
         feats = self.cached_representations["feats"]
-        multiplicity = self.cached_diffusion_init["diffusion_samples"] # batch is regulated by dataloader, this lets you do 
+        multiplicity = self.cached_diffusion_init[
+            "diffusion_samples"
+        ]  # batch is regulated by dataloader, this lets you do ensemble prediction
 
         # Get cached diffusion info
         atom_mask: torch.Tensor = self.cached_diffusion_init["atom_mask"]
@@ -326,15 +440,18 @@ class DiffusionStepper:
             * sqrt(t_hat**2 - sigma_tm**2)
             * torch.randn(atom_coords.shape, device=self.device)
         )
-        atom_coords_noisy = atom_coords + eps
 
-        atom_coords, atom_coords_denoised = center_random_augmentation(
-            atom_coords,
-            atom_mask,
-            augmentation=True,
-            return_second_coords=True,
-            second_coords=atom_coords_denoised,
-        )
+        # NOTE: This might create some interesting pathologies, but in principle this augmentation should not be needed post-training
+        if augmentation:
+            atom_coords, atom_coords_denoised = center_random_augmentation(
+                atom_coords,
+                atom_mask,
+                augmentation=True,
+                return_second_coords=True,
+                second_coords=atom_coords_denoised,
+            )
+
+        atom_coords_noisy = atom_coords + eps
 
         with torch.no_grad():
             atom_coords_denoised, _ = (
@@ -370,11 +487,23 @@ class DiffusionStepper:
             * denoised_over_sigma
         )
 
-        # Store in trajectory
+        pad_mask = feats["atom_pad_mask"].squeeze().bool()
+        unpad_coords_next = atom_coords_next[
+            :, pad_mask, :
+        ]  # unpad the coords to B, N_unpad, 3
+        unpad_coords_denoised = atom_coords_denoised[
+            :, pad_mask, :
+        ]  # unpad the coords to B, N_unpad, 3
+
+        # Store unpadded in trajectory (0 indexed)
         self.diffusion_trajectory[f"step_{self.current_step}"] = {
-            "coords": atom_coords_next.clone(),
-            "denoised": atom_coords_denoised.clone(),
+            "coords": unpad_coords_next.clone(),
+            "denoised": unpad_coords_denoised.clone(),
         }
 
-        self.current_step += 1
-        return atom_coords_denoised
+        self.current_step += 1  # NOTE: current step to execute
+
+        if return_denoised:
+            return atom_coords_next, atom_coords_denoised
+        else:
+            return atom_coords_next
