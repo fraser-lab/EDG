@@ -304,7 +304,12 @@ class DiffusionStepper:
             .repeat(diffusion_samples, 1, 1)
         )
         atom_coords = pad_dim(atom_coords, 1, shape[1] - atom_coords.shape[1])
-        eps = self.model.structure_module.noise_scale * sigmas[-noising_steps - 1] * torch.randn(shape, device=self.device)
+        init_coords = atom_coords.clone()
+        eps = (
+            self.model.structure_module.noise_scale
+            * sigmas[-noising_steps - 1]
+            * torch.randn(shape, device=self.device)
+        )
 
         if selector is not None:
             selector = torch.from_numpy(selector).to(self.device)
@@ -313,16 +318,15 @@ class DiffusionStepper:
         else:
             atom_coords += eps
 
-        atom_coords_denoised = None
         token_repr = None
         token_a = None
 
         self.cached_diffusion_init = {
+            "init_coords": init_coords,
             "atom_coords": atom_coords,
             "atom_mask": atom_mask,
             "token_repr": token_repr,
             "token_a": token_a,
-            "atom_coords_denoised": atom_coords_denoised,
             "sigmas_and_gammas": sigmas_and_gammas,
             "diffusion_samples": diffusion_samples,
             "num_sampling_steps": num_sampling_steps,
@@ -372,17 +376,16 @@ class DiffusionStepper:
         # atom position is noise at the beginning
         init_sigma = sigmas[0]
         atom_coords = init_sigma * torch.randn(shape, device=self.device)
-        atom_coords_denoised = None
 
         token_repr = None
         token_a = None
 
         self.cached_diffusion_init = {
+            "init_coords": None,
             "atom_coords": atom_coords,
             "atom_mask": atom_mask,
             "token_repr": token_repr,
             "token_a": token_a,
-            "atom_coords_denoised": atom_coords_denoised,
             "sigmas_and_gammas": sigmas_and_gammas,
             "diffusion_samples": diffusion_samples,
             "num_sampling_steps": num_sampling_steps,
@@ -393,6 +396,7 @@ class DiffusionStepper:
         atom_coords: torch.Tensor,
         return_denoised: bool = False,
         augmentation: bool = True,
+        align_to_input: bool = True,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         """Execute a single diffusion denoising step.
 
@@ -424,11 +428,6 @@ class DiffusionStepper:
 
         # Get cached diffusion info
         atom_mask: torch.Tensor = self.cached_diffusion_init["atom_mask"]
-        token_repr: torch.Tensor = self.cached_diffusion_init["token_repr"]
-        token_a: torch.Tensor = self.cached_diffusion_init["token_a"]
-        atom_coords_denoised: torch.Tensor = self.cached_diffusion_init[
-            "atom_coords_denoised"
-        ]
         sigma_tm, sigma_t, gamma = self.cached_diffusion_init["sigmas_and_gammas"][
             self.current_step
         ]
@@ -443,12 +442,10 @@ class DiffusionStepper:
 
         # NOTE: This might create some interesting pathologies, but in principle this augmentation should not be needed post-training
         if augmentation:
-            atom_coords, atom_coords_denoised = center_random_augmentation(
+            atom_coords = center_random_augmentation(
                 atom_coords,
                 atom_mask,
                 augmentation=True,
-                return_second_coords=True,
-                second_coords=atom_coords_denoised,
             )
 
         atom_coords_noisy = atom_coords + eps
@@ -487,6 +484,15 @@ class DiffusionStepper:
             * denoised_over_sigma
         )
 
+        # Align to input
+        if align_to_input and self.cached_diffusion_init["init_coords"] is not None:
+            atom_coords_next = weighted_rigid_align(
+                atom_coords_next.float(),
+                self.cached_diffusion_init["init_coords"].float(),
+                atom_mask.float(),
+                atom_mask.float(),
+            ).to(atom_coords_next)
+
         pad_mask = feats["atom_pad_mask"].squeeze().bool()
         unpad_coords_next = atom_coords_next[
             :, pad_mask, :
@@ -498,7 +504,7 @@ class DiffusionStepper:
         # Store unpadded in trajectory (0 indexed)
         self.diffusion_trajectory[f"step_{self.current_step}"] = {
             "coords": unpad_coords_next.clone(),
-            "denoised": unpad_coords_denoised.clone(),
+            "denoised": unpad_coords_denoised.clone(),  # the overall prediction from this current level (no noise mixture)
         }
 
         self.current_step += 1  # NOTE: current step to execute
