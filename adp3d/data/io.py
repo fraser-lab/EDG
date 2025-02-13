@@ -72,7 +72,8 @@ def write_mmcif(
     structure: Structure,
     output_path: Path,
     elements: torch.Tensor = None,
-):
+    return_structure: bool = False,
+) -> None | Structure:
     """
     Write one or more mmCIF files from a batch of coordinates and a structure.
 
@@ -89,6 +90,8 @@ def write_mmcif(
         An optional tensor containing atomix numbers for each atom.
         This can either be of shape [n_atoms] (to be used for all structures) or
         [batch, n_atoms] (to provide distinct elements per structure).
+    return_structure : bool, optional
+        Whether to return the modified Structure object. Defaults to False.
     """
     base_path = Path(output_path)
     batch_size = coords.shape[0] if coords.ndim == 3 else 1
@@ -135,6 +138,9 @@ def write_mmcif(
 
         with new_output_path.open("w") as f:
             f.write(mmcif_str)
+
+    if return_structure:
+        return new_structure
 
 
 def ma_cif_to_XCS(
