@@ -485,7 +485,11 @@ class DiffusionStepper:
         )
 
         # Align to input
-        if align_to_input and self.cached_diffusion_init["init_coords"] is not None:
+        if align_to_input:
+            if self.cached_diffusion_init["init_coords"] is None:
+                raise ValueError(
+                    "No initial input coordinates found in cached diffusion init. Please change from align_to_input if you are not using partial diffusion."
+                )
             atom_coords_next = weighted_rigid_align(
                 atom_coords_next.float(),
                 self.cached_diffusion_init["init_coords"].float(),
