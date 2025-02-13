@@ -11,20 +11,23 @@ Updated: 19 Dec 2024
 from pathlib import Path
 import os
 import pickle
-from typing import Optional, Dict, Tuple
+from typing import Optional, Dict, Tuple, Union, List
 import warnings
 
 import torch
 import torch.nn.functional as F
 import numpy as np
 import gemmi
+from tqdm import tqdm
 
 from boltz.data.types import Structure
+from boltz.main import BoltzDiffusionParams
 from adp3d.adp.density import DensityCalculator, normalize, to_f_density
-from adp3d.data.io import export_density_map, structure_to_density_input
+from adp3d.data.io import export_density_map, structure_to_density_input, write_mmcif
 from adp3d.data.mmcif import parse_mmcif
 from adp3d.adp.diffusion import DiffusionStepper
 from adp3d.utils.utility import try_gpu
+
 
 @torch.jit.script
 def cos_similarity(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
@@ -44,18 +47,23 @@ def cos_similarity(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
         torch.sum(a * torch.conj(b)) / torch.linalg.norm(a) / torch.linalg.norm(b)
     )
 
+
 class DensityGuidedDiffusion:
     """Density-guided diffusion optimizer.
-    
+
     Uses Boltz-1 diffusion model as a prior combined with
     real-space map likelihood for atomic model optimization.
     """
 
     def __init__(
         self,
+        input_path: Path,
         y: str,
         structure: str,
+        output_path: str,
         em: bool = False,
+        step_scale: float = 1.638,  # default step scale, ok results down to 0.8 with higher diversity
+        ckpt_path: Path = Path("~/.boltz/boltz1_conf.pkl").expanduser(),
         device: Optional[str] = None,
     ):
         """Initialize the density-guided diffusion optimizer.
@@ -102,10 +110,14 @@ class DensityGuidedDiffusion:
             )
         elif self.density_extension in (".ccp4", ".map", ".mrc"):
             map = gemmi.read_ccp4_map(y)
-            map.setup(np.nan, gemmi.MapSetup.ReorderOnly) # necessary to get the proper spacing
+            map.setup(
+                np.nan, gemmi.MapSetup.ReorderOnly
+            )  # necessary to get the proper spacing
             self.grid = map.grid
             if map.grid.spacing == (0.0, 0.0, 0.0):
-                raise ValueError("Spacing of the density map is zero. Make sure your input map is properly processed.")
+                raise ValueError(
+                    "Spacing of the density map is zero. Make sure your input map is properly processed."
+                )
             self.y = normalize(
                 torch.from_numpy(np.ascontiguousarray(self.grid.array)).to(
                     self.device, dtype=torch.float32
@@ -119,9 +131,15 @@ class DensityGuidedDiffusion:
             DensityCalculator(self.grid, self.center_shift, self.device, em=em)
         )
 
-        stepper = DiffusionStepper(Path("~/.boltz/boltz1_conf.pkl"), "data.json") # TODO: FIX
+        diffusion_args = BoltzDiffusionParams(step_scale=step_scale)
+        self.stepper = DiffusionStepper(
+            checkpoint_path=ckpt_path,
+            input_path=input_path,
+            out_dir=output_path,
+            diffusion_args=diffusion_args,
+        )
 
-    def density_score( # FIXME: scaffold, doesn't work
+    def density_score(
         self,
         coords: torch.Tensor,
         elements: torch.Tensor,
@@ -144,114 +162,93 @@ class DensityGuidedDiffusion:
             Density correlation score
         """
         model_map = self.density_calculator(
-            coords,
-            elements, 
-            resolution=resolution,
-            real=True,
-            to_normalize=True
-        )
-        # SiLU (swish) to penalize the model going out into solvent, but not penalize being not in exactly the density as much
-        return torch.linalg.norm(torch.nn.SiLU(torch.flatten(self.y) - torch.flatten(model_map)))
+            coords, elements, resolution=resolution, real=True, to_normalize=True
+        )  # TODO: dont use normalization, use e-/A^3
+        return torch.linalg.norm(torch.flatten(self.y) - torch.flatten(model_map))
+        # # SiLU (swish) to penalize the model going out into solvent, but not penalize being not in exactly the density as much
+        # return torch.linalg.norm(torch.nn.SiLU(torch.flatten(self.y) - torch.flatten(model_map)))
 
-    def optimize( # FIXME: scaffold, doesn't work
+    def optimize(  # TODO: compare score based guidance to DPS and DMAP
         self,
-        num_steps: int = 100,
-        start_sigma: float = 2.0,
-        final_sigma: float = 0.1, 
-        density_weight: float = 1.0,
-        output_dir: Optional[str] = None,
+        output_dir: str,
+        num_steps: int = 200,
+        num_samples: int = 1,
+        learning_rate: Union[List, float] = 1e-3,
+        partial_diffusion: bool = False,
+        **diffusion_kwargs,
     ) -> Structure:
         """Run density-guided optimization.
 
         Parameters
         ----------
+        output_dir : str
+            Output directory for optimized structure
         num_steps : int, optional
-            Number of optimization steps, by default 100
-        start_sigma : float, optional
-            Initial noise level, by default 2.0
-        final_sigma : float, optional
-            Final noise level, by default 0.1
-        density_weight : float, optional
-            Weight for density score, by default 1.0
-        output_dir : Optional[str], optional
-            Directory to save intermediate structures, by default None
+            Number of optimization steps, by default 200
+        num_samples : int, optional
+            Size of ensemble to generate, by default 1
+        learning_rate : Union[List, float], optional
+            Learning rate for density optimization, by default 1e-3
+        partial_diffusion : bool, optional
+            Whether to use partial diffusion, by default False
+        **diffusion_kwargs : Dict[str, Any]
+            Additional arguments for partial diffusion. May include:
+                - noising_steps : int
+                    Number of steps for noise addition, 25-30% of num_steps works well
+                - structure_input : Structure
+                    Input structure for partial diffusion
+                - segment_selection : List[int]
+                    Indices of segments for selective diffusion
 
         Returns
         -------
         Structure
             Optimized structure
         """
-        if output_dir:
-            os.makedirs(output_dir, exist_ok=True)
+        os.makedirs(output_dir, exist_ok=True)
 
-        coords, elements, _ = structure_to_density_input(self.structure) 
+        coords, elements, resolution = structure_to_density_input(self.structure)
+
+        if resolution == 0.0:
+            warnings.warn(f"Resolution of input structure is {resolution}. Using 2.0 A instead.")
+
         coords = coords.to(self.device)
         elements = elements.to(self.device)
-        
-        sigmas = torch.exp(torch.linspace(
-            np.log(start_sigma), np.log(final_sigma), num_steps
-        ))
 
-        for i, sigma_t in enumerate(sigmas):
-            density_score = self.density_score(coords, elements) # FIXME: update coords with this
-
-
-            
-            step_coords, _ = single_diffusion_step(
-                self.model,
-                coords,
-                torch.ones_like(coords[..., 0]),
-                sigma_t.item(),
-                network_kwargs={"coords": coords},
+        if partial_diffusion:
+            self.stepper.initialize_partial_diffusion(
+                num_samples=num_samples, sampling_steps=num_steps, **diffusion_kwargs
+            )
+        else:
+            self.stepper.initialize_diffusion(
+                num_samples=num_samples, sampling_steps=num_steps
             )
 
-            coords = (1 - density_weight) * step_coords + density_weight * coords
+        step_coords = self.stepper.cached_diffusion_init["atom_coords"]
 
-            if output_dir and i % 10 == 0:
-                self.save_structure(coords, elements, f"{output_dir}/step_{i}.cif")
+        pbar = tqdm(range(num_steps), desc="Optimizing structure")
+        for i in pbar:
+            step_lr = (
+                learning_rate if isinstance(learning_rate, float) else learning_rate[i]
+            )
 
-        final_structure = self.update_structure(coords, elements)
-        return final_structure
+            step_coords = self.stepper.step(
+                step_coords, augmentation=True, align_to_input=True
+            )
 
-    def save_structure( # FIXME: scaffold, doesn't work
-        self,
-        coords: torch.Tensor,
-        elements: torch.Tensor, 
-        path: str
-    ) -> None:
-        """Save current structure to file.
+            with torch.enable_grad():
+                coords_to_grad = step_coords.clone().detach().requires_grad_(True)
+                density_score = self.density_score(
+                    coords_to_grad, elements, resolution
+                )
+                density_score.backward()
 
-        Parameters
-        ----------
-        coords : torch.Tensor
-            Current atomic coordinates
-        elements : torch.Tensor
-            Element types for each atom
-        path : str
-            Output file path
-        """
-        structure = self.update_structure(coords, elements)
-        structure.to_file(path)
+            coords_grad = coords_to_grad.grad
 
-    def update_structure( # FIXME: scaffold, doesn't work
-        self,
-        coords: torch.Tensor,
-        elements: torch.Tensor
-    ) -> Structure:
-        """Update structure with new coordinates.
+            step_coords = 0.9 * step_coords - step_lr * coords_grad # FIXME: 0.9 is momentum, somewhat arbitrary
 
-        Parameters
-        ----------
-        coords : torch.Tensor
-            New atomic coordinates
-        elements : torch.Tensor
-            Element types for each atom
+            if i % 10 == 0:
+                write_mmcif(step_coords, elements, f"{output_dir}/step_{i}.cif")
 
-        Returns
-        -------
-        Structure
-            Updated structure object
-        """
-        structure = self.structure.copy()
-        structure.coords = coords.cpu().numpy()
+        structure = write_mmcif(step_coords, elements, f"{output_dir}/final.cif", return_structure=True)
         return structure
