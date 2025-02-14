@@ -295,9 +295,9 @@ class DensityCalculator(nn.Module):
         ----------
 
         X : torch.Tensor
-            Coordinates of atoms. Shape (n_atoms, 3).
+            Coordinates of atoms. Shape (batch, n_atoms, 3).
         elements : torch.Tensor
-            Element indices of atoms.
+            Element indices of atoms. Shape (n_atoms,) or (batch, n_atoms)
         chunk_size : int
             Number of atoms to process in a single chunk. Lower values reduce memory usage.
 
@@ -306,12 +306,12 @@ class DensityCalculator(nn.Module):
         torch.Tensor
             Flattened density map with all chunks combined.
         """
-
+        batch_size = X.shape[0]
         n_chunks = (self.real_grid_flat.shape[0] + chunk_size - 1) // chunk_size
 
         atom_symbols = [
             self.element_symbols[e.item()] for e in elements
-        ]  # TODO: handle elements better
+        ] # TODO: handle elements better
 
         aw_coeffs = torch.stack(
             [self.aw_dict[s] for s in atom_symbols], dim=0
@@ -578,11 +578,7 @@ class DensityCalculator(nn.Module):
         self.set_filter_and_mask(resolution)
 
         if real:
-            density = self.compute_density_real(X, elements)
-            f_density = to_f_density(density)
-            density = torch.abs(
-                to_density(self.apply_filter_and_mask(f_density, shape_back=True))
-            )
+            density = self.compute_density_real(X, elements) # no filtering
             return normalize(density) if to_normalize else density
         else:
             f_density = self.compute_density_fourier(X, elements)

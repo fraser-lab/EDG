@@ -11,7 +11,7 @@ Updated: 19 Dec 2024
 from pathlib import Path
 import os
 import pickle
-from typing import Optional, Dict, Tuple, Union, List
+from typing import Optional, Union, List
 import warnings
 
 import torch
@@ -22,6 +22,8 @@ from tqdm import tqdm
 
 from boltz.data.types import Structure
 from boltz.main import BoltzDiffusionParams
+from boltz.model.model import Boltz1
+from boltz.data.feature.pad import pad_dim
 from adp3d.adp.density import DensityCalculator, normalize, to_f_density
 from adp3d.data.io import export_density_map, structure_to_density_input, write_mmcif
 from adp3d.data.mmcif import parse_mmcif
@@ -64,20 +66,46 @@ class DensityGuidedDiffusion:
         em: bool = False,
         step_scale: float = 1.638,  # default step scale, ok results down to 0.8 with higher diversity
         ckpt_path: Path = Path("~/.boltz/boltz1_conf.pkl").expanduser(),
+        model: Optional[Boltz1] = None,
+        ccd_path: Path = Path("~/.boltz/ccd.pkl").expanduser(),
         device: Optional[str] = None,
     ):
         """Initialize the density-guided diffusion optimizer.
 
         Parameters
         ----------
+        input_path : Path
+            Path to input data directory
         y : str
-            Path to the density map (MRC/CCP4 format)
+            Path to the density map file (CCP4, MRC, SF-CIF, or MTZ format)
         structure : str
-            Path to the input structure (mmCIF format)
+            Path to the structure file in mmCIF format
+        output_path : str
+            Directory path for output files
         em : bool, optional
-            Whether map is from electron microscopy, by default False
-        device : Optional[str], optional
-            Device to run optimization on, by default None
+            Flag for electron microscopy mode, by default False
+        step_scale : float, optional
+            Scale factor for diffusion steps, by default 1.638
+        ckpt_path : Path, optional
+            Path to the Boltz1 model checkpoint, by default "~/.boltz/boltz1_conf.pkl"
+        model : Boltz1, optional
+            Pre-loaded Boltz1 model instance, by default None
+        ccd_path : Path, optional
+            Path to the CCD dictionary file, by default "~/.boltz/ccd.pkl"
+        device : str, optional
+            Device to run computations on ('cpu', 'cuda', etc.), by default None
+
+        Raises
+        ------
+        ValueError
+            If density map spacing is zero or if unsupported file format is provided
+        NotImplementedError
+            If MTZ or SF-CIF files are provided (currently unsupported)
+
+        Notes
+        -----
+        Density map must be in CCP4, MRC, SF-CIF, or MTZ format.
+        Currently, MTZ and SF-CIF formats are not supported for density input.
         """
         if device is None:
             self.device = try_gpu()
@@ -88,14 +116,14 @@ class DensityGuidedDiffusion:
 
         self.em = em
 
-        ccd_path = Path("~/.boltz/ccd.pkl").expanduser()
         with ccd_path.open("rb") as f:
             ccd = pickle.load(f)
         self.structure = parse_mmcif(structure, ccd)
 
-        coords, _, _ = structure_to_density_input(self.structure)
+        # coords, _, _ = structure_to_density_input(self.structure)
         # self.center_shift = torch.mean(coords, dim=0) # FIXME: doesn't quite work right now for unknown reason
         # ^ not sure if we want to do this because we have possible spacegroup issues
+        self.center_shift = torch.zeros(3, device=self.device)
 
         self.density_extension = os.path.splitext(y)[1]
         if self.density_extension not in (".ccp4", ".map", ".mtz", ".cif"):
@@ -134,9 +162,11 @@ class DensityGuidedDiffusion:
         diffusion_args = BoltzDiffusionParams(step_scale=step_scale)
         self.stepper = DiffusionStepper(
             checkpoint_path=ckpt_path,
-            input_path=input_path,
+            data_path=input_path,
             out_dir=output_path,
             diffusion_args=diffusion_args,
+            device=self.device,
+            model=model,
         )
 
     def density_score(
@@ -164,7 +194,7 @@ class DensityGuidedDiffusion:
         model_map = self.density_calculator(
             coords, elements, resolution=resolution, real=True, to_normalize=True
         )  # TODO: dont use normalization, use e-/A^3
-        return torch.linalg.norm(torch.flatten(self.y) - torch.flatten(model_map))
+        return torch.linalg.norm(torch.flatten(model_map) - torch.flatten(self.y))
         # # SiLU (swish) to penalize the model going out into solvent, but not penalize being not in exactly the density as much
         # return torch.linalg.norm(torch.nn.SiLU(torch.flatten(self.y) - torch.flatten(model_map)))
 
@@ -175,7 +205,7 @@ class DensityGuidedDiffusion:
         num_samples: int = 1,
         learning_rate: Union[List, float] = 1e-3,
         partial_diffusion: bool = False,
-        **diffusion_kwargs,
+        diffusion_kwargs: dict = None,
     ) -> Structure:
         """Run density-guided optimization.
 
@@ -185,19 +215,19 @@ class DensityGuidedDiffusion:
             Output directory for optimized structure
         num_steps : int, optional
             Number of optimization steps, by default 200
-        num_samples : int, optional
+        num_sample  : int, optional
             Size of ensemble to generate, by default 1
         learning_rate : Union[List, float], optional
             Learning rate for density optimization, by default 1e-3
         partial_diffusion : bool, optional
             Whether to use partial diffusion, by default False
-        **diffusion_kwargs : Dict[str, Any]
+        diffusion_kwargs : Dict[str, Any]
             Additional arguments for partial diffusion. May include:
                 - noising_steps : int
                     Number of steps for noise addition, 25-30% of num_steps works well
-                - structure_input : Structure
+                - structure : Structure
                     Input structure for partial diffusion
-                - segment_selection : List[int]
+                - selection : List[int]
                     Indices of segments for selective diffusion
 
         Returns
@@ -210,7 +240,9 @@ class DensityGuidedDiffusion:
         coords, elements, resolution = structure_to_density_input(self.structure)
 
         if resolution == 0.0:
-            warnings.warn(f"Resolution of input structure is {resolution}. Using 2.0 A instead.")
+            warnings.warn(
+                f"Resolution of input structure is {resolution}. Using 2.0 A instead."
+            )
 
         coords = coords.to(self.device)
         elements = elements.to(self.device)
@@ -225,8 +257,21 @@ class DensityGuidedDiffusion:
             )
 
         step_coords = self.stepper.cached_diffusion_init["atom_coords"]
+        pad_mask = (
+            self.stepper.cached_representations["feats"]["atom_pad_mask"]
+            .squeeze()
+            .bool()
+        )
 
-        pbar = tqdm(range(num_steps), desc="Optimizing structure")
+        v_density = torch.zeros_like(step_coords)
+        scores = []
+
+        if partial_diffusion:
+            pbar = tqdm(
+                range(diffusion_kwargs["noising_steps"]), desc="Optimizing structure"
+            )
+        else:
+            pbar = tqdm(range(num_steps), desc="Optimizing structure")
         for i in pbar:
             step_lr = (
                 learning_rate if isinstance(learning_rate, float) else learning_rate[i]
@@ -236,19 +281,53 @@ class DensityGuidedDiffusion:
                 step_coords, augmentation=True, align_to_input=True
             )
 
-            with torch.enable_grad():
-                coords_to_grad = step_coords.clone().detach().requires_grad_(True)
-                density_score = self.density_score(
-                    coords_to_grad, elements, resolution
-                )
+            with torch.set_grad_enabled(True):  # Explicit gradient context
+                masked_coords = step_coords.clone().squeeze()[pad_mask, :]
+                coords_to_grad = masked_coords.detach().clone()
+                coords_to_grad.requires_grad_(True)
+
+                density_score = self.density_score(coords_to_grad, elements, resolution)
                 density_score.backward()
 
-            coords_grad = coords_to_grad.grad
+                if coords_to_grad.grad is None:
+                    raise ValueError(
+                        "Gradient computation failed - tensor is not a leaf"
+                    )
 
-            step_coords = 0.9 * step_coords - step_lr * coords_grad # FIXME: 0.9 is momentum, somewhat arbitrary
+                # Create gradient update tensor of original shape
+                full_grad = torch.zeros_like(step_coords.squeeze())
+                full_grad[pad_mask, :] = coords_to_grad.grad
 
-            if i % 10 == 0:
-                write_mmcif(step_coords, elements, f"{output_dir}/step_{i}.cif")
+            pbar.set_postfix(
+                {
+                    "score": f"{density_score.item():.4f}",
+                }
+            )
+            scores.append(density_score.item())
 
-        structure = write_mmcif(step_coords, elements, f"{output_dir}/final.cif", return_structure=True)
-        return structure
+            v_density = 0.9 * v_density + step_lr * full_grad.unsqueeze(0)
+            step_coords = step_coords - v_density
+
+            # step_coords = step_coords - step_lr * full_grad.unsqueeze(
+            #     0
+            # )
+
+            write_mmcif(
+                self.stepper.diffusion_trajectory[
+                    f"step_{self.stepper.current_step - 1}"
+                ]["coords"],
+                self.structure.data,
+                f"{output_dir}/step_{self.stepper.current_step - 1}.cif",
+                elements,
+            )
+
+        structure = write_mmcif(
+            self.stepper.diffusion_trajectory[f"step_{self.stepper.current_step - 1}"][
+                "coords"
+            ],
+            self.structure.data,
+            f"{output_dir}/final.cif",
+            elements,
+            return_structure=True,
+        )
+        return structure, scores
