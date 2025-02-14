@@ -6,15 +6,11 @@ Date: 22 Nov 2024
 Updated: 22 Nov 2024
 """
 
-import os
-import subprocess
 import gemmi
 import torch
 import numpy as np
 from typing import Union, Tuple
 from adp3d.utils.utility import DotDict
-from Bio.PDB.MMCIF2Dict import MMCIF2Dict
-from chroma.constants import AA20_3, AA_GEOMETRY
 from boltz.data.types import Structure
 from pathlib import Path
 from dataclasses import replace
@@ -124,7 +120,7 @@ def write_mmcif(
                 if elem_tensor.is_cuda
                 else elem_tensor.numpy()
             )
-            atoms["elements"] = model_elements_np
+            atoms["element"] = model_elements_np
 
         new_structure = replace(structure, atoms=atoms)
 
@@ -143,84 +139,84 @@ def write_mmcif(
         return new_structure
 
 
-def ma_cif_to_XCS(
-    path: str, all_atom: bool = False
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Missing atoms CIF to X tensor. Changed from Axel's code.
+# def ma_cif_to_XCS(
+#     path: str, all_atom: bool = False
+# ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+#     """Missing atoms CIF to X tensor. Changed from Axel's code.
 
-    NOTE: Cannot handle HETATM records.
+#     NOTE: Cannot handle HETATM records.
 
-    Parameters
-    ----------
-    path : str
-        path to the missing atoms CIF file
-    all_atom : bool, optional
-        whether to use all atoms, by default False
+#     Parameters
+#     ----------
+#     path : str
+#         path to the missing atoms CIF file
+#     all_atom : bool, optional
+#         whether to use all atoms, by default False
 
-    Returns
-    -------
-    Tuple[Tensor, Tensor, Tensor]
-        X tensor, C tensor, and S tensor
-    """
-    dict = MMCIF2Dict(path)
+#     Returns
+#     -------
+#     Tuple[Tensor, Tensor, Tensor]
+#         X tensor, C tensor, and S tensor
+#     """
+#     dict = MMCIF2Dict(path)
 
-    try:
-        label_seq_id = np.array(dict["_atom_site.label_seq_id"], np.int32)
-    except ValueError:
-        raise ValueError(
-            'label_seq_id contains "." characters, suggesting HETATMs are present. This function cannot handle HETATMs.'
-        )
+#     try:
+#         label_seq_id = np.array(dict["_atom_site.label_seq_id"], np.int32)
+#     except ValueError:
+#         raise ValueError(
+#             'label_seq_id contains "." characters, suggesting HETATMs are present. This function cannot handle HETATMs.'
+#         )
 
-    label_atom_id = np.array(dict["_atom_site.label_atom_id"])
-    label_comp_id = np.array(dict["_atom_site.label_comp_id"])
-    auth_asym_id = np.array(dict["_atom_site.auth_asym_id"])
-    xs = np.array(dict["_atom_site.Cartn_x"])
-    ys = np.array(dict["_atom_site.Cartn_y"])
-    zs = np.array(dict["_atom_site.Cartn_z"])
+#     label_atom_id = np.array(dict["_atom_site.label_atom_id"])
+#     label_comp_id = np.array(dict["_atom_site.label_comp_id"])
+#     auth_asym_id = np.array(dict["_atom_site.auth_asym_id"])
+#     xs = np.array(dict["_atom_site.Cartn_x"])
+#     ys = np.array(dict["_atom_site.Cartn_y"])
+#     zs = np.array(dict["_atom_site.Cartn_z"])
 
-    label_seq_id = label_seq_id - np.min(label_seq_id) + 1  # always start from 1
-    n_residues = int(np.max(label_seq_id))
+#     label_seq_id = label_seq_id - np.min(label_seq_id) + 1  # always start from 1
+#     n_residues = int(np.max(label_seq_id))
 
-    X = torch.zeros(1, n_residues, 14 if all_atom else 4, 3).float()
-    C = -torch.ones(n_residues).float()
-    S = torch.zeros(n_residues).long()
+#     X = torch.zeros(1, n_residues, 14 if all_atom else 4, 3).float()
+#     C = -torch.ones(n_residues).float()
+#     S = torch.zeros(n_residues).long()
 
-    chain_ids = {c: i + 1 for i, c in enumerate(np.unique(auth_asym_id))}
-    atom_idx = 0
-    old_idx = 0
+#     chain_ids = {c: i + 1 for i, c in enumerate(np.unique(auth_asym_id))}
+#     atom_idx = 0
+#     old_idx = 0
 
-    for idx, element, aa, chain, x, y, z in zip(
-        label_seq_id, label_atom_id, label_comp_id, auth_asym_id, xs, ys, zs
-    ):
-        if (
-            idx != old_idx
-        ):  # idx starts at 1, so this will be true for the first atom of each residue
-            atom_idx = 0
-            atoms = AA_GEOMETRY[aa]["atoms"] if all_atom else ["N", "CA", "C", "O"]
+#     for idx, element, aa, chain, x, y, z in zip(
+#         label_seq_id, label_atom_id, label_comp_id, auth_asym_id, xs, ys, zs
+#     ):
+#         if (
+#             idx != old_idx
+#         ):  # idx starts at 1, so this will be true for the first atom of each residue
+#             atom_idx = 0
+#             atoms = AA_GEOMETRY[aa]["atoms"] if all_atom else ["N", "CA", "C", "O"]
 
-        if atom_idx >= len(atoms):
-            print(
-                f"Too many atoms for residue {idx}, {aa}, {chain}"
-            )  # TODO: Fix later with hydrogens??
-            continue
+#         if atom_idx >= len(atoms):
+#             print(
+#                 f"Too many atoms for residue {idx}, {aa}, {chain}"
+#             )  # TODO: Fix later with hydrogens??
+#             continue
 
-        if idx > n_residues:
-            break
+#         if idx > n_residues:
+#             break
 
-        coords = torch.tensor([float(x), float(y), float(z)]).float()
-        res_idx = int(idx) - 1
+#         coords = torch.tensor([float(x), float(y), float(z)]).float()
+#         res_idx = int(idx) - 1
 
-        if element == atoms[atom_idx]:
-            X[0, res_idx, atom_idx] = coords
-            atom_idx += 1
+#         if element == atoms[atom_idx]:
+#             X[0, res_idx, atom_idx] = coords
+#             atom_idx += 1
 
-        C[res_idx] = chain_ids[chain]
-        if aa in AA20_3:
-            S[res_idx] = AA20_3.index(aa)
+#         C[res_idx] = chain_ids[chain]
+#         if aa in AA20_3:
+#             S[res_idx] = AA20_3.index(aa)
 
-        old_idx = idx
+#         old_idx = idx
 
-    return X, C.reshape(1, -1), S.reshape(1, -1)
+#     return X, C.reshape(1, -1), S.reshape(1, -1)
 
 
 def structure_to_density_input(
