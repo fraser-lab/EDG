@@ -228,7 +228,7 @@ class DensityGuidedDiffusion:
                     Number of steps for noise addition, 25-30% of num_steps works well
                 - structure : Structure
                     Input structure for partial diffusion
-                - selection : List[int]
+                - selector : List[int]
                     Indices of segments for selective diffusion
 
         Returns
@@ -296,8 +296,8 @@ class DensityGuidedDiffusion:
                 full_grad[pad_mask, :] = coords_to_grad.grad
 
                 # only do gradient on partially diffused atoms
-                if diffusion_kwargs["selection"] is not None:
-                    selector = torch.from_numpy(selector).to(self.device)
+                if diffusion_kwargs["selector"] is not None:
+                    selector = torch.from_numpy(diffusion_kwargs["selector"]).to(self.device)
                     selector = pad_dim(selector, 0, step_coords.shape[1] - selector.shape[0])
                     full_grad[~selector, :] = 0
 
