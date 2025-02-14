@@ -1,3 +1,18 @@
-generate-chroma
+# requires python=3.10.*
+biopython
+# boltz (I use editable install for my modifications)
+einops
+gemmi==0.6.7 # TODO: currently 0.6.7 works, new python bindings break the later versions for parse_mmcif
+matplotlib
+mrcfile
+numpy
+pandas
 pytest
+rdkit
+redis
+scikit_learn
+scipy
+setuptools
+# SFcalculator_torch
+torch>=2.5.1
 tqdm
