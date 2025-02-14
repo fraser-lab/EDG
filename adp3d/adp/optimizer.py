@@ -27,7 +27,7 @@ from boltz.data.feature.pad import pad_dim
 from adp3d.adp.density import DensityCalculator, normalize, to_f_density
 from adp3d.data.io import export_density_map, structure_to_density_input, write_mmcif
 from adp3d.data.mmcif import parse_mmcif
-from adp3d.adp.diffusion import DiffusionStepper
+from adp3d.adp.diffusion import DiffusionStepper, DensityGuidedDiffusionStepper
 from adp3d.utils.utility import try_gpu
 
 
@@ -160,7 +160,7 @@ class DensityGuidedDiffusion:
         )
 
         diffusion_args = BoltzDiffusionParams(step_scale=step_scale)
-        self.stepper = DiffusionStepper(
+        self.stepper = DensityGuidedDiffusionStepper(
             checkpoint_path=ckpt_path,
             data_path=input_path,
             out_dir=output_path,
@@ -174,6 +174,7 @@ class DensityGuidedDiffusion:
         coords: torch.Tensor,
         elements: torch.Tensor,
         resolution: float = 2.0,
+        norm: int = 1,
     ) -> torch.Tensor:
         """Calculate density score for current coordinates.
 
@@ -194,7 +195,7 @@ class DensityGuidedDiffusion:
         model_map = self.density_calculator(
             coords, elements, resolution=resolution, real=True, to_normalize=True
         )  # TODO: dont use normalization, use e-/A^3
-        return torch.linalg.norm(torch.flatten(model_map) - torch.flatten(self.y))
+        return torch.linalg.norm(torch.flatten(model_map) - torch.flatten(self.y), ord=norm)
         # # SiLU (swish) to penalize the model going out into solvent, but not penalize being not in exactly the density as much
         # return torch.linalg.norm(torch.nn.SiLU(torch.flatten(self.y) - torch.flatten(model_map)))
 
@@ -203,7 +204,7 @@ class DensityGuidedDiffusion:
         output_dir: str,
         num_steps: int = 200,
         num_samples: int = 1,
-        learning_rate: Union[List, float] = 1e-3,
+        learning_rate: Union[List, float] = 1e-1,
         partial_diffusion: bool = False,
         diffusion_kwargs: dict = None,
     ) -> Structure:
@@ -218,7 +219,7 @@ class DensityGuidedDiffusion:
         num_sample  : int, optional
             Size of ensemble to generate, by default 1
         learning_rate : Union[List, float], optional
-            Learning rate for density optimization, by default 1e-3
+            Learning rate for density optimization, by default 1e-1
         partial_diffusion : bool, optional
             Whether to use partial diffusion, by default False
         diffusion_kwargs : Dict[str, Any]
@@ -263,7 +264,7 @@ class DensityGuidedDiffusion:
             .bool()
         )
 
-        v_density = torch.zeros_like(step_coords)
+        # v_density = torch.zeros_like(step_coords)
         scores = []
 
         if partial_diffusion:
@@ -275,10 +276,6 @@ class DensityGuidedDiffusion:
         for i in pbar:
             step_lr = (
                 learning_rate if isinstance(learning_rate, float) else learning_rate[i]
-            )
-
-            step_coords = self.stepper.step(
-                step_coords, augmentation=True, align_to_input=True
             )
 
             with torch.set_grad_enabled(True):  # Explicit gradient context
@@ -298,6 +295,12 @@ class DensityGuidedDiffusion:
                 full_grad = torch.zeros_like(step_coords.squeeze())
                 full_grad[pad_mask, :] = coords_to_grad.grad
 
+                # only do gradient on partially diffused atoms
+                if diffusion_kwargs["selection"] is not None:
+                    selector = torch.from_numpy(selector).to(self.device)
+                    selector = pad_dim(selector, 0, step_coords.shape[1] - selector.shape[0])
+                    full_grad[~selector, :] = 0
+
             pbar.set_postfix(
                 {
                     "score": f"{density_score.item():.4f}",
@@ -305,9 +308,15 @@ class DensityGuidedDiffusion:
             )
             scores.append(density_score.item())
 
-            v_density = 0.9 * v_density + step_lr * full_grad.unsqueeze(0)
-            step_coords = step_coords - v_density
+            step_coords = self.stepper.step(
+                step_coords, full_grad, guidance_scale=step_lr, augmentation=True, align_to_input=True
+            )
 
+            # Gradient descent with momentum # TODO: try others?
+            # v_density = 0.9 * v_density + step_lr * full_grad.unsqueeze(0)
+            # step_coords = step_coords - v_density
+
+            # Raw gradient descent
             # step_coords = step_coords - step_lr * full_grad.unsqueeze(
             #     0
             # )

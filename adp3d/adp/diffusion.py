@@ -77,8 +77,7 @@ class DiffusionStepper:
 
         Returns
         -------
-        Dict[str, torch.nn.Module]
-            Dictionary containing the loaded model components.
+        None
         """
         self.device = device or try_gpu()
         checkpoint_path = Path(checkpoint_path).expanduser().resolve()
@@ -477,6 +476,144 @@ class DiffusionStepper:
         atom_coords_noisy = atom_coords_noisy.to(atom_coords_denoised)
 
         denoised_over_sigma = (atom_coords_noisy - atom_coords_denoised) / t_hat
+        atom_coords_next: torch.Tensor = (
+            atom_coords_noisy
+            + self.model.structure_module.step_scale
+            * (sigma_t - t_hat)
+            * denoised_over_sigma
+        )
+
+        # Align to input
+        if align_to_input:
+            if self.cached_diffusion_init["init_coords"] is None:
+                raise ValueError(
+                    "No initial input coordinates found in cached diffusion init. Please change from align_to_input if you are not using partial diffusion."
+                )
+            atom_coords_next = weighted_rigid_align(
+                atom_coords_next.float(),
+                self.cached_diffusion_init["init_coords"].float(),
+                atom_mask.float(),
+                atom_mask.float(),
+            ).to(atom_coords_next)
+
+        pad_mask = feats["atom_pad_mask"].squeeze().bool()
+        unpad_coords_next = atom_coords_next[
+            :, pad_mask, :
+        ]  # unpad the coords to B, N_unpad, 3
+        unpad_coords_denoised = atom_coords_denoised[
+            :, pad_mask, :
+        ]  # unpad the coords to B, N_unpad, 3
+
+        # Store unpadded in trajectory (0 indexed)
+        self.diffusion_trajectory[f"step_{self.current_step}"] = {
+            "coords": unpad_coords_next.clone(),
+            "denoised": unpad_coords_denoised.clone(),  # the overall prediction from this current level (no noise mixture)
+        }
+
+        self.current_step += 1  # NOTE: current step to execute
+
+        if return_denoised:
+            return atom_coords_next, atom_coords_denoised
+        else:
+            return atom_coords_next
+
+
+class DensityGuidedDiffusionStepper(DiffusionStepper):
+    """Controls fine-grained diffusion steps using the pretrained Boltz1 model and guidance via the diffusion update"""
+
+    def step(
+        self,
+        atom_coords: torch.Tensor,
+        density_grad: torch.Tensor,
+        guidance_scale: float = 0.1,
+        return_denoised: bool = False,
+        augmentation: bool = True,
+        align_to_input: bool = True,
+    ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+        """Execute a single diffusion denoising step.
+
+        Parameters
+        ----------
+        atom_coords : torch.Tensor
+            Current atomic coordinates of shape (batch, num_atoms, 3)
+        return_denoised : bool, optional
+            Whether to return the fully denoised coordinate prediction, by default False
+        augmentation : bool, optional
+            Whether to apply augmentation, by default True
+
+        Returns
+        -------
+        torch.Tensor or Tuple[torch.Tensor, torch.Tensor]
+            Denoised atomic coordinates after a single step in the trajectory, and optionally the fully denoised coordinate prediction.
+        """
+        # Get cached representations
+        s = self.cached_representations["s"]
+        z = self.cached_representations["z"]
+        s_inputs = self.cached_representations["s_inputs"]
+        relative_position_encoding = self.cached_representations[
+            "relative_position_encoding"
+        ]
+        feats = self.cached_representations["feats"]
+        multiplicity = self.cached_diffusion_init[
+            "diffusion_samples"
+        ]  # batch is regulated by dataloader, this lets you do ensemble prediction
+
+        # Get cached diffusion info
+        atom_mask: torch.Tensor = self.cached_diffusion_init["atom_mask"]
+        sigma_tm, sigma_t, gamma = self.cached_diffusion_init["sigmas_and_gammas"][
+            self.current_step
+        ]
+        sigma_tm, sigma_t, gamma = sigma_tm.item(), sigma_t.item(), gamma.item()
+
+        t_hat = sigma_tm * (1 + gamma)
+        eps = (
+            self.model.structure_module.noise_scale
+            * sqrt(t_hat**2 - sigma_tm**2)
+            * torch.randn(atom_coords.shape, device=self.device)
+        )
+
+        # NOTE: This might create some interesting pathologies, but in principle this augmentation should not be needed post-training
+        if augmentation:
+            atom_coords = center_random_augmentation(
+                atom_coords,
+                atom_mask,
+                augmentation=True,
+            )
+
+        atom_coords_noisy = atom_coords + eps
+
+        with torch.no_grad():
+            atom_coords_denoised, _ = (
+                self.model.structure_module.preconditioned_network_forward(
+                    atom_coords_noisy,
+                    t_hat,
+                    training=False,
+                    network_condition_kwargs=dict(
+                        s_trunk=s,
+                        z_trunk=z,
+                        s_inputs=s_inputs,
+                        feats=feats,
+                        relative_position_encoding=relative_position_encoding,
+                        multiplicity=multiplicity,
+                    ),
+                )
+            )
+
+        atom_coords_noisy = weighted_rigid_align(
+            atom_coords_noisy.float(),
+            atom_coords_denoised.float(),
+            atom_mask.float(),
+            atom_mask.float(),
+        )
+
+        atom_coords_noisy = atom_coords_noisy.to(atom_coords_denoised)
+
+        denoised_over_sigma = (atom_coords_noisy - atom_coords_denoised) / t_hat
+
+        scaled_guidance_grad = torch.linalg.norm(denoised_over_sigma) / torch.linalg.norm(density_grad) * density_grad
+
+        denoised_over_sigma = denoised_over_sigma + scaled_guidance_grad * guidance_scale
+
         atom_coords_next: torch.Tensor = (
             atom_coords_noisy
             + self.model.structure_module.step_scale
