@@ -4,8 +4,7 @@ import gemmi
 import numpy as np
 import torch
 
-from adp3d import ADP3D
-from chroma import Chroma, Protein
+from adp3d import DensityGuidedDiffusion
 from pathlib import Path
 from adp3d.utils.utility import try_gpu
 from einops import rearrange
