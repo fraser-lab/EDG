@@ -15,4 +15,5 @@ scipy
 setuptools
 # SFcalculator_torch
 torch>=2.5.1
+torchquad # for qFit-like density calculation
 tqdm
