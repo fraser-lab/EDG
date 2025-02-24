@@ -7,6 +7,7 @@ import numpy as np
 
 from adp3d.qfit.volume import XMap, EMMap, GridParameters
 from adp3d.qfit.unitcell import UnitCell
+from adp3d.qfit.spacegroups import GetSpaceGroup
 
 
 @dataclass
