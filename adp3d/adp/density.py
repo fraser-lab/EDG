@@ -180,18 +180,15 @@ class DifferentiableXMap(torch.nn.Module):
         """
         super().__init__()
         if xmap is not None:
-            self.xmap = xmap
-            grid_parameters = xmap.grid_parameters
-            unit_cell = xmap.unit_cell
-            resolution = xmap.resolution
-            hkl = xmap.hkl
+            self.unit_cell = xmap.unit_cell
+            self.resolution = xmap.resolution
+            self.hkl = xmap.hkl
 
             self.register_buffer(
                 "voxel_spacing", torch.tensor(xmap.voxelspacing, device=device)
             )
             self.register_buffer("offset", torch.tensor(xmap.offset, device=device))
         else:
-            self.grid_parameters = grid_parameters
             self.unit_cell = unit_cell
             self.resolution = resolution
             self.hkl = hkl
@@ -221,11 +218,89 @@ class DifferentiableXMap(torch.nn.Module):
         self.register_buffer("R_matrices", R_matrices)
         self.register_buffer("t_vectors", t_vectors)
 
+    def _apply_symmetry_chunk(
+        self,
+        density: torch.Tensor,
+        output: torch.Tensor,
+        chunk_start: int,
+        chunk_end: int,
+        grid_shape: Tuple[int, ...],
+        batch_size: int,
+    ) -> None:
+        """Apply a chunk of symmetry operations to improve memory efficiency.
+
+        Parameters
+        ----------
+        density : torch.Tensor
+            Input density grid of shape (batch_size, *grid_shape).
+        output : torch.Tensor
+            Output density grid to be updated.
+        chunk_start : int
+            Start index of symmetry operations chunk.
+        chunk_end : int
+            End index of symmetry operations chunk.
+        grid_shape : Tuple[int, ...]
+            Shape of the density grid.
+        batch_size : int
+            Number of batches in the input.
+        """
+        device = density.device
+        chunk_size = chunk_end - chunk_start
+        grid_shape_tensor = torch.tensor(grid_shape, device=device)
+        
+        base_coords = torch.stack(
+            torch.meshgrid(
+                *[torch.arange(s, device=device) for s in grid_shape], indexing="ij"
+            ),
+            dim=-1,
+        ).float()
+        
+        base_coords = base_coords + self.offset
+        base_coords = base_coords.view(1, *grid_shape, 3)
+        
+        R_chunk = self.R_matrices[chunk_start:chunk_end]
+        t_chunk = self.t_vectors[chunk_start:chunk_end]
+        
+        coords_expanded = base_coords.expand(chunk_size, *grid_shape, 3)
+        
+        transformed_coords = torch.einsum(
+            "nij,b...j->n...i", R_chunk, coords_expanded
+        )
+        
+        transformed_coords = transformed_coords + (
+            t_chunk.view(chunk_size, 1, 1, 1, 3)
+            * grid_shape_tensor.view(1, 1, 1, 1, 3)
+        )
+        
+        transformed_coords = transformed_coords % grid_shape_tensor.view(
+            1, 1, 1, 1, 3
+        )
+        
+        normalized_coords = (
+            transformed_coords / (grid_shape_tensor.view(1, 1, 1, 1, 3) - 1)
+        ) * 2 - 1
+        
+        for b in range(batch_size):
+            normalized_coords_batch = normalized_coords.view(
+                chunk_size, -1, grid_shape[1], grid_shape[2], 3
+            )
+            
+            transformed_density = F.grid_sample(
+                density[b:b+1, None].expand(chunk_size, 1, *grid_shape),
+                normalized_coords_batch,
+                mode="bilinear",
+                align_corners=True,
+                padding_mode="border",
+            )
+            
+            output[b] += transformed_density.sum(dim=0)[0]
+
     def apply_symmetry(
         self,
         density: torch.Tensor,
         normalize: bool = True,
         chunk_size: Optional[int] = None,
+        memory_efficient: bool = True,
     ) -> torch.Tensor:
         """Apply crystallographic symmetry operations to density maps in batch.
 
@@ -237,7 +312,8 @@ class DifferentiableXMap(torch.nn.Module):
             Whether to normalize the output density, by default True.
         chunk_size : Optional[int], optional
             Number of symmetry operations to process at once, by default None.
-            If None, process all operations simultaneously.
+        memory_efficient : bool, optional
+            Whether to use memory-efficient implementation, by default True.
 
         Returns
         -------
@@ -249,20 +325,32 @@ class DifferentiableXMap(torch.nn.Module):
         device = density.device
         n_ops = len(self.R_matrices)
 
-        base_coords = torch.stack(
-            torch.meshgrid(
-                *[torch.arange(s, device=device) for s in grid_shape], indexing="ij"
-            ),
-            dim=-1,
-        ).float()
-
-        base_coords = base_coords + self.offset
-        base_coords = base_coords.view(1, *grid_shape, 3)
-        grid_shape_tensor = torch.tensor(grid_shape, device=device)
-
+        # Create output tensor
         output = density.clone()
+        
+        # Memory-efficient implementation
+        if memory_efficient or chunk_size is not None:
+            # Process in chunks to save memory
+            chunk_size = chunk_size or max(1, n_ops // 4)
+            
+            for chunk_start in range(0, n_ops, chunk_size):
+                chunk_end = min(chunk_start + chunk_size, n_ops)
+                self._apply_symmetry_chunk(
+                    density, output, chunk_start, chunk_end, grid_shape, batch_size
+                )
+        else:
+            # Original implementation (process all at once)
+            base_coords = torch.stack(
+                torch.meshgrid(
+                    *[torch.arange(s, device=device) for s in grid_shape], indexing="ij"
+                ),
+                dim=-1,
+            ).float()
 
-        if chunk_size is None:
+            base_coords = base_coords + self.offset
+            base_coords = base_coords.view(1, *grid_shape, 3)
+            grid_shape_tensor = torch.tensor(grid_shape, device=device)
+
             coords_expanded = base_coords.expand(n_ops, *grid_shape, 3)
             transformed_coords = torch.einsum(
                 "nij,b...j->n...i", self.R_matrices, coords_expanded
@@ -286,7 +374,7 @@ class DifferentiableXMap(torch.nn.Module):
                 )
 
                 transformed_density = F.grid_sample(
-                    density[b : b + 1, None].expand(n_ops, 1, *grid_shape),
+                    density[b:b+1, None].expand(n_ops, 1, *grid_shape),
                     normalized_coords_batch,
                     mode="bilinear",
                     align_corners=True,
@@ -294,48 +382,6 @@ class DifferentiableXMap(torch.nn.Module):
                 )
 
                 output[b] += transformed_density.sum(dim=0)[0]
-
-        else:
-            for chunk_start in range(0, n_ops, chunk_size):
-                chunk_end = min(chunk_start + chunk_size, n_ops)
-                chunk_size_actual = chunk_end - chunk_start
-
-                R_chunk = self.R_matrices[chunk_start:chunk_end]
-                t_chunk = self.t_vectors[chunk_start:chunk_end]
-
-                coords_expanded = base_coords.expand(chunk_size_actual, *grid_shape, 3)
-                transformed_coords = torch.einsum(
-                    "nij,b...j->n...i", R_chunk, coords_expanded
-                )
-
-                transformed_coords = transformed_coords + (
-                    t_chunk.view(chunk_size_actual, 1, 1, 1, 3)
-                    * grid_shape_tensor.view(1, 1, 1, 1, 3)
-                )
-
-                transformed_coords = transformed_coords % grid_shape_tensor.view(
-                    1, 1, 1, 1, 3
-                )
-                normalized_coords = (
-                    transformed_coords / (grid_shape_tensor.view(1, 1, 1, 1, 3) - 1)
-                ) * 2 - 1
-
-                for b in range(batch_size):
-                    normalized_coords_batch = normalized_coords.view(
-                        chunk_size_actual, -1, grid_shape[1], grid_shape[2], 3
-                    )
-
-                    transformed_density = F.grid_sample(
-                        density[b : b + 1, None].expand(
-                            chunk_size_actual, 1, *grid_shape
-                        ),
-                        normalized_coords_batch,
-                        mode="bilinear",
-                        align_corners=True,
-                        padding_mode="border",
-                    )
-
-                    output[b] += transformed_density.sum(dim=0)[0]
 
         if normalize:
             output = output / n_ops
@@ -441,6 +487,7 @@ class DifferentiableTransformer(torch.nn.Module):
         occupancies: torch.Tensor,
         normalize: bool = True,
         chunk_size: Optional[int] = None,
+        memory_efficient: bool = True,
     ) -> torch.Tensor:
         """Forward pass computing electron density with symmetry.
 
@@ -458,6 +505,8 @@ class DifferentiableTransformer(torch.nn.Module):
             Whether to normalize the output density, by default True.
         chunk_size : Optional[int], optional
             Number of symmetry operations to process at once, by default None.
+        memory_efficient : bool, optional
+            Whether to use memory-efficient implementation, by default True.
 
         Returns
         -------
@@ -477,7 +526,10 @@ class DifferentiableTransformer(torch.nn.Module):
         )
 
         symmetrized_density = self.xmap.apply_symmetry(
-            initial_density, normalize=normalize, chunk_size=chunk_size
+            initial_density, 
+            normalize=normalize, 
+            chunk_size=chunk_size,
+            memory_efficient=memory_efficient
         )
 
         return symmetrized_density
@@ -522,18 +574,19 @@ class DifferentiableTransformer(torch.nn.Module):
             device=coordinates.device,
         )
 
-        for b in range(batch_size):
-            dilate_points_torch(
-                grid_coordinates[b],
-                torch.ones_like(elements[b], dtype=torch.bool),
-                occupancies[b],
-                lmax,
-                radial_densities[b],
-                self.density_params.rstep,
-                self.density_params.rmax,
-                self.grid_to_cartesian,
-                density[b],
-            )
+        # Process all atoms in all batches at once for better parallelism
+        active = torch.ones_like(elements, dtype=torch.bool)
+        dilate_points_torch(
+            grid_coordinates,
+            active,
+            occupancies,
+            lmax,
+            radial_densities,
+            self.density_params.rstep,
+            self.density_params.rmax,
+            self.grid_to_cartesian,
+            density,
+        )
 
         return density
 
@@ -568,48 +621,74 @@ class DifferentiableTransformer(torch.nn.Module):
 
         unique_elements = torch.unique(elements)
         for elem in unique_elements:
-            mask = elements == elem
-            if not mask.any():
+            batch_indices, atom_indices = torch.where(elements == elem)
+            if batch_indices.numel() == 0:
                 continue
 
-            asf = self.scattering_params[elem.item()]
-            integrand = ScatteringIntegrand(
-                asf.expand(mask.sum(), -1, -1), b_factors[mask], em=self.em
-            )
-
-            result = self.integrator.integrate(
-                lambda s: integrand(s, r),
-                dim=1,
-                N=self.density_params.quad_points,
-                integration_domain=[
-                    [self.density_params.smin, self.density_params.smax]
-                ],
-            )
-
-            densities[mask] = result
+            # Group by B-factor to minimize redundant calculations
+            b_factor_values = b_factors[batch_indices, atom_indices]
+            unique_b_factors = torch.unique(b_factor_values)
+            
+            for b_factor in unique_b_factors:
+                mask = (elements == elem) & (b_factors == b_factor)
+                if not mask.any():
+                    continue
+                
+                b_batch_indices, b_atom_indices = torch.where(mask)
+                
+                asf = self.scattering_params[elem.item()]
+                asf_expanded = asf.expand(b_batch_indices.size(0), -1, -1)
+                
+                b_factor_tensor = torch.full((b_batch_indices.size(0),), b_factor, 
+                                           device=elements.device)
+                
+                integrand = ScatteringIntegrand(
+                    asf_expanded, b_factor_tensor, em=self.em
+                )
+                
+                result = self.integrator.integrate(
+                    lambda s: integrand(s, r),
+                    dim=1,
+                    N=self.density_params.quad_points,
+                    integration_domain=[
+                        [self.density_params.smin, self.density_params.smax]
+                    ],
+                )
+                
+                for i, (b_idx, a_idx) in enumerate(zip(b_batch_indices, b_atom_indices)):
+                    densities[b_idx, a_idx] = result[i]
 
         return densities
 
     def _compute_radial_derivatives(
         self, elements: torch.Tensor, b_factors: torch.Tensor
     ) -> torch.Tensor:
-        """Compute radial density derivatives.
-
+        """Compute radial density derivatives efficiently.
+        
         Parameters
         ----------
         elements : torch.Tensor
             Element indices of shape (batch_size, n_atoms).
         b_factors : torch.Tensor
             B-factors of shape (batch_size, n_atoms).
-
+            
         Returns
         -------
         torch.Tensor
             Radial density derivatives of shape (batch_size, n_atoms, n_radial).
         """
         densities = self._compute_radial_densities(elements, b_factors)
-        return torch.gradient(densities, self.density_params.rstep, edge_order=2)[0]
-
+        
+        # Calculate gradients using finite differences for better efficiency
+        # This computes gradients for all atoms in all batches at once
+        padding = 1  # For central difference approximation
+        padded = F.pad(densities, (padding, padding), mode='replicate')
+        
+        # Central difference formula: (f(x+h) - f(x-h))/(2h)
+        derivatives = (padded[:, :, 2:] - padded[:, :, :-2]) / (2 * self.density_params.rstep)
+        
+        return derivatives
+        
     def _compute_grid_coordinates(self, coordinates: torch.Tensor) -> torch.Tensor:
         """Transform Cartesian coordinates to grid coordinates.
 
@@ -635,36 +714,98 @@ class DifferentiableTransformer(torch.nn.Module):
         torch.Tensor
             Transformation matrix of shape (3, 3).
         """
-        a, b, c, alpha, beta, gamma = self.unit_cell.abc + self.unit_cell.angles
-        alpha, beta, gamma = map(torch.deg2rad, [alpha, beta, gamma])
-
+        a, b, c = self.unit_cell.abc
+        alpha, beta, gamma = map(np.deg2rad, self.unit_cell.angles)
+        
+        # Convert to tensors
+        a = torch.tensor(a, device=self.voxel_spacing.device)
+        b = torch.tensor(b, device=self.voxel_spacing.device)
+        c = torch.tensor(c, device=self.voxel_spacing.device)
+        alpha = torch.tensor(alpha, device=self.voxel_spacing.device)
+        beta = torch.tensor(beta, device=self.voxel_spacing.device)
+        gamma = torch.tensor(gamma, device=self.voxel_spacing.device)
+        
         cos_alpha = torch.cos(alpha)
         cos_beta = torch.cos(beta)
         cos_gamma = torch.cos(gamma)
         sin_gamma = torch.sin(gamma)
 
-        volume = (
-            a
-            * b
-            * c
-            * torch.sqrt(
-                1
-                - cos_alpha**2
-                - cos_beta**2
-                - cos_gamma**2
-                + 2 * cos_alpha * cos_beta * cos_gamma
-            )
+        # Calculate volume term
+        volume_term = torch.sqrt(
+            1
+            - cos_alpha**2
+            - cos_beta**2
+            - cos_gamma**2
+            + 2 * cos_alpha * cos_beta * cos_gamma
         )
 
+        # Create transformation matrix
         matrix = torch.zeros((3, 3), device=self.voxel_spacing.device)
         matrix[0, 0] = a
         matrix[0, 1] = b * cos_gamma
         matrix[0, 2] = c * cos_beta
         matrix[1, 1] = b * sin_gamma
         matrix[1, 2] = c * (cos_alpha - cos_beta * cos_gamma) / sin_gamma
-        matrix[2, 2] = volume / (a * b * sin_gamma)
+        matrix[2, 2] = (a * b * c * volume_term) / (a * b * sin_gamma)
 
         return matrix
+
+    def _unit_cell_to_cartesian_matrix_batched(
+        self, unit_cells: List[UnitCell]
+    ) -> torch.Tensor:
+        """Compute transformation matrices for multiple unit cells.
+        
+        Parameters
+        ----------
+        unit_cells : List[UnitCell]
+            List of unit cells for each batch item.
+            
+        Returns
+        -------
+        torch.Tensor
+            Batch of transformation matrices of shape (batch_size, 3, 3).
+        """
+        batch_size = len(unit_cells)
+        matrices = torch.zeros(
+            (batch_size, 3, 3), device=self.voxel_spacing.device
+        )
+        
+        for i, uc in enumerate(unit_cells):
+            a, b, c = uc.abc
+            alpha, beta, gamma = map(np.deg2rad, uc.angles)
+            
+            # Convert to tensors
+            a = torch.tensor(a, device=self.voxel_spacing.device)
+            b = torch.tensor(b, device=self.voxel_spacing.device)
+            c = torch.tensor(c, device=self.voxel_spacing.device)
+            alpha = torch.tensor(alpha, device=self.voxel_spacing.device)
+            beta = torch.tensor(beta, device=self.voxel_spacing.device)
+            gamma = torch.tensor(gamma, device=self.voxel_spacing.device)
+            
+            cos_alpha = torch.cos(alpha)
+            cos_beta = torch.cos(beta)
+            cos_gamma = torch.cos(gamma)
+            sin_gamma = torch.sin(gamma)
+            
+            volume_term = torch.sqrt(
+                1
+                - cos_alpha**2
+                - cos_beta**2
+                - cos_gamma**2
+                + 2 * cos_alpha * cos_beta * cos_gamma
+            )
+            
+            matrix = torch.zeros((3, 3), device=self.voxel_spacing.device)
+            matrix[0, 0] = a
+            matrix[0, 1] = b * cos_gamma
+            matrix[0, 2] = c * cos_beta
+            matrix[1, 1] = b * sin_gamma
+            matrix[1, 2] = c * (cos_alpha - cos_beta * cos_gamma) / sin_gamma
+            matrix[2, 2] = (a * b * c * volume_term) / (a * b * sin_gamma)
+            
+            matrices[i] = matrix
+            
+        return matrices
 
 
 def dilate_points_torch(
@@ -678,43 +819,101 @@ def dilate_points_torch(
     grid_to_cartesian: torch.Tensor,
     out: torch.Tensor,
 ) -> torch.Tensor:
-    """PyTorch implementation of point dilation."""
+    """Point dilation across batches.
+    
+    Parameters
+    ----------
+    coordinates : torch.Tensor
+        Atomic coordinates of shape (batch_size, n_atoms, 3).
+    active : torch.Tensor
+        Boolean mask of active atoms of shape (batch_size, n_atoms).
+    occupancies : torch.Tensor
+        Occupancies of shape (batch_size, n_atoms).
+    lmax : torch.Tensor
+        Maximum distances in grid units of shape (3,).
+    radial_densities : torch.Tensor
+        Precomputed radial densities of shape (batch_size, n_atoms, n_radial).
+    rstep : float
+        Step size for radial grid.
+    rmax : float
+        Maximum radius for density calculation.
+    grid_to_cartesian : torch.Tensor
+        Transformation matrix from grid to Cartesian of shape (3, 3).
+    out : torch.Tensor
+        Output density grid of shape (batch_size, *grid_shape).
+        
+    Returns
+    -------
+    torch.Tensor
+        Updated density grid.
+    """
     device = coordinates.device
-    grid_shape = torch.tensor(out.shape, device=device)
+    batch_size, n_atoms = coordinates.shape[:2]
     rmax2 = rmax * rmax
-
-    for n in range(len(coordinates)):
-        if not active[n]:
+    grid_shape = out.shape[1:]  # Assuming out shape is (batch, z, y, x)
+    
+    # Flatten batch and atom dimensions for vectorized processing
+    # Process only active atoms
+    flat_mask = active.view(-1)
+    active_indices = torch.nonzero(flat_mask, as_tuple=True)[0]
+    
+    if len(active_indices) == 0:
+        return out
+    
+    # Get batch and atom indices
+    batch_indices = active_indices // n_atoms
+    atom_indices = active_indices % n_atoms
+    
+    # Get coordinates, occupancies, and radial densities for active atoms
+    active_coords = coordinates[batch_indices, atom_indices]
+    active_occupancies = occupancies[batch_indices, atom_indices]
+    active_radial_densities = radial_densities[batch_indices, atom_indices]
+    
+    # Create voxel grid for each active atom
+    bounds_min = torch.ceil(active_coords - lmax.unsqueeze(0)).long()
+    bounds_max = torch.floor(active_coords + lmax.unsqueeze(0)).long()
+    
+    # Process each active atom (this loop is unavoidable due to varying grid sizes)
+    for i, (b_idx, a_idx) in enumerate(zip(batch_indices, atom_indices)):
+        center = active_coords[i]
+        b_min, b_max = bounds_min[i], bounds_max[i]
+        
+        # Skip if any dimension is empty
+        if any((b_max - b_min + 1) <= 0):
             continue
-
-        center = coordinates[n]
-        bounds_min = torch.ceil(center - lmax).long()
-        bounds_max = torch.floor(center + lmax).long()
-
-        z_range = torch.arange(bounds_min[0], bounds_max[0] + 1, device=device)
-        y_range = torch.arange(bounds_min[1], bounds_max[1] + 1, device=device)
-        x_range = torch.arange(bounds_min[2], bounds_max[2] + 1, device=device)
-
-        Z, Y, X = torch.meshgrid(z_range, y_range, x_range, indexing="ij")
-        grid_points = torch.stack([Z, Y, X], dim=-1)
-
-        rel_coords = grid_points - center
-        cart_coords = torch.einsum("ij,...j->...i", grid_to_cartesian, rel_coords)
-        distances2 = torch.sum(cart_coords * cart_coords, dim=-1)
-
+        
+        # Create grid coordinates
+        z_range = torch.arange(b_min[0], b_max[0] + 1, device=device)
+        y_range = torch.arange(b_min[1], b_max[1] + 1, device=device)
+        x_range = torch.arange(b_min[2], b_max[2] + 1, device=device)
+        
+        grid_z, grid_y, grid_x = torch.meshgrid(z_range, y_range, x_range, indexing="ij")
+        grid_points = torch.stack([grid_z, grid_y, grid_x], dim=-1).reshape(-1, 3)
+        
+        # Compute distances in one vectorized operation
+        rel_vectors = grid_points - center
+        cart_vectors = torch.matmul(rel_vectors, grid_to_cartesian.T)
+        distances2 = torch.sum(cart_vectors**2, dim=1)
+        
+        # Apply density only to points within range
         mask = distances2 <= rmax2
         if not mask.any():
             continue
-
+            
+        # Get indices and values in one operation
+        grid_points_in_range = grid_points[mask]
         distances = torch.sqrt(distances2[mask])
-        indices = (distances / rstep).long().clamp(0, radial_densities.shape[1] - 1)
-
-        density_values = radial_densities[n, indices] * occupancies[n]
-
-        Z_idx = torch.remainder(Z[mask], out.shape[0])
-        Y_idx = torch.remainder(Y[mask], out.shape[1])
-        X_idx = torch.remainder(X[mask], out.shape[2])
-
-        out[Z_idx, Y_idx, X_idx] += density_values
-
+        rad_indices = torch.clamp((distances / rstep).long(), 0, active_radial_densities.shape[1] - 1)
+        
+        # Compute density values
+        density_values = active_radial_densities[i, rad_indices] * active_occupancies[i]
+        
+        # Map to output grid with proper periodic boundary conditions
+        z_indices = torch.remainder(grid_points_in_range[:, 0], grid_shape[0])
+        y_indices = torch.remainder(grid_points_in_range[:, 1], grid_shape[1])
+        x_indices = torch.remainder(grid_points_in_range[:, 2], grid_shape[2])
+        
+        # Use scatter_add for parallel updates
+        out[b_idx, z_indices, y_indices, x_indices] += density_values
+    
     return out
