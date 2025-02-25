@@ -24,7 +24,7 @@ from boltz.data.types import Structure
 from boltz.main import BoltzDiffusionParams
 from boltz.model.model import Boltz1
 from boltz.data.feature.pad import pad_dim
-from adp3d.adp.density import DensityCalculator, normalize, to_f_density
+from adp3d.adp.density import DifferentiableTransformer, normalize, to_f_density
 from adp3d.data.io import export_density_map, structure_to_density_input, write_mmcif
 from adp3d.data.mmcif import parse_mmcif
 from adp3d.adp.diffusion import DiffusionStepper, DensityGuidedDiffusionStepper

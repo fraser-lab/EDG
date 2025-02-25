@@ -8,6 +8,7 @@ import numpy as np
 from adp3d.qfit.volume import XMap, EMMap, GridParameters
 from adp3d.qfit.unitcell import UnitCell
 from adp3d.qfit.spacegroups import GetSpaceGroup
+from adp3d.data.sf import ATOM_STRUCTURE_FACTORS, ELECTRON_SCATTERING_FACTORS
 
 
 @dataclass
@@ -60,88 +61,158 @@ class ScatteringIntegrand(torch.nn.Module):
     """
 
     def __init__(
-        self, asf: torch.Tensor, bfactor: torch.Tensor, em: bool = False
+        self, 
+        asf: torch.Tensor, 
+        bfactor: torch.Tensor, 
+        em: bool = False
     ) -> None:
-        """Initialize scattering integrand calculator.
+        """Initialize the scattering integrand calculator.
 
         Parameters
         ----------
         asf : torch.Tensor
-            Atomic scattering factors of shape (n_atoms, n_coeffs, 2).
+            Atomic scattering factors with shape (n_atoms, n_coeffs, 2).
+            The second dimension contains coefficients [a_i, b_i].
         bfactor : torch.Tensor
-            B-factors of shape (n_atoms,).
+            B-factors for each atom with shape (n_atoms,).
         em : bool, optional
             Whether to use electron microscopy mode, by default False.
         """
         super().__init__()
-        if asf.dim() != 3 or asf.shape[2] != 2:
-            raise ValueError("asf must have shape (n_atoms, n_coeffs, 2)")
-        if bfactor.dim() != 1:
-            raise ValueError("bfactor must be 1-dimensional")
-
+        
         self.register_buffer("asf", asf)
-        self.register_buffer("bfactor", bfactor)
+        self.register_buffer("bfactor", bfactor.view(-1, 1, 1))
         self.em = em
 
-    def forward(self, s: torch.Tensor, r: torch.Tensor) -> torch.Tensor:
-        """Compute scattering integrand.
+        self._validate_inputs(asf, bfactor)
+        
+        self.n_atoms = asf.shape[0]
+        self.asf_range = 5
+        
+        if not em:
+            self.register_buffer(
+                "constant_term", 
+                self.asf[:, 5, 0].view(self.n_atoms, 1, 1)
+            )
 
+    def _validate_inputs(self, asf: torch.Tensor, bfactor: torch.Tensor) -> None:
+        """Validate input tensors for shape and content.
+        
+        Parameters
+        ----------
+        asf : torch.Tensor
+            Atomic scattering factors tensor to validate.
+        bfactor : torch.Tensor
+            B-factors tensor to validate.
+            
+        Raises
+        ------
+        ValueError
+            If tensor shapes or content are invalid.
+        """
+        if asf.dim() != 3 or asf.shape[2] != 2:
+            raise ValueError(f"asf must have shape (n_atoms, n_coeffs, 2), got {asf.shape}")
+        
+        if bfactor.dim() != 1:
+            raise ValueError(f"bfactor must be 1-dimensional, got {bfactor.dim()}-dimensional")
+            
+        if not self.em and asf.shape[1] < 6:
+            raise ValueError(f"For X-ray scattering, exactly 6 coefficients required, got {asf.shape[1]}")
+        
+        if self.em and asf.shape[1] < 5:
+            raise ValueError(f"For electron scattering, at least 5 coefficients required, got {asf.shape[1]}")
+
+    def compute_scattering_factors(
+        self, 
+        s2: torch.Tensor, 
+        n_quad: int, 
+        n_points: int
+    ) -> torch.Tensor:
+        """Compute atomic scattering factors for given squared scattering vectors.
+        
+        Parameters
+        ----------
+        s2 : torch.Tensor
+            Squared scattering vector magnitudes.
+        n_quad : int
+            Number of quadrature points.
+        n_points : int
+            Number of radial points.
+            
+        Returns
+        -------
+        torch.Tensor
+            Computed scattering factors.
+        """
+        if self.em:
+            f = torch.zeros(
+                (self.n_atoms, n_quad, n_points), 
+                device=s2.device, 
+                dtype=s2.dtype
+            )
+        else:
+            f = self.constant_term.expand(self.n_atoms, n_quad, n_points).clone()
+        
+        for i in range(self.asf_range):
+            a_coeff = self.asf[:, i, 0].view(-1, 1, 1).expand(-1, n_quad, n_points)
+            b_coeff = self.asf[:, i, 1].view(-1, 1, 1).expand(-1, n_quad, n_points)
+            f += a_coeff * torch.exp(-b_coeff * s2)
+            
+        return f
+
+    def forward(
+        self, 
+        s: torch.Tensor, 
+        r: torch.Tensor
+    ) -> torch.Tensor:
+        """Compute the scattering integrand.
+        
         Parameters
         ----------
         s : torch.Tensor
             Scattering vector magnitudes of shape (n_quad,).
         r : torch.Tensor
             Radial distances of shape (n_points,).
-
+            
         Returns
         -------
         torch.Tensor
-            Integrand values of shape (n_atoms, n_quad, n_points).
+            Computed integrand values with shape (n_atoms, n_quad, n_points).
         """
-        s = s.unsqueeze(0).unsqueeze(-1)
-        r = r.unsqueeze(0).unsqueeze(1)
+        n_quad = s.size(0)
+        n_points = r.size(0)
+        
+        s = s.view(1, -1, 1)
+        r = r.view(1, 1, -1)
+        
         s2 = s * s
-
-        if self.em:
-            if self.asf.shape[1] < 5:
-                raise ValueError(
-                    "For electron scattering, at least 5 coefficients required"
-                )
-            loop_range = 5
-            f = torch.zeros(
-                (self.asf.shape[0], 1, 1), device=self.asf.device, dtype=self.asf.dtype
-            )
-        else:
-            if self.asf.shape[1] != 6:
-                raise ValueError(
-                    "For X-ray scattering, exactly 6 coefficients required"
-                )
-            loop_range = 5
-            f = self.asf[:, -1:, 0].unsqueeze(1).unsqueeze(2)
-
-        for i in range(loop_range):
-            f += self.asf[:, i, 0].unsqueeze(1).unsqueeze(2) * torch.exp(
-                -self.asf[:, i, 1].unsqueeze(1).unsqueeze(2) * s2
-            )
-
-        w = 8 * f * torch.exp(-self.bfactor.unsqueeze(1).unsqueeze(2) * s2) * s
-        a = 4 * torch.pi * s
-        ar = a * r
-
+        
+        f = self.compute_scattering_factors(s2, n_quad, n_points)
+        
+        four_pi_s = 4 * torch.pi * s
+        w = 8 * f * torch.exp(-self.bfactor * s2) * s
+        
+        result = torch.zeros(
+            (self.n_atoms, n_quad, n_points), 
+            device=s.device, 
+            dtype=s.dtype
+        )
+        
         eps = 1e-4
-        small_r = r < eps
-        large_r = ~small_r
-
-        result = torch.zeros_like(ar)
-        result[..., large_r] = (
-            w[..., large_r] * torch.sin(ar[..., large_r]) / r[..., large_r]
-        )
-        result[..., small_r] = (
-            w[..., small_r]
-            * a[..., small_r]
-            * (1 - (a[..., small_r] ** 2 * r[..., small_r] ** 2) / 6.0)
-        )
-
+        r_small_mask = r[0, 0] < eps
+        
+        if r_small_mask.any():
+            ar_small = four_pi_s * r[..., r_small_mask]
+            ar2_small = ar_small * ar_small
+            taylor_term = 1.0 - ar2_small / 6.0
+            result[..., r_small_mask] = w[..., r_small_mask] * four_pi_s * taylor_term
+            
+        r_large_mask = ~r_small_mask
+        if r_large_mask.any():
+            ar_large = four_pi_s * r[..., r_large_mask]
+            sin_term = torch.sin(ar_large)
+            result[..., r_large_mask] = w[..., r_large_mask] * sin_term / r[..., r_large_mask]
+            
         return result
 
 
@@ -247,52 +318,47 @@ class DifferentiableXMap(torch.nn.Module):
         device = density.device
         chunk_size = chunk_end - chunk_start
         grid_shape_tensor = torch.tensor(grid_shape, device=device)
-        
+
         base_coords = torch.stack(
             torch.meshgrid(
                 *[torch.arange(s, device=device) for s in grid_shape], indexing="ij"
             ),
             dim=-1,
         ).float()
-        
+
         base_coords = base_coords + self.offset
         base_coords = base_coords.view(1, *grid_shape, 3)
-        
+
         R_chunk = self.R_matrices[chunk_start:chunk_end]
         t_chunk = self.t_vectors[chunk_start:chunk_end]
-        
+
         coords_expanded = base_coords.expand(chunk_size, *grid_shape, 3)
-        
-        transformed_coords = torch.einsum(
-            "nij,b...j->n...i", R_chunk, coords_expanded
-        )
-        
+
+        transformed_coords = torch.einsum("nij,b...j->n...i", R_chunk, coords_expanded)
+
         transformed_coords = transformed_coords + (
-            t_chunk.view(chunk_size, 1, 1, 1, 3)
-            * grid_shape_tensor.view(1, 1, 1, 1, 3)
+            t_chunk.view(chunk_size, 1, 1, 1, 3) * grid_shape_tensor.view(1, 1, 1, 1, 3)
         )
-        
-        transformed_coords = transformed_coords % grid_shape_tensor.view(
-            1, 1, 1, 1, 3
-        )
-        
+
+        transformed_coords = transformed_coords % grid_shape_tensor.view(1, 1, 1, 1, 3)
+
         normalized_coords = (
             transformed_coords / (grid_shape_tensor.view(1, 1, 1, 1, 3) - 1)
         ) * 2 - 1
-        
+
         for b in range(batch_size):
             normalized_coords_batch = normalized_coords.view(
                 chunk_size, -1, grid_shape[1], grid_shape[2], 3
             )
-            
+
             transformed_density = F.grid_sample(
-                density[b:b+1, None].expand(chunk_size, 1, *grid_shape),
+                density[b : b + 1, None].expand(chunk_size, 1, *grid_shape),
                 normalized_coords_batch,
                 mode="bilinear",
                 align_corners=True,
                 padding_mode="border",
             )
-            
+
             output[b] += transformed_density.sum(dim=0)[0]
 
     def apply_symmetry(
@@ -327,12 +393,12 @@ class DifferentiableXMap(torch.nn.Module):
 
         # Create output tensor
         output = density.clone()
-        
+
         # Memory-efficient implementation
         if memory_efficient or chunk_size is not None:
             # Process in chunks to save memory
             chunk_size = chunk_size or max(1, n_ops // 4)
-            
+
             for chunk_start in range(0, n_ops, chunk_size):
                 chunk_end = min(chunk_start + chunk_size, n_ops)
                 self._apply_symmetry_chunk(
@@ -374,7 +440,7 @@ class DifferentiableXMap(torch.nn.Module):
                 )
 
                 transformed_density = F.grid_sample(
-                    density[b:b+1, None].expand(n_ops, 1, *grid_shape),
+                    density[b : b + 1, None].expand(n_ops, 1, *grid_shape),
                     normalized_coords_batch,
                     mode="bilinear",
                     align_corners=True,
@@ -470,10 +536,10 @@ class DifferentiableTransformer(torch.nn.Module):
 
     def _setup_integrator(self) -> None:
         """Set up numerical integrator based on density parameters."""
-        if self.density_params.integration_method.lower() == "simpson":
-            self.integrator = Simpson(dim=1)
+        if self.density_params.integration_method.lower() == "simpson": # TODO: check if these are sufficient, compare to normal qFit
+            self.integrator = Simpson()
         elif self.density_params.integration_method.lower() == "trapezoid":
-            self.integrator = Trapezoid(dim=1)
+            self.integrator = Trapezoid()
         else:
             raise ValueError(
                 f"Unsupported integration method: {self.density_params.integration_method}"
@@ -526,10 +592,10 @@ class DifferentiableTransformer(torch.nn.Module):
         )
 
         symmetrized_density = self.xmap.apply_symmetry(
-            initial_density, 
-            normalize=normalize, 
+            initial_density,
+            normalize=normalize,
             chunk_size=chunk_size,
-            memory_efficient=memory_efficient
+            memory_efficient=memory_efficient,
         )
 
         return symmetrized_density
@@ -628,24 +694,25 @@ class DifferentiableTransformer(torch.nn.Module):
             # Group by B-factor to minimize redundant calculations
             b_factor_values = b_factors[batch_indices, atom_indices]
             unique_b_factors = torch.unique(b_factor_values)
-            
+
             for b_factor in unique_b_factors:
                 mask = (elements == elem) & (b_factors == b_factor)
                 if not mask.any():
                     continue
-                
+
                 b_batch_indices, b_atom_indices = torch.where(mask)
-                
+
                 asf = self.scattering_params[elem.item()]
                 asf_expanded = asf.expand(b_batch_indices.size(0), -1, -1)
-                
-                b_factor_tensor = torch.full((b_batch_indices.size(0),), b_factor, 
-                                           device=elements.device)
-                
+
+                b_factor_tensor = torch.full(
+                    (b_batch_indices.size(0),), b_factor, device=elements.device
+                )
+
                 integrand = ScatteringIntegrand(
                     asf_expanded, b_factor_tensor, em=self.em
                 )
-                
+
                 result = self.integrator.integrate(
                     lambda s: integrand(s, r),
                     dim=1,
@@ -654,8 +721,10 @@ class DifferentiableTransformer(torch.nn.Module):
                         [self.density_params.smin, self.density_params.smax]
                     ],
                 )
-                
-                for i, (b_idx, a_idx) in enumerate(zip(b_batch_indices, b_atom_indices)):
+
+                for i, (b_idx, a_idx) in enumerate(
+                    zip(b_batch_indices, b_atom_indices)
+                ):
                     densities[b_idx, a_idx] = result[i]
 
         return densities
@@ -664,31 +733,33 @@ class DifferentiableTransformer(torch.nn.Module):
         self, elements: torch.Tensor, b_factors: torch.Tensor
     ) -> torch.Tensor:
         """Compute radial density derivatives efficiently.
-        
+
         Parameters
         ----------
         elements : torch.Tensor
             Element indices of shape (batch_size, n_atoms).
         b_factors : torch.Tensor
             B-factors of shape (batch_size, n_atoms).
-            
+
         Returns
         -------
         torch.Tensor
             Radial density derivatives of shape (batch_size, n_atoms, n_radial).
         """
         densities = self._compute_radial_densities(elements, b_factors)
-        
+
         # Calculate gradients using finite differences for better efficiency
         # This computes gradients for all atoms in all batches at once
         padding = 1  # For central difference approximation
-        padded = F.pad(densities, (padding, padding), mode='replicate')
-        
+        padded = F.pad(densities, (padding, padding), mode="replicate")
+
         # Central difference formula: (f(x+h) - f(x-h))/(2h)
-        derivatives = (padded[:, :, 2:] - padded[:, :, :-2]) / (2 * self.density_params.rstep)
-        
+        derivatives = (padded[:, :, 2:] - padded[:, :, :-2]) / (
+            2 * self.density_params.rstep
+        )
+
         return derivatives
-        
+
     def _compute_grid_coordinates(self, coordinates: torch.Tensor) -> torch.Tensor:
         """Transform Cartesian coordinates to grid coordinates.
 
@@ -715,8 +786,8 @@ class DifferentiableTransformer(torch.nn.Module):
             Transformation matrix of shape (3, 3).
         """
         a, b, c = self.unit_cell.abc
-        alpha, beta, gamma = map(np.deg2rad, self.unit_cell.angles)
-        
+        alpha, beta, gamma = map(np.deg2rad, [self.unit_cell.alpha, self.unit_cell.beta, self.unit_cell.gamma])
+
         # Convert to tensors
         a = torch.tensor(a, device=self.voxel_spacing.device)
         b = torch.tensor(b, device=self.voxel_spacing.device)
@@ -724,7 +795,7 @@ class DifferentiableTransformer(torch.nn.Module):
         alpha = torch.tensor(alpha, device=self.voxel_spacing.device)
         beta = torch.tensor(beta, device=self.voxel_spacing.device)
         gamma = torch.tensor(gamma, device=self.voxel_spacing.device)
-        
+
         cos_alpha = torch.cos(alpha)
         cos_beta = torch.cos(beta)
         cos_gamma = torch.cos(gamma)
@@ -754,26 +825,24 @@ class DifferentiableTransformer(torch.nn.Module):
         self, unit_cells: List[UnitCell]
     ) -> torch.Tensor:
         """Compute transformation matrices for multiple unit cells.
-        
+
         Parameters
         ----------
         unit_cells : List[UnitCell]
             List of unit cells for each batch item.
-            
+
         Returns
         -------
         torch.Tensor
             Batch of transformation matrices of shape (batch_size, 3, 3).
         """
         batch_size = len(unit_cells)
-        matrices = torch.zeros(
-            (batch_size, 3, 3), device=self.voxel_spacing.device
-        )
-        
+        matrices = torch.zeros((batch_size, 3, 3), device=self.voxel_spacing.device)
+
         for i, uc in enumerate(unit_cells):
             a, b, c = uc.abc
             alpha, beta, gamma = map(np.deg2rad, uc.angles)
-            
+
             # Convert to tensors
             a = torch.tensor(a, device=self.voxel_spacing.device)
             b = torch.tensor(b, device=self.voxel_spacing.device)
@@ -781,12 +850,12 @@ class DifferentiableTransformer(torch.nn.Module):
             alpha = torch.tensor(alpha, device=self.voxel_spacing.device)
             beta = torch.tensor(beta, device=self.voxel_spacing.device)
             gamma = torch.tensor(gamma, device=self.voxel_spacing.device)
-            
+
             cos_alpha = torch.cos(alpha)
             cos_beta = torch.cos(beta)
             cos_gamma = torch.cos(gamma)
             sin_gamma = torch.sin(gamma)
-            
+
             volume_term = torch.sqrt(
                 1
                 - cos_alpha**2
@@ -794,7 +863,7 @@ class DifferentiableTransformer(torch.nn.Module):
                 - cos_gamma**2
                 + 2 * cos_alpha * cos_beta * cos_gamma
             )
-            
+
             matrix = torch.zeros((3, 3), device=self.voxel_spacing.device)
             matrix[0, 0] = a
             matrix[0, 1] = b * cos_gamma
@@ -802,9 +871,9 @@ class DifferentiableTransformer(torch.nn.Module):
             matrix[1, 1] = b * sin_gamma
             matrix[1, 2] = c * (cos_alpha - cos_beta * cos_gamma) / sin_gamma
             matrix[2, 2] = (a * b * c * volume_term) / (a * b * sin_gamma)
-            
+
             matrices[i] = matrix
-            
+
         return matrices
 
 
@@ -820,7 +889,7 @@ def dilate_points_torch(
     out: torch.Tensor,
 ) -> torch.Tensor:
     """Point dilation across batches.
-    
+
     Parameters
     ----------
     coordinates : torch.Tensor
@@ -841,7 +910,7 @@ def dilate_points_torch(
         Transformation matrix from grid to Cartesian of shape (3, 3).
     out : torch.Tensor
         Output density grid of shape (batch_size, *grid_shape).
-        
+
     Returns
     -------
     torch.Tensor
@@ -851,69 +920,181 @@ def dilate_points_torch(
     batch_size, n_atoms = coordinates.shape[:2]
     rmax2 = rmax * rmax
     grid_shape = out.shape[1:]  # Assuming out shape is (batch, z, y, x)
-    
+
     # Flatten batch and atom dimensions for vectorized processing
     # Process only active atoms
     flat_mask = active.view(-1)
     active_indices = torch.nonzero(flat_mask, as_tuple=True)[0]
-    
+
     if len(active_indices) == 0:
         return out
-    
+
     # Get batch and atom indices
     batch_indices = active_indices // n_atoms
     atom_indices = active_indices % n_atoms
-    
+
     # Get coordinates, occupancies, and radial densities for active atoms
     active_coords = coordinates[batch_indices, atom_indices]
     active_occupancies = occupancies[batch_indices, atom_indices]
     active_radial_densities = radial_densities[batch_indices, atom_indices]
-    
+
     # Create voxel grid for each active atom
     bounds_min = torch.ceil(active_coords - lmax.unsqueeze(0)).long()
     bounds_max = torch.floor(active_coords + lmax.unsqueeze(0)).long()
-    
+
     # Process each active atom (this loop is unavoidable due to varying grid sizes)
     for i, (b_idx, a_idx) in enumerate(zip(batch_indices, atom_indices)):
         center = active_coords[i]
         b_min, b_max = bounds_min[i], bounds_max[i]
-        
+
         # Skip if any dimension is empty
         if any((b_max - b_min + 1) <= 0):
             continue
-        
+
         # Create grid coordinates
         z_range = torch.arange(b_min[0], b_max[0] + 1, device=device)
         y_range = torch.arange(b_min[1], b_max[1] + 1, device=device)
         x_range = torch.arange(b_min[2], b_max[2] + 1, device=device)
-        
-        grid_z, grid_y, grid_x = torch.meshgrid(z_range, y_range, x_range, indexing="ij")
+
+        grid_z, grid_y, grid_x = torch.meshgrid(
+            z_range, y_range, x_range, indexing="ij"
+        )
         grid_points = torch.stack([grid_z, grid_y, grid_x], dim=-1).reshape(-1, 3)
-        
+
         # Compute distances in one vectorized operation
         rel_vectors = grid_points - center
         cart_vectors = torch.matmul(rel_vectors, grid_to_cartesian.T)
         distances2 = torch.sum(cart_vectors**2, dim=1)
-        
+
         # Apply density only to points within range
         mask = distances2 <= rmax2
         if not mask.any():
             continue
-            
+
         # Get indices and values in one operation
         grid_points_in_range = grid_points[mask]
         distances = torch.sqrt(distances2[mask])
-        rad_indices = torch.clamp((distances / rstep).long(), 0, active_radial_densities.shape[1] - 1)
-        
+        rad_indices = torch.clamp(
+            (distances / rstep).long(), 0, active_radial_densities.shape[1] - 1
+        )
+
         # Compute density values
         density_values = active_radial_densities[i, rad_indices] * active_occupancies[i]
-        
+
         # Map to output grid with proper periodic boundary conditions
         z_indices = torch.remainder(grid_points_in_range[:, 0], grid_shape[0])
         y_indices = torch.remainder(grid_points_in_range[:, 1], grid_shape[1])
         x_indices = torch.remainder(grid_points_in_range[:, 2], grid_shape[2])
-        
+
         # Use scatter_add for parallel updates
         out[b_idx, z_indices, y_indices, x_indices] += density_values
-    
+
     return out
+
+
+def to_f_density(map: torch.Tensor) -> torch.Tensor:
+    """FFT a density map."""
+    # f_density
+    return torch.fft.fftshift(
+        torch.fft.fftn(
+            torch.fft.ifftshift(map, dim=(-3, -2, -1)), dim=(-3, -2, -1), norm="ortho"
+        ),
+        dim=(-3, -2, -1),
+    )
+
+
+def to_density(f_map: torch.Tensor) -> torch.Tensor:
+    """Inverse FFT a FFTed density map."""
+    # density
+    return torch.fft.fftshift(
+        torch.fft.ifftn(
+            torch.fft.ifftshift(f_map, dim=(-3, -2, -1)), dim=(-3, -2, -1), norm="ortho"
+        ),
+        dim=(-3, -2, -1),
+    )
+
+
+def radial_hamming_3d(f_mag: torch.Tensor, cutoff_radius: float) -> torch.Tensor:
+    """3D radial Hamming filter in Fourier space
+
+    Args:
+        f_mag: Frequency magnitudes from FFT
+        cutoff_radius: Frequency cutoff in same units as frequency coordinates
+
+    Returns:
+        3D tensor containing the Hamming filter
+    """
+    filter = torch.zeros_like(f_mag)
+
+    mask = f_mag <= cutoff_radius
+
+    r_scaled = f_mag[mask] / cutoff_radius  # Scale to [0,1]
+    hamming_vals = 0.54 + 0.46 * torch.cos(torch.pi * r_scaled)
+
+    filter[mask] = hamming_vals
+
+    return filter
+
+
+def downsample_fft(
+    fft: torch.Tensor,
+    original_pixel_size: Union[torch.Tensor, tuple],
+    target_pixel_size: Union[torch.Tensor, tuple],
+) -> torch.Tensor:
+    """
+    Downsample density map in Fourier space # TODO: MAKE BATCHABLE
+
+    Args:
+        fft: torch.Tensor
+            Fourier transform (assumed to be fftshifted) of density map
+        original_pixel_size: torch.Tensor or Tuple
+            Current sampling rate in each dimension (e.g. 1/2 Å)
+        target_pixel_size: torch.Tensor or Tuple
+            Desired sampling rate in each dimension (e.g. 2.5 Å)
+    """
+    if isinstance(original_pixel_size, torch.Tensor) and isinstance(
+        target_pixel_size, torch.Tensor
+    ):
+        downsample_factor = target_pixel_size / original_pixel_size
+    elif isinstance(original_pixel_size, tuple) and isinstance(
+        target_pixel_size, tuple
+    ):
+        downsample_factor = torch.tensor(
+            tuple(t / o for t, o in zip(target_pixel_size, original_pixel_size))
+        )
+    else:
+        raise ValueError(
+            "original_pixel_size and target_pixel_size must be either both torch.Tensor or both tuple"
+        )
+
+    original_shape = torch.tensor(fft.shape)
+    new_shape = (original_shape / downsample_factor).long()
+
+    if torch.any(new_shape <= 0):
+        raise ValueError("Downsampling would result in invalid dimensions")
+
+    crops = []
+    for size, orig_size in zip(new_shape, original_shape):
+        start = ((orig_size - size) // 2).item()
+        end = start + size.item()
+        crops.append(slice(start, end))
+
+    downsampled_fft = fft[tuple(crops)]
+
+    return downsampled_fft
+
+
+def normalize(t: torch.Tensor) -> torch.Tensor:
+    """Normalize tensor to a Gaussian with mean 0 and std dev 1."""
+    if t.numel() == 0 or t.ndim == 0:
+        return t
+
+    if t.dtype not in [torch.complex32, torch.complex64, torch.complex128]:
+        return (t - t.mean()) / (t.std(unbiased=False) + 1e-8)
+
+    real_part = (t.real - t.real.mean()) / (t.real.std(unbiased=False) + 1e-8)
+    imag_part = (t.imag - t.imag.mean()) / (t.imag.std(unbiased=False) + 1e-8)
+
+    return torch.view_as_complex(
+        torch.cat([real_part[..., None], imag_part[..., None]], -1)
+    )
