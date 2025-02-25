@@ -64,7 +64,7 @@ class ScatteringIntegrand(torch.nn.Module):
         self, 
         asf: torch.Tensor, 
         bfactor: torch.Tensor, 
-        em: bool = False
+        em: bool = False,
     ) -> None:
         """Initialize the scattering integrand calculator.
 
@@ -77,13 +77,15 @@ class ScatteringIntegrand(torch.nn.Module):
             B-factors for each atom with shape (n_atoms,).
         em : bool, optional
             Whether to use electron microscopy mode, by default False.
+        r : Optional[torch.Tensor], optional
+            Radial distances, required for torchquad integration.
         """
         super().__init__()
         
         self.register_buffer("asf", asf)
         self.register_buffer("bfactor", bfactor.view(-1, 1, 1))
         self.em = em
-
+        
         self._validate_inputs(asf, bfactor)
         
         self.n_atoms = asf.shape[0]
@@ -124,9 +126,7 @@ class ScatteringIntegrand(torch.nn.Module):
 
     def compute_scattering_factors(
         self, 
-        s2: torch.Tensor, 
-        n_quad: int, 
-        n_points: int
+        s2: torch.Tensor
     ) -> torch.Tensor:
         """Compute atomic scattering factors for given squared scattering vectors.
         
@@ -134,85 +134,85 @@ class ScatteringIntegrand(torch.nn.Module):
         ----------
         s2 : torch.Tensor
             Squared scattering vector magnitudes.
-        n_quad : int
-            Number of quadrature points.
-        n_points : int
-            Number of radial points.
             
         Returns
         -------
         torch.Tensor
             Computed scattering factors.
         """
+        batch_shape = s2.shape
+        
         if self.em:
             f = torch.zeros(
-                (self.n_atoms, n_quad, n_points), 
+                (self.n_atoms,) + batch_shape, 
                 device=s2.device, 
                 dtype=s2.dtype
             )
         else:
-            f = self.constant_term.expand(self.n_atoms, n_quad, n_points).clone()
+            f = self.constant_term.expand((self.n_atoms,) + batch_shape).clone()
         
         for i in range(self.asf_range):
-            a_coeff = self.asf[:, i, 0].view(-1, 1, 1).expand(-1, n_quad, n_points)
-            b_coeff = self.asf[:, i, 1].view(-1, 1, 1).expand(-1, n_quad, n_points)
-            f += a_coeff * torch.exp(-b_coeff * s2)
+            a_coeff = self.asf[:, i, 0].view(-1, *(1,)*len(batch_shape))
+            b_coeff = self.asf[:, i, 1].view(-1, *(1,)*len(batch_shape))
+            f += a_coeff * torch.exp(-b_coeff * s2.view((1,) + batch_shape))
             
         return f
 
     def forward(
         self, 
-        s: torch.Tensor, 
-        r: torch.Tensor
+        s: torch.Tensor,
+        r: torch.Tensor,
     ) -> torch.Tensor:
-        """Compute the scattering integrand.
+        """Compute the scattering integrand for torchquad integration.
         
         Parameters
         ----------
         s : torch.Tensor
-            Scattering vector magnitudes of shape (n_quad,).
+            Scattering vector magnitudes from torchquad.
         r : torch.Tensor
-            Radial distances of shape (n_points,).
+            Radial distances to use for computing the density.
             
         Returns
         -------
         torch.Tensor
-            Computed integrand values with shape (n_atoms, n_quad, n_points).
+            Computed integrand values.
         """
-        n_quad = s.size(0)
-        n_points = r.size(0)
         
-        s = s.view(1, -1, 1)
-        r = r.view(1, 1, -1)
+        s_expanded = s.unsqueeze(-1) # (n_s, 1)
+        r_expanded = r.view(1, -1)  # (1, n_r)
         
-        s2 = s * s
+        s2 = s_expanded * s_expanded
         
-        f = self.compute_scattering_factors(s2, n_quad, n_points)
+        f = self.compute_scattering_factors(s2)  # (n_atoms, n_s, 1)
         
-        four_pi_s = 4 * torch.pi * s
-        w = 8 * f * torch.exp(-self.bfactor * s2) * s
+        four_pi_s = 4 * torch.pi * s_expanded  # (n_s, 1)
+        w = 8 * f * torch.exp(-self.bfactor * s2) * s_expanded  # (n_atoms, n_s, 1)
+        
+        eps = 1e-4
+        r_small_mask = r_expanded < eps
         
         result = torch.zeros(
-            (self.n_atoms, n_quad, n_points), 
+            (self.n_atoms, s.shape[0], r.shape[0]), 
             device=s.device, 
             dtype=s.dtype
         )
         
-        eps = 1e-4
-        r_small_mask = r[0, 0] < eps
-        
+        # prevent singularity with 4th order Taylor expansion
         if r_small_mask.any():
-            ar_small = four_pi_s * r[..., r_small_mask]
+            ar_small = four_pi_s * r_expanded[:, r_small_mask[0]]
             ar2_small = ar_small * ar_small
             taylor_term = 1.0 - ar2_small / 6.0
-            result[..., r_small_mask] = w[..., r_small_mask] * four_pi_s * taylor_term
-            
+            result[:, :, r_small_mask[0]] = w * four_pi_s * taylor_term
+        
         r_large_mask = ~r_small_mask
         if r_large_mask.any():
-            ar_large = four_pi_s * r[..., r_large_mask]
+            ar_large = four_pi_s * r_expanded[:, r_large_mask[0]]
             sin_term = torch.sin(ar_large)
-            result[..., r_large_mask] = w[..., r_large_mask] * sin_term / r[..., r_large_mask]
-            
+            result[:, :, r_large_mask[0]] = w * sin_term / r_expanded[:, r_large_mask[0]]
+        
+        # (n_atoms, n_s, n_r) to (n_s, n_atoms, n_r)
+        result = result.permute(1, 0, 2)
+        
         return result
 
 
@@ -691,7 +691,6 @@ class DifferentiableTransformer(torch.nn.Module):
             if batch_indices.numel() == 0:
                 continue
 
-            # Group by B-factor to minimize redundant calculations
             b_factor_values = b_factors[batch_indices, atom_indices]
             unique_b_factors = torch.unique(b_factor_values)
 
@@ -713,7 +712,7 @@ class DifferentiableTransformer(torch.nn.Module):
                     asf_expanded, b_factor_tensor, em=self.em
                 )
 
-                result = self.integrator.integrate(
+                result = self.integrator.integrate( # FIXME: This isn't working right
                     lambda s: integrand(s, r),
                     dim=1,
                     N=self.density_params.quad_points,
@@ -722,6 +721,7 @@ class DifferentiableTransformer(torch.nn.Module):
                     ],
                 )
 
+                # result has shape (n_atoms_in_group, n_radial)
                 for i, (b_idx, a_idx) in enumerate(
                     zip(b_batch_indices, b_atom_indices)
                 ):
