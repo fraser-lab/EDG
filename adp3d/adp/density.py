@@ -784,6 +784,7 @@ class DifferentiableTransformer(torch.nn.Module):
         torch.Tensor
             Grid coordinates of shape (batch_size, n_atoms, 3).
         """
+        coordinates = coordinates.to(dtype=self.cartesian_to_lattice.dtype)
         grid_coordinates = torch.matmul(coordinates, self.cartesian_to_lattice.T)
         grid_coordinates /= self.voxel_spacing
         return grid_coordinates

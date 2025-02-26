@@ -194,3 +194,7 @@ tests/resources/**/*.pdb
 
 # stuff I don't want on working tree
 future/
+
+# unignore
+!tests/resources/7pzt_sim_map.mrc
+!tests/resources/1az5_sim_map.mrc
