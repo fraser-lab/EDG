@@ -2,10 +2,10 @@ import torch
 from typing import Dict, Optional, Tuple, List, Union
 from dataclasses import dataclass
 import torch.nn.functional as F
-from torchquad import Simpson, Trapezoid
+from torchquad import Simpson, Trapezoid, GaussLegendre
 import numpy as np
 
-from adp3d.qfit.volume import XMap, EMMap, GridParameters
+from adp3d.qfit.volume import XMap, EMMap, GridParameters, Resolution
 from adp3d.qfit.unitcell import UnitCell
 from adp3d.qfit.spacegroups import GetSpaceGroup
 from adp3d.data.sf import ATOM_STRUCTURE_FACTORS, ELECTRON_SCATTERING_FACTORS
@@ -31,7 +31,7 @@ class DensityParameters:
     quad_points : int
         Number of quadrature points for numerical integration.
     integration_method : str
-        Integration method to use ('simpson' or 'trapezoid').
+        Integration method to use ('gausslegendre' or 'simpson' or 'trapezoid').
     """
 
     rmax: float = 3.0
@@ -39,7 +39,7 @@ class DensityParameters:
     smin: float = 0.0
     smax: float = 0.5
     quad_points: int = 50
-    integration_method: str = "simpson"
+    integration_method: str = "gausslegendre"
 
     def __post_init__(self) -> None:
         """Validate parameters after initialization."""
@@ -49,8 +49,10 @@ class DensityParameters:
             raise ValueError("smin must be less than smax")
         if self.quad_points < 2:
             raise ValueError("quad_points must be at least 2")
-        if self.integration_method not in ["simpson", "trapezoid"]:
-            raise ValueError("integration_method must be 'simpson' or 'trapezoid'")
+        if self.integration_method not in ["gausslegendre", "simpson", "trapezoid"]:
+            raise ValueError(
+                "integration_method must be 'gausslegendre', 'simpson' or 'trapezoid'"
+            )
 
 
 class ScatteringIntegrand(torch.nn.Module):
@@ -162,7 +164,7 @@ class ScatteringIntegrand(torch.nn.Module):
             # [n_atoms, 1, 1] * exp(-[n_atoms, 1, 1] * [1, n_s, 1]) -> [n_atoms, n_s, 1]
             f += a_coeff * torch.exp(-b_coeff * s2_broadcast)
 
-        return f # [n_atoms, n_s, 1]
+        return f  # [n_atoms, n_s, 1]
 
     def forward(
         self,
@@ -225,44 +227,44 @@ class ScatteringIntegrand(torch.nn.Module):
         return result
 
 
-class DifferentiableXMap(torch.nn.Module):
-    """Differentiable version of XMap for handling crystallographic symmetry.
-
-    Implements a vectorized approach to applying symmetry operations across batches
-    of electron density maps while maintaining differentiability.
-    """
+class DifferentiableXMap:
+    """Torch version of qFit XMap for handling crystallographic symmetry."""
 
     def __init__(
         self,
         xmap: XMap = None,
-        grid_parameters: GridParameters = None,
+        array: Optional[torch.Tensor] = None,
+        grid_parameters: Optional[GridParameters] = None,
         unit_cell: Optional[UnitCell] = None,
-        resolution: Optional[float] = None,
+        resolution: Optional[Union[Resolution, float]] = None,
         hkl: Optional[torch.Tensor] = None,
+        origin: Optional[torch.Tensor] = None,
         device: torch.device = torch.device("cpu"),
     ) -> None:
         """Initialize differentiable XMap.
 
         Parameters
         ----------
-        xmap : XMap
+        xmap : XMap, optional
             Initialize from qFit XMap (preferred).
-        grid_parameters : GridParameters
+        array : Optional[torch.Tensor], optional
+            Map array, by default None.
+        grid_parameters : Optional[GridParameters], optional
             Grid parameters for the map, meaning voxel spacing (voxelspacing) and offset.
-        unit_cell : UnitCell
+        unit_cell : Optional[UnitCell], optional
             Crystallographic unit cell information.
-        resolution : Optional[float], optional
+        resolution : Optional[Union[Resolution, float]], optional
             Map resolution in Angstroms, by default None.
         hkl : Optional[torch.Tensor], optional
             Miller indices for the map, by default None.
         device : torch.device, optional
             Device to use for computations, by default 'cpu'.
         """
-        super().__init__()
         if xmap is not None:
             self.unit_cell = xmap.unit_cell
             self.resolution = xmap.resolution
             self.hkl = xmap.hkl
+            self.origin = xmap.origin
 
             self.register_buffer(
                 "voxel_spacing", torch.tensor(xmap.voxelspacing, device=device)
@@ -272,6 +274,8 @@ class DifferentiableXMap(torch.nn.Module):
             self.unit_cell = unit_cell
             self.resolution = resolution
             self.hkl = hkl
+            self.origin = origin
+            self.array = array
 
             self.register_buffer(
                 "voxel_spacing",
@@ -281,7 +285,30 @@ class DifferentiableXMap(torch.nn.Module):
                 "offset", torch.tensor(grid_parameters.offset, device=device)
             )
 
+        self._validate_input(xmap)
+
         self._setup_symmetry_matrices(device)
+
+    def _validate_input(self, xmap) -> None:
+        """Validate input parameters."""
+        if xmap is not None:
+            if not isinstance(xmap, XMap):
+                raise ValueError(
+                    "xmap must be an instance of qFit's XMap (adp3d.qfit.volume.XMap)"
+                )
+        else:
+            if self.array is None:
+                raise ValueError("array must be provided")
+            if self.unit_cell is None:
+                raise ValueError("unit_cell must be provided")
+            if self.resolution is None:
+                raise ValueError("resolution must be provided")
+            if self.hkl is None:
+                raise ValueError("hkl must be provided")
+            if self.voxel_spacing is None:
+                raise ValueError("voxel_spacing must be provided")
+            if self.offset is None:
+                raise ValueError("offset must be provided")
 
     def _setup_symmetry_matrices(self, device: torch.device) -> None:
         """Precompute symmetry operation matrices for efficient application."""
@@ -474,9 +501,7 @@ class DifferentiableTransformer(torch.nn.Module):
 
     def __init__(
         self,
-        unit_cell: UnitCell,
-        voxel_spacing: Union[torch.Tensor, np.ndarray],
-        grid_shape: Tuple[int, int, int],
+        xmap: DifferentiableXMap,
         scattering_params: Dict[str, torch.Tensor],
         density_params: Optional[DensityParameters] = None,
         em: bool = False,
@@ -487,12 +512,8 @@ class DifferentiableTransformer(torch.nn.Module):
 
         Parameters
         ----------
-        unit_cell : UnitCell
-            Crystallographic unit cell information.
-        voxel_spacing : Union[torch.Tensor, np.ndarray]
-            Grid spacing in each dimension.
-        grid_shape : Tuple[int, int, int]
-            Shape of the density grid.
+        xmap : DifferentiableXMap
+            Differentiable XMap object.
         scattering_params : Dict[str, torch.Tensor]
             Atomic scattering parameters for each element.
         density_params : Optional[DensityParameters], optional
@@ -545,9 +566,9 @@ class DifferentiableTransformer(torch.nn.Module):
 
     def _setup_integrator(self) -> None:
         """Set up numerical integrator based on density parameters."""
-        if (
-            self.density_params.integration_method.lower() == "simpson"
-        ):  # TODO: check if these are sufficient, compare to normal qFit
+        if self.density_params.integration_method.lower() == "gausslegendre":
+            self.integrator = GaussLegendre()
+        elif self.density_params.integration_method.lower() == "simpson":
             self.integrator = Simpson()
         elif self.density_params.integration_method.lower() == "trapezoid":
             self.integrator = Trapezoid()
