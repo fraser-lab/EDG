@@ -267,10 +267,8 @@ class XMap_torch:
             self.origin = xmap.origin
             self.shape = xmap.shape
 
-            self.register_buffer(
-                "voxel_spacing", torch.tensor(xmap.voxelspacing, device=device)
-            )
-            self.register_buffer("offset", torch.tensor(xmap.offset, device=device))
+            self.voxelspacing = torch.tensor(xmap.voxelspacing, device=device)
+            self.offset = torch.tensor(xmap.offset, device=device)
         else:
             self.unit_cell = unit_cell
             self.resolution = resolution
@@ -279,13 +277,8 @@ class XMap_torch:
             self.array = array
             self.shape = self.array.shape
 
-            self.register_buffer(
-                "voxel_spacing",
-                torch.tensor(grid_parameters.voxelspacing, device=device),
-            )
-            self.register_buffer(
-                "offset", torch.tensor(grid_parameters.offset, device=device)
-            )
+            self.voxelspacing = torch.tensor(grid_parameters.voxelspacing, device=device)
+            self.offset = torch.tensor(grid_parameters.offset, device=device)
 
         self._validate_input(xmap)
 
@@ -307,10 +300,10 @@ class XMap_torch:
                 raise ValueError("resolution must be provided")
             if self.hkl is None:
                 raise ValueError("hkl must be provided")
-            if self.voxel_spacing is None:
-                raise ValueError("voxel_spacing must be provided")
+            if self.voxelspacing is None:
+                raise ValueError("grid_parameters must be provided")
             if self.offset is None:
-                raise ValueError("offset must be provided")
+                raise ValueError("grid_parameters must be provided")
 
     def _setup_symmetry_matrices(self, device: torch.device) -> None:
         """Precompute symmetry operation matrices for efficient application."""
@@ -324,8 +317,8 @@ class XMap_torch:
             R_matrices[i] = torch.tensor(symop.R, device=device, dtype=torch.float32)
             t_vectors[i] = torch.tensor(symop.t, device=device, dtype=torch.float32)
 
-        self.register_buffer("R_matrices", R_matrices)
-        self.register_buffer("t_vectors", t_vectors)
+        self.R_matrices = R_matrices
+        self.t_vectors = t_vectors
 
     def _apply_symmetry_chunk(
         self,
@@ -529,30 +522,38 @@ class DifferentiableTransformer(torch.nn.Module):
         if space_group is not None:
             self.unit_cell.space_group = GetSpaceGroup(space_group)
 
-        self.register_buffer("voxel_spacing", xmap.voxel_spacing)
+        self.register_buffer("voxelspacing", xmap.voxelspacing)
         self.grid_shape = xmap.shape
         self.scattering_params = {k: v.to(device) for k, v in scattering_params.items()}
         self.density_params = density_params or DensityParameters()
         self.em = em
 
-        self.xmap = XMap_torch(xmap=xmap, device=device)
+        self.xmap = xmap
 
         self._setup_transforms()
         self._setup_integrator()
 
     def _setup_transforms(self) -> None:
         """Initialize transformation matrices for coordinate conversions."""
-        abc = self.unit_cell.abc
+        self.dtype = torch.float32 # need to set this here or else doubles start popping up and ruining operations
+    
+        abc = torch.tensor(self.unit_cell.abc, dtype=self.dtype, device=self.voxelspacing.device)
+        
+        lattice_to_cartesian = self._unit_cell_to_cartesian_matrix()
         self.register_buffer(
             "lattice_to_cartesian",
-            self._unit_cell_to_cartesian_matrix() / torch.tensor(abc).reshape(3, 1),
+            (lattice_to_cartesian / abc.reshape(3, 1)).to(dtype=self.dtype)
         )
+        
         self.register_buffer(
-            "cartesian_to_lattice", torch.inverse(self.lattice_to_cartesian)
+            "cartesian_to_lattice", 
+            torch.inverse(self.lattice_to_cartesian).to(dtype=self.dtype)
         )
+        
+        voxelspacing = self.voxelspacing.to(dtype=self.dtype)
         self.register_buffer(
             "grid_to_cartesian",
-            self.lattice_to_cartesian * self.voxel_spacing.reshape(3, 1),
+            (self.lattice_to_cartesian * voxelspacing.reshape(3, 1)).to(dtype=self.dtype)
         )
 
     def _setup_integrator(self) -> None:
@@ -612,10 +613,10 @@ class DifferentiableTransformer(torch.nn.Module):
             dtype=coordinates.dtype
         )
         
-        grid_coordinates = self._compute_grid_coordinates(coordinates)
+        grid_coordinates = self._compute_grid_coordinates(coordinates).to(dtype=torch.float32)
         
         lmax = torch.tensor(
-            [self.density_params.rmax / vs for vs in self.voxel_spacing],
+            [self.density_params.rmax / vs for vs in self.voxelspacing],
             device=device,
         )
         active = torch.ones_like(elements, dtype=torch.bool)
@@ -763,7 +764,7 @@ class DifferentiableTransformer(torch.nn.Module):
         """
         coordinates = coordinates.to(dtype=self.cartesian_to_lattice.dtype)
         grid_coordinates = torch.matmul(coordinates, self.cartesian_to_lattice.T)
-        grid_coordinates /= self.voxel_spacing
+        grid_coordinates /= self.voxelspacing
         return grid_coordinates
 
     def _unit_cell_to_cartesian_matrix(self) -> torch.Tensor:
@@ -780,12 +781,12 @@ class DifferentiableTransformer(torch.nn.Module):
             [self.unit_cell.alpha, self.unit_cell.beta, self.unit_cell.gamma],
         )
 
-        a = torch.tensor(a, device=self.voxel_spacing.device)
-        b = torch.tensor(b, device=self.voxel_spacing.device)
-        c = torch.tensor(c, device=self.voxel_spacing.device)
-        alpha = torch.tensor(alpha, device=self.voxel_spacing.device)
-        beta = torch.tensor(beta, device=self.voxel_spacing.device)
-        gamma = torch.tensor(gamma, device=self.voxel_spacing.device)
+        a = torch.tensor(a, device=self.voxelspacing.device)
+        b = torch.tensor(b, device=self.voxelspacing.device)
+        c = torch.tensor(c, device=self.voxelspacing.device)
+        alpha = torch.tensor(alpha, device=self.voxelspacing.device)
+        beta = torch.tensor(beta, device=self.voxelspacing.device)
+        gamma = torch.tensor(gamma, device=self.voxelspacing.device)
 
         cos_alpha = torch.cos(alpha)
         cos_beta = torch.cos(beta)
@@ -800,7 +801,7 @@ class DifferentiableTransformer(torch.nn.Module):
             + 2 * cos_alpha * cos_beta * cos_gamma
         )
 
-        matrix = torch.zeros((3, 3), device=self.voxel_spacing.device)
+        matrix = torch.zeros((3, 3), device=self.voxelspacing.device)
         matrix[0, 0] = a
         matrix[0, 1] = b * cos_gamma
         matrix[0, 2] = c * cos_beta
@@ -826,18 +827,18 @@ class DifferentiableTransformer(torch.nn.Module):
             Batch of transformation matrices of shape (batch_size, 3, 3).
         """
         batch_size = len(unit_cells)
-        matrices = torch.zeros((batch_size, 3, 3), device=self.voxel_spacing.device)
+        matrices = torch.zeros((batch_size, 3, 3), device=self.voxelspacing.device)
 
         for i, uc in enumerate(unit_cells):
             a, b, c = uc.abc
             alpha, beta, gamma = map(np.deg2rad, uc.angles)
 
-            a = torch.tensor(a, device=self.voxel_spacing.device)
-            b = torch.tensor(b, device=self.voxel_spacing.device)
-            c = torch.tensor(c, device=self.voxel_spacing.device)
-            alpha = torch.tensor(alpha, device=self.voxel_spacing.device)
-            beta = torch.tensor(beta, device=self.voxel_spacing.device)
-            gamma = torch.tensor(gamma, device=self.voxel_spacing.device)
+            a = torch.tensor(a, device=self.voxelspacing.device)
+            b = torch.tensor(b, device=self.voxelspacing.device)
+            c = torch.tensor(c, device=self.voxelspacing.device)
+            alpha = torch.tensor(alpha, device=self.voxelspacing.device)
+            beta = torch.tensor(beta, device=self.voxelspacing.device)
+            gamma = torch.tensor(gamma, device=self.voxelspacing.device)
 
             cos_alpha = torch.cos(alpha)
             cos_beta = torch.cos(beta)
@@ -852,7 +853,7 @@ class DifferentiableTransformer(torch.nn.Module):
                 + 2 * cos_alpha * cos_beta * cos_gamma
             )
 
-            matrix = torch.zeros((3, 3), device=self.voxel_spacing.device)
+            matrix = torch.zeros((3, 3), device=self.voxelspacing.device)
             matrix[0, 0] = a
             matrix[0, 1] = b * cos_gamma
             matrix[0, 2] = c * cos_beta
