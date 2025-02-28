@@ -281,7 +281,7 @@ class DensityGuidedDiffusion:
             with torch.set_grad_enabled(True):  # Explicit gradient context
                 masked_coords = step_coords.clone().squeeze()[pad_mask, :]
                 coords_to_grad = masked_coords.detach().clone()
-                coords_to_grad.requires_grad_(True)
+                coords_to_grad = coords_to_grad.requires_grad_(True)
 
                 density_score = self.density_score(coords_to_grad, elements, resolution)
                 density_score.backward()
