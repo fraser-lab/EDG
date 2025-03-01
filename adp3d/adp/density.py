@@ -652,9 +652,8 @@ class DifferentiableTransformer(torch.nn.Module):
             ).view(
                 1, 1, 3
             )
-            print(coordinates.requires_grad, coordinates.grad_fn, density.requires_grad, density.grad_fn)
 
-            density = dilate_points_torch(
+            density += dilate_points_torch(
                 grid_coordinates_rot,
                 active,
                 occupancies,
@@ -663,7 +662,7 @@ class DifferentiableTransformer(torch.nn.Module):
                 self.density_params.rstep,
                 self.density_params.rmax,
                 self.grid_to_cartesian,
-                density,
+                self.grid_shape,
             )
 
         return density
@@ -851,7 +850,6 @@ class DifferentiableTransformer(torch.nn.Module):
 
         return matrix
 
-
 def dilate_points_torch(
     coordinates: torch.Tensor,
     active: torch.Tensor,
@@ -861,9 +859,10 @@ def dilate_points_torch(
     rstep: float,
     rmax: float,
     grid_to_cartesian: torch.Tensor,
-    out: torch.Tensor,
+    grid_shape: Tuple[int, int, int],
+    chunk_size: int = 256,
 ) -> torch.Tensor:
-    """Point dilation across batches.
+    """Point dilation onto a grid across batches.
 
     Parameters
     ----------
@@ -883,102 +882,96 @@ def dilate_points_torch(
         Maximum radius for density calculation.
     grid_to_cartesian : torch.Tensor
         Transformation matrix from grid to Cartesian of shape (3, 3).
-    out : torch.Tensor
-        Output density grid of shape (batch_size, *grid_shape).
+    grid_shape : Tuple[int, int, int]
+        Output grid shape (int, int, int).
+    chunk_size : int, optional
+        Number of atoms to process in each chunk, by default 256.
 
     Returns
     -------
     torch.Tensor
-        Updated density grid.
+        Density grid.
     """
-
     device = coordinates.device
     dtype = coordinates.dtype
     batch_size, n_atoms = coordinates.shape[:2]
     rmax2 = rmax * rmax
-    grid_shape = out.shape[1:]
 
-    updates = out.clone()
-
-    flat_mask = active.view(-1)
-    active_indices = torch.nonzero(flat_mask, as_tuple=True)[0]
-
-    if len(active_indices) == 0:
-        return out.clone()
-
-    batch_indices = active_indices // n_atoms
-    atom_indices = active_indices % n_atoms
-
-    g00 = grid_to_cartesian[0, 0]
-    g01 = grid_to_cartesian[0, 1]
-    g02 = grid_to_cartesian[0, 2]
-    g11 = grid_to_cartesian[1, 1]
-    g12 = grid_to_cartesian[1, 2]
+    g00, g01, g02 = grid_to_cartesian[0, 0], grid_to_cartesian[0, 1], grid_to_cartesian[0, 2]
+    g11, g12 = grid_to_cartesian[1, 1], grid_to_cartesian[1, 2]
     g22 = grid_to_cartesian[2, 2]
 
-    for i in range(len(active_indices)):
-        batch_idx = batch_indices[i]
-        atom_idx = atom_indices[i]
+    result = torch.zeros((batch_size,) + grid_shape, device=device, dtype=dtype)
 
-        q = occupancies[batch_idx, atom_idx]
-        center_a = coordinates[batch_idx, atom_idx, 0]  # x
-        center_b = coordinates[batch_idx, atom_idx, 1]  # y
-        center_c = coordinates[batch_idx, atom_idx, 2]  # z
+    for b in range(batch_size):
+        for atom_idx in range(n_atoms):
+            if not active[b, atom_idx]:
+                continue
 
-        # Calculate bounds
-        cmin = torch.ceil(center_c - lmax[2]).long()
-        cmax = torch.floor(center_c + lmax[2]).long()
-        bmin = torch.ceil(center_b - lmax[1]).long()
-        bmax = torch.floor(center_b + lmax[1]).long()
-        amin = torch.ceil(center_a - lmax[0]).long()
-        amax = torch.floor(center_a + lmax[0]).long()
+            q = occupancies[b, atom_idx]
+            center_a, center_b, center_c = coordinates[b, atom_idx]
 
-        if cmax < cmin or bmax < bmin or amax < amin:
-            continue
+            cmin = torch.ceil(center_c - lmax[2]).long()
+            cmax = torch.floor(center_c + lmax[2]).long()
+            bmin = torch.ceil(center_b - lmax[1]).long()
+            bmax = torch.floor(center_b + lmax[1]).long()
+            amin = torch.ceil(center_a - lmax[0]).long()
+            amax = torch.floor(center_a + lmax[0]).long()
 
-        atom_densities = radial_densities[batch_idx, atom_idx]
+            if cmax < cmin or bmax < bmin or amax < amin:
+                continue
 
-        c_coords = torch.arange(cmin, cmax + 1, device=device, dtype=dtype)
-        b_coords = torch.arange(bmin, bmax + 1, device=device, dtype=dtype)
-        a_coords = torch.arange(amin, amax + 1, device=device, dtype=dtype)
+            c_coords = torch.arange(cmin, cmax + 1, device=device, dtype=dtype)
+            b_coords = torch.arange(bmin, bmax + 1, device=device, dtype=dtype)
+            a_coords = torch.arange(amin, amax + 1, device=device, dtype=dtype)
 
-        grid_c, grid_b, grid_a = torch.meshgrid(
-            c_coords, b_coords, a_coords, indexing="ij"
-        )
+            grid_c, grid_b, grid_a = torch.meshgrid(
+                c_coords, b_coords, a_coords, indexing="ij"
+            )
 
-        dc = center_c - grid_c
-        db = center_b - grid_b
-        da = center_a - grid_a
+            dc = center_c - grid_c
+            db = center_b - grid_b
+            da = center_a - grid_a
 
-        dz = g22 * dc
-        dy = g12 * dc + g11 * db
-        dx = g02 * dc + g01 * db + g00 * da
+            dz = g22 * dc
+            dy = g12 * dc + g11 * db
+            dx = g02 * dc + g01 * db + g00 * da
 
-        d2_zyx = dx * dx + dy * dy + dz * dz
+            d2_zyx = dx * dx + dy * dy + dz * dz
 
-        mask = d2_zyx <= rmax2
-        if not mask.any():
-            continue
+            mask = d2_zyx <= rmax2
+            if not torch.any(mask):
+                continue
 
-        valid_c = grid_c[mask]
-        valid_b = grid_b[mask]
-        valid_a = grid_a[mask]
+            r = torch.sqrt(d2_zyx[mask])
 
-        distances = torch.sqrt(d2_zyx[mask])
-        rad_indices = torch.round(distances / rstep).long()
-        rad_indices = torch.clamp(rad_indices, 0, atom_densities.shape[0] - 1)
+            # Differentiable interpolation into radial_densities
+            rad_continuous = r / rstep
+            rad_indices_low = torch.floor(rad_continuous).long()
+            rad_indices_high = rad_indices_low + 1
 
-        density_values = q * atom_densities[rad_indices]
+            max_idx = radial_densities.shape[2] - 1
+            rad_indices_low = torch.clamp(rad_indices_low, 0, max_idx)
+            rad_indices_high = torch.clamp(rad_indices_high, 0, max_idx)
 
-        # Apply periodic boundary conditions
-        c_indices = torch.remainder(valid_c, grid_shape[0]).to(dtype=torch.long)
-        b_indices = torch.remainder(valid_b, grid_shape[1]).to(dtype=torch.long)
-        a_indices = torch.remainder(valid_a, grid_shape[2]).to(dtype=torch.long)
+            weights_high = rad_continuous - rad_indices_low.float()
+            weights_low = 1.0 - weights_high
 
-        # TODO: holding batch_size density maps in memory might get expensive for larger ensemble sizes
-        updates[batch_idx, c_indices, b_indices, a_indices] += density_values
+            atom_density = radial_densities[b, atom_idx]
+            values = q * (
+                weights_low * atom_density[rad_indices_low] +
+                weights_high * atom_density[rad_indices_high]
+            )
 
-    return updates
+            # Apply periodic boundary conditions
+            c_indices = torch.remainder(grid_c[mask], grid_shape[0]).long()
+            b_indices = torch.remainder(grid_b[mask], grid_shape[1]).long()
+            a_indices = torch.remainder(grid_a[mask], grid_shape[2]).long()
+
+            result[b, c_indices, b_indices, a_indices] += values # += is automatically scatter_add_
+
+    return result
+
 
 def normalize(t: torch.Tensor) -> torch.Tensor:
     """Normalize tensor to a Gaussian with mean 0 and std dev 1."""
@@ -994,6 +987,7 @@ def normalize(t: torch.Tensor) -> torch.Tensor:
     return torch.view_as_complex(
         torch.cat([real_part[..., None], imag_part[..., None]], -1)
     )
+
 
 def to_f_density(map: torch.Tensor) -> torch.Tensor:
     """FFT a density map."""
