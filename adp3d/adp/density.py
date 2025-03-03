@@ -102,6 +102,10 @@ class ScatteringIntegrand(torch.nn.Module):
             self.register_buffer(
                 "constant_term", self.asf[:, 5, 0].view(self.n_atoms, 1, 1)
             )
+        else:
+            self.register_buffer(
+                "constant_term", self.asf[:, 4, 0].new_zeros(self.n_atoms, 1, 1)
+            )
 
     def _validate_inputs(self, asf: torch.Tensor, bfactor: torch.Tensor) -> None:
         """Validate input tensors for shape and content.
@@ -157,7 +161,7 @@ class ScatteringIntegrand(torch.nn.Module):
 
         if self.em:
             # initialize with zeros for EM mode
-            f = torch.zeros((self.n_atoms, n_s, 1), device=s2.device, dtype=s2.dtype)
+            f = self.constant_term.new_zeros(self.n_atoms, n_s, 1)
         else:
             # initialize with constant term for X-ray mode (shape: [n_atoms, n_s, 1])
             f = self.constant_term.expand(self.n_atoms, n_s, 1).clone()
@@ -190,8 +194,6 @@ class ScatteringIntegrand(torch.nn.Module):
         torch.Tensor
             Computed integrand values.
         """
-        original_shape = s.shape
-
         s_flat = s.reshape(-1)
 
         s_expanded = s_flat.unsqueeze(-1)  # (n_s, 1)
@@ -207,24 +209,24 @@ class ScatteringIntegrand(torch.nn.Module):
         eps = 1e-4
         r_small_mask = r_expanded < eps
 
-        result = torch.zeros(
-            (self.n_atoms, s.shape[0], r.shape[0]), device=s.device, dtype=s.dtype
+        result = w.new_zeros(
+            (self.n_atoms, s.shape[0], r.shape[0])
         )
 
         # prevent singularity with 4th order Taylor expansion
         if r_small_mask.any():
-            ar_small = four_pi_s * r_expanded[:, r_small_mask[0]]
+            ar_small = four_pi_s * torch.where(r_small_mask[0], r_expanded, 0)
             ar2_small = ar_small * ar_small
             taylor_term = 1.0 - ar2_small / 6.0
-            result[:, :, r_small_mask[0]] = w * four_pi_s * taylor_term
+            small_r_result = w * four_pi_s * taylor_term
+            result += small_r_result
 
         r_large_mask = ~r_small_mask
         if r_large_mask.any():
-            ar_large = four_pi_s * r_expanded[:, r_large_mask[0]]
+            ar_large = four_pi_s * torch.where(r_large_mask[0], r_expanded, 0)
             sin_term = torch.sin(ar_large)
-            result[:, :, r_large_mask[0]] = (
-                w * sin_term / r_expanded[:, r_large_mask[0]]
-            )
+            large_r_result = w * sin_term / torch.where(r_large_mask[0], r_expanded, 1)
+            result += large_r_result
 
         # (n_atoms, n_s, n_r) to (n_s, n_atoms, n_r)
         result = result.permute(1, 0, 2)
@@ -500,7 +502,7 @@ class DifferentiableTransformer(torch.nn.Module):
     def __init__(
         self,
         xmap: XMap_torch,
-        scattering_params: Dict[str, torch.Tensor],
+        scattering_params: torch.Tensor,
         density_params: Optional[DensityParameters] = None,
         em: bool = False,
         space_group: Optional[int] = None,
@@ -512,8 +514,8 @@ class DifferentiableTransformer(torch.nn.Module):
         ----------
         xmap : DifferentiableXMap
             Differentiable XMap object.
-        scattering_params : Dict[str, torch.Tensor]
-            Atomic scattering parameters for each element.
+        scattering_params : torch.Tensor
+            Atomic scattering parameters for each element, of shape [n_elem, n_coeffs, 2].
         density_params : Optional[DensityParameters], optional
             Parameters for density calculation, by default None.
         em : bool, optional
@@ -532,7 +534,7 @@ class DifferentiableTransformer(torch.nn.Module):
 
         self.register_buffer("voxelspacing", xmap.voxelspacing)
         self.grid_shape = xmap.shape
-        self.scattering_params = {k: v.to(device) for k, v in scattering_params.items()}
+        self.scattering_params = scattering_params.to(device)
         self.density_params = density_params or DensityParameters()
         self.em = em
 
@@ -694,53 +696,48 @@ class DifferentiableTransformer(torch.nn.Module):
         batch_size, n_atoms = elements.shape
         n_radial = r.shape[0]
 
-        densities = torch.zeros((batch_size, n_atoms, n_radial), device=self.device)
+        elements_flat = elements.reshape(-1)
+        b_factors_flat = b_factors.reshape(-1)
 
-        unique_elements = torch.unique(elements)
-        for elem in unique_elements:
-            batch_indices, atom_indices = torch.where(elements == elem)
-            if batch_indices.numel() == 0:
-                continue
+        combined = torch.stack([elements_flat, b_factors_flat], dim=1)
+        unique_combinations, inverse_indices = torch.unique(
+            combined, dim=0, return_inverse=True
+        )
 
-            b_factor_values = b_factors[batch_indices, atom_indices]
-            unique_b_factors = torch.unique(b_factor_values)
+        unique_elements = unique_combinations[:, 0].long()
+        element_params = self.scattering_params[
+            unique_elements
+        ]  # Shape: [n_unique, n_coeffs, 2]
+        unique_bfactors = unique_combinations[:, 1]
 
-            for b_factor in unique_b_factors:
-                mask = (elements == elem) & (b_factors == b_factor)
-                if not mask.any():
-                    continue
+        def compute_batched_density(
+            params: torch.Tensor, bfac: torch.Tensor
+        ) -> torch.Tensor:
+            """Compute density for a batch of parameters and b-factors."""
+            integrand = ScatteringIntegrand(
+                params.unsqueeze(0), bfac.reshape(-1), em=self.em
+            )
 
-                b_batch_indices, b_atom_indices = torch.where(mask)
+            result = self.integrator.integrate(
+                lambda s: integrand(s, r),
+                dim=1,
+                N=self.density_params.quad_points,
+                integration_domain=torch.tensor(
+                    [[self.density_params.smin, self.density_params.smax]],
+                    device=self.device,
+                ),
+                backend="torch",
+            )
 
-                asf = self.scattering_params[elem.item()]
-                asf_expanded = asf.expand(b_batch_indices.size(0), -1, -1).to(
-                    self.device
-                )
+            return result[0]  # Shape is (n_radial,)
 
-                b_factor_tensor = torch.full(
-                    (b_batch_indices.size(0),), b_factor, device=self.device
-                )
+        # Create a vmap that processes all unique combinations at once
+        batched_compute = torch.vmap(compute_batched_density)
+        all_unique_densities = batched_compute(element_params, unique_bfactors)
 
-                integrand = ScatteringIntegrand(
-                    asf_expanded, b_factor_tensor, em=self.em
-                )
-
-                result = self.integrator.integrate(
-                    lambda s: integrand(s, r),
-                    dim=1,
-                    N=self.density_params.quad_points,
-                    integration_domain=torch.tensor(
-                        [[self.density_params.smin, self.density_params.smax]],
-                        device=self.device,
-                    ),
-                    backend="torch",
-                )
-
-                # result has shape (n_atoms_in_group, n_radial)
-                for i, (b_idx, a_idx) in enumerate(
-                    zip(b_batch_indices, b_atom_indices)
-                ):
-                    densities[b_idx, a_idx] = result[i]
+        densities = all_unique_densities[inverse_indices].reshape(
+            batch_size, n_atoms, n_radial
+        )
 
         return densities
 
@@ -850,6 +847,7 @@ class DifferentiableTransformer(torch.nn.Module):
 
         return matrix
 
+
 def dilate_points_torch(
     coordinates: torch.Tensor,
     active: torch.Tensor,
@@ -897,7 +895,11 @@ def dilate_points_torch(
     batch_size, n_atoms = coordinates.shape[:2]
     rmax2 = rmax * rmax
 
-    g00, g01, g02 = grid_to_cartesian[0, 0], grid_to_cartesian[0, 1], grid_to_cartesian[0, 2]
+    g00, g01, g02 = (
+        grid_to_cartesian[0, 0],
+        grid_to_cartesian[0, 1],
+        grid_to_cartesian[0, 2],
+    )
     g11, g12 = grid_to_cartesian[1, 1], grid_to_cartesian[1, 2]
     g22 = grid_to_cartesian[2, 2]
 
@@ -959,8 +961,8 @@ def dilate_points_torch(
 
             atom_density = radial_densities[b, atom_idx]
             values = q * (
-                weights_low * atom_density[rad_indices_low] +
-                weights_high * atom_density[rad_indices_high]
+                weights_low * atom_density[rad_indices_low]
+                + weights_high * atom_density[rad_indices_high]
             )
 
             # Apply periodic boundary conditions
@@ -968,7 +970,9 @@ def dilate_points_torch(
             b_indices = torch.remainder(grid_b[mask], grid_shape[1]).long()
             a_indices = torch.remainder(grid_a[mask], grid_shape[2]).long()
 
-            result[b, c_indices, b_indices, a_indices] += values # += is automatically scatter_add_
+            result[
+                b, c_indices, b_indices, a_indices
+            ] += values  # += is automatically scatter_add_
 
     return result
 
