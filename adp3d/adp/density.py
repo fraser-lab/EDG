@@ -2,18 +2,13 @@ import torch
 from typing import Dict, Optional, Tuple, List, Union
 from dataclasses import dataclass
 import torch.nn.functional as F
-from torchquad import (
-    Simpson,
-    Trapezoid,
-    GaussLegendre,
-    set_up_backend,
-)  # backend should be inferred from integration domain...
 import numpy as np
 
 from adp3d.qfit.volume import XMap, EMMap, GridParameters, Resolution
 from adp3d.qfit.unitcell import UnitCell
 from adp3d.qfit.spacegroups import GetSpaceGroup
 from adp3d.data.sf import ATOM_STRUCTURE_FACTORS, ELECTRON_SCATTERING_FACTORS
+from adp3d.utils.quadrature import GaussLegendreQuadrature
 
 
 @dataclass
@@ -365,9 +360,14 @@ class DifferentiableTransformer(torch.nn.Module):
         self.em = em
 
         self.xmap = xmap
+        
+        self.integrator = GaussLegendreQuadrature(
+            num_points=self.density_params.quad_points,
+            device=self.device,
+            dtype=self.scattering_params.dtype,
+        )
 
         self._setup_transforms()
-        self._setup_integrator()
 
     def _setup_transforms(self) -> None:
         """Initialize transformation matrices for coordinate conversions."""
@@ -395,21 +395,6 @@ class DifferentiableTransformer(torch.nn.Module):
                 dtype=self.dtype
             ),
         )
-
-    def _setup_integrator(self) -> None:
-        """Set up numerical integrator based on density parameters."""
-        # TODO: get torchquad intermediates on the right device for sure, might require contributing to torchquad
-        set_up_backend("torch", "float32", True)
-        if self.density_params.integration_method.lower() == "gausslegendre":
-            self.integrator = GaussLegendre()
-        elif self.density_params.integration_method.lower() == "simpson":
-            self.integrator = Simpson()
-        elif self.density_params.integration_method.lower() == "trapezoid":
-            self.integrator = Trapezoid()
-        else:
-            raise ValueError(
-                f"Unsupported integration method: {self.density_params.integration_method}"
-            )
 
     def forward(
         self,
@@ -550,18 +535,16 @@ class DifferentiableTransformer(torch.nn.Module):
                     em=self.em,
                 )
 
-            result = self.integrator.integrate(
+            result = self.integrator(
                 integrand_fn,
-                dim=1,
-                N=self.density_params.quad_points,
-                integration_domain=torch.tensor(
+                integration_limits=torch.tensor(
                     [[self.density_params.smin, self.density_params.smax]],
                     device=self.device,
                 ),
-                backend="torch",
+                dim=1,
             )
 
-            return result  # Shape is (n_radial,)
+            return result  # Shape is (batch, n_radial)
 
         # Create a vmap that processes all unique combinations at once
         integrate_elements = torch.vmap(integrate_single_element)
