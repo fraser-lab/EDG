@@ -3,6 +3,7 @@ from typing import Dict, Optional, Tuple, List, Union
 from dataclasses import dataclass
 import torch.nn.functional as F
 import numpy as np
+import warnings
 
 from adp3d.qfit.volume import XMap, EMMap, GridParameters, Resolution
 from adp3d.qfit.unitcell import UnitCell
@@ -27,7 +28,7 @@ class DensityParameters:
     smin : float
         Minimum scattering vector magnitude in inverse Angstroms.
     smax : float
-        Maximum scattering vector magnitude in inverse Angstroms.
+        Maximum scattering vector magnitude in inverse Angstroms. Default is based on 1.0 Å.
     quad_points : int
         Number of quadrature points for numerical integration.
     integration_method : str
@@ -121,6 +122,16 @@ class XMap_torch:
                 raise ValueError(
                     "xmap must be an instance of qFit's XMap (adp3d.qfit.volume.XMap)"
                 )
+            if not hasattr(self.resolution, "high"):
+                warnings.warn(
+                    f"resolution is not a Resolution object (is {type(self.resolution)}), using provided resolution as high and 1000 Å as low"
+                )
+                self.resolution = Resolution(high=self.resolution, low=1000.0)
+            if self.resolution.low is None:
+                warnings.warn(
+                    f"resolution does not have low limit set, using 1000 Å as low"
+                )
+                self.resolution.low = 1000.0
         else:
             if self.array is None:
                 raise ValueError("array must be provided")
@@ -134,6 +145,18 @@ class XMap_torch:
                 raise ValueError("grid_parameters must be provided")
             if self.offset is None:
                 raise ValueError("grid_parameters must be provided")
+            if not hasattr(self.resolution, "high"):
+                warnings.warn(
+                    f"resolution is not a Resolution object (is {type(self.resolution)}), using provided resolution as high and 1000 Å as low"
+                )
+                self.resolution = Resolution(high=self.resolution, low=1000.0)
+            if not hasattr(self.resolution, "low") and isinstance(
+                self.resolution, Resolution
+            ):
+                warnings.warn(
+                    f"resolution does not have a low attribute, using 1000 Å as low"
+                )
+                self.resolution.low = 1000.0
 
     def _setup_symmetry_matrices(self, device: torch.device) -> None:
         """Precompute symmetry operation matrices for efficient application."""
@@ -339,6 +362,7 @@ class DifferentiableTransformer(torch.nn.Module):
             Atomic scattering parameters for each element, of shape [n_elem, n_coeffs, 2].
         density_params : Optional[DensityParameters], optional
             Parameters for density calculation, by default None.
+            Min and max scattering vector magnitudes will be updated by resolutions in the XMap.
         em : bool, optional
             Whether to use electron microscopy mode, by default False.
         space_group : Optional[int], optional
@@ -360,7 +384,10 @@ class DifferentiableTransformer(torch.nn.Module):
         self.em = em
 
         self.xmap = xmap
-        
+
+        self.density_params.smax = 1 / (2 * self.xmap.resolution.high)
+        self.density_params.smin = 1 / (2 * self.xmap.resolution.low)
+
         self.integrator = GaussLegendreQuadrature(
             num_points=self.density_params.quad_points,
             device=self.device,
@@ -544,7 +571,7 @@ class DifferentiableTransformer(torch.nn.Module):
                 dim=1,
             )
 
-            return result  # Shape is (batch, n_radial)
+            return result  # Shape: [batch, n_radial]
 
         # Create a vmap that processes all unique combinations at once
         integrate_elements = torch.vmap(integrate_single_element)
@@ -676,11 +703,13 @@ def dilate_points_torch(
     chunk_size: int = 256,
 ) -> torch.Tensor:
     """Point dilation onto a grid across batches.
+    Batch could be either many structures for many density maps, 
+    or an ensemble, where you would need to sum across the output batch to get a map.
 
     Parameters
     ----------
     coordinates : torch.Tensor
-        Atomic coordinates of shape (batch_size, n_atoms, 3).
+        Grid coordinates corresponding to atom positions of shape (batch_size, n_atoms, 3).
     active : torch.Tensor
         Boolean mask of active atoms of shape (batch_size, n_atoms).
     occupancies : torch.Tensor
@@ -703,7 +732,7 @@ def dilate_points_torch(
     Returns
     -------
     torch.Tensor
-        Density grid.
+        Density grid (batch_size, *grid_shape).
     """
     device = coordinates.device
     dtype = coordinates.dtype
@@ -720,74 +749,122 @@ def dilate_points_torch(
 
     result = torch.zeros((batch_size,) + grid_shape, device=device, dtype=dtype)
 
+    grid_c, grid_b, grid_a = torch.meshgrid(
+        torch.arange(grid_shape[0], device=device),
+        torch.arange(grid_shape[1], device=device),
+        torch.arange(grid_shape[2], device=device),
+        indexing="ij",
+    )
+
+    flat_grid_c = grid_c.flatten()  # [n_grid_points]
+    flat_grid_b = grid_b.flatten()  # [n_grid_points]
+    flat_grid_a = grid_a.flatten()  # [n_grid_points]
+    n_grid_points = flat_grid_c.shape[0]
+
     for b in range(batch_size):
-        for atom_idx in range(n_atoms):
-            if not active[b, atom_idx]:
-                continue
+        batch_active = active[b]  # [n_atoms]
+        batch_coords = coordinates[b]  # [n_atoms, 3]
+        batch_occ = occupancies[b]  # [n_atoms]
+        batch_densities = radial_densities[b]  # [n_atoms, n_radial_steps]
 
-            q = occupancies[b, atom_idx]
-            center_a, center_b, center_c = coordinates[b, atom_idx]
+        if not torch.any(batch_active):
+            continue
 
-            cmin = torch.ceil(center_c - lmax[2]).long()
-            cmax = torch.floor(center_c + lmax[2]).long()
-            bmin = torch.ceil(center_b - lmax[1]).long()
-            bmax = torch.floor(center_b + lmax[1]).long()
-            amin = torch.ceil(center_a - lmax[0]).long()
-            amax = torch.floor(center_a + lmax[0]).long()
+        active_mask = batch_active.bool()
+        active_coords = batch_coords[active_mask]  # [n_active_atoms, 3]
+        active_occ = batch_occ[active_mask]  # [n_active_atoms]
+        active_densities = batch_densities[
+            active_mask
+        ]  # [n_active_atoms, n_radial_steps]
+        n_active_atoms = active_coords.shape[0]
 
-            if cmax < cmin or bmax < bmin or amax < amin:
-                continue
+        flat_grid_coords = torch.stack(
+            [flat_grid_a, flat_grid_b, flat_grid_c], dim=-1
+        )  # [n_grid_points, 3]
+        grid_coords_expanded = flat_grid_coords.unsqueeze(1)  # [n_grid_points, 1, 3]
 
-            c_coords = torch.arange(cmin, cmax + 1, device=device, dtype=dtype)
-            b_coords = torch.arange(bmin, bmax + 1, device=device, dtype=dtype)
-            a_coords = torch.arange(amin, amax + 1, device=device, dtype=dtype)
+        atom_coords_expanded = active_coords.unsqueeze(0)  # [1, n_active_atoms, 3]
 
-            grid_c, grid_b, grid_a = torch.meshgrid(
-                c_coords, b_coords, a_coords, indexing="ij"
-            )
+        delta = (
+            grid_coords_expanded - atom_coords_expanded
+        )  # [n_grid_points, n_active_atoms, 3]
 
-            dc = center_c - grid_c
-            db = center_b - grid_b
-            da = center_a - grid_a
+        dx, dy, dz = delta[:, :, 0], delta[:, :, 1], delta[:, :, 2]
+        cart_dz = g22 * dz  # [n_grid_points, n_active_atoms]
+        cart_dy = g12 * dz + g11 * dy  # [n_grid_points, n_active_atoms]
+        cart_dx = g02 * dz + g01 * dy + g00 * dx  # [n_grid_points, n_active_atoms]
 
-            dz = g22 * dc
-            dy = g12 * dc + g11 * db
-            dx = g02 * dc + g01 * db + g00 * da
+        d2 = (
+            cart_dx * cart_dx + cart_dy * cart_dy + cart_dz * cart_dz
+        )  # [n_grid_points, n_active_atoms]
 
-            d2_zyx = dx * dx + dy * dy + dz * dz
+        mask = (d2 <= rmax2).float()  # [n_grid_points, n_active_atoms]
 
-            mask = d2_zyx <= rmax2
-            if not torch.any(mask):
-                continue
+        if not torch.any(mask):
+            continue
 
-            r = torch.sqrt(d2_zyx[mask])
+        distances = torch.sqrt(d2)  # [n_grid_points, n_active_atoms]
 
-            # Differentiable interpolation into radial_densities
-            rad_continuous = r / rstep
-            rad_indices_low = torch.floor(rad_continuous).long()
-            rad_indices_high = rad_indices_low + 1
+        # continuous interpolation to maintain differentiability
+        rad_continuous = distances / rstep  # [n_grid_points, n_active_atoms]
+        rad_indices_low = torch.floor(
+            rad_continuous
+        ).long()  # [n_grid_points, n_active_atoms]
+        weights_high = (
+            rad_continuous - rad_indices_low.float()
+        )  # [n_grid_points, n_active_atoms]
+        weights_low = 1.0 - weights_high  # [n_grid_points, n_active_atoms]
 
-            max_idx = radial_densities.shape[2] - 1
-            rad_indices_low = torch.clamp(rad_indices_low, 0, max_idx)
-            rad_indices_high = torch.clamp(rad_indices_high, 0, max_idx)
+        max_rad_idx = active_densities.shape[1] - 1
+        rad_indices_low = torch.clamp(
+            rad_indices_low, 0, max_rad_idx
+        )  # [n_grid_points, n_active_atoms]
+        rad_indices_high = torch.clamp(
+            rad_indices_low + 1, 0, max_rad_idx
+        )  # [n_grid_points, n_active_atoms]
 
-            weights_high = rad_continuous - rad_indices_low.float()
-            weights_low = 1.0 - weights_high
+        expanded_densities = active_densities.unsqueeze(0).expand(
+            n_grid_points, -1, -1
+        )  # [n_grid_points, n_active_atoms, n_radial_steps]
 
-            atom_density = radial_densities[b, atom_idx]
-            values = q * (
-                weights_low * atom_density[rad_indices_low]
-                + weights_high * atom_density[rad_indices_high]
-            )
+        indices_low = rad_indices_low.unsqueeze(
+            -1
+        )  # [n_grid_points, n_active_atoms, 1]
+        indices_high = rad_indices_high.unsqueeze(
+            -1
+        )  # [n_grid_points, n_active_atoms, 1]
 
-            # Apply periodic boundary conditions
-            c_indices = torch.remainder(grid_c[mask], grid_shape[0]).long()
-            b_indices = torch.remainder(grid_b[mask], grid_shape[1]).long()
-            a_indices = torch.remainder(grid_a[mask], grid_shape[2]).long()
+        density_values_low = torch.gather(expanded_densities, 2, indices_low).squeeze(
+            -1
+        )  # [n_grid_points, n_active_atoms]
+        density_values_high = torch.gather(expanded_densities, 2, indices_high).squeeze(
+            -1
+        )  # [n_grid_points, n_active_atoms]
 
-            result[
-                b, c_indices, b_indices, a_indices
-            ] += values  # += is automatically scatter_add_
+        densities = (
+            weights_low * density_values_low + weights_high * density_values_high
+        )  # [n_grid_points, n_active_atoms]
+
+        scaled_densities = (
+            active_occ.unsqueeze(0) * densities * mask
+        )  # [n_grid_points, n_active_atoms]
+
+        grid_densities = torch.sum(scaled_densities, dim=1)  # [n_grid_points]
+
+        # apply periodic boundary conditions
+        z_periodic = torch.remainder(
+            flat_grid_c, grid_shape[0]
+        ).long()  # [n_grid_points]
+        y_periodic = torch.remainder(
+            flat_grid_b, grid_shape[1]
+        ).long()  # [n_grid_points]
+        x_periodic = torch.remainder(
+            flat_grid_a, grid_shape[2]
+        ).long()  # [n_grid_points]
+
+        result[b].index_put_(
+            (z_periodic, y_periodic, x_periodic), grid_densities, accumulate=True
+        )
 
     return result
 
@@ -820,57 +897,59 @@ def scattering_integrand(
     torch.Tensor
         Computed integrand values with shape (..., n_s, n_r).
     """
-    s_expanded = s.reshape(*s.shape, 1)  # (..., n_s, 1)
-    r_expanded = r.reshape(1, -1)        # (1, n_r)
-    
-    s2 = s_expanded * s_expanded         # (..., n_s, 1)
-    
-    bfactor_expanded = bfactor.reshape(*bfactor.shape, 1, 1)  # (..., 1, 1)
-    
+    s_expanded = s.reshape(*s.shape, 1)  # [..., n_s, 1]
+    r_expanded = r.reshape(1, -1)  # [1, n_r]
+
+    s2 = s_expanded * s_expanded  # [..., n_s, 1]
+
+    bfactor_expanded = bfactor.reshape(*bfactor.shape, 1, 1)  # [..., 1, 1]
+
     if em:
         # electron microscopy mode (no constant term)
-        a_coeffs = asf[..., :5, 0]  # (..., 5)
-        b_coeffs = asf[..., :5, 1]  # (..., 5)
-        
-        a_coeffs = a_coeffs.reshape(*a_coeffs.shape, 1, 1)  # (..., 5, 1, 1)
-        b_coeffs = b_coeffs.reshape(*b_coeffs.shape, 1, 1)  # (..., 5, 1, 1)
-        
-        exp_terms = torch.exp(-b_coeffs * s2.unsqueeze(-3))  # (..., 5, n_s, 1)
-        
-        f = torch.sum(a_coeffs * exp_terms, dim=-3)  # (..., n_s, 1)
+        a_coeffs = asf[..., :5, 0]  # [..., 5]
+        b_coeffs = asf[..., :5, 1]  # [..., 5]
+
+        a_coeffs = a_coeffs.reshape(*a_coeffs.shape, 1, 1)  # [..., 5, 1, 1]
+        b_coeffs = b_coeffs.reshape(*b_coeffs.shape, 1, 1)  # [..., 5, 1, 1]
+
+        exp_terms = torch.exp(-b_coeffs * s2.unsqueeze(-3))  # [..., 5, n_s, 1]
+
+        f = torch.sum(a_coeffs * exp_terms, dim=-3)  # [..., n_s, 1]
     else:
         # X-ray scattering mode (includes constant term)
-        a_coeffs = asf[..., :5, 0]  # (..., 5)
-        b_coeffs = asf[..., :5, 1]  # (..., 5)
-        constant_term = asf[..., 5, 0].reshape(*asf.shape[:-2], 1, 1)  # (..., 1, 1)
-        
-        a_coeffs = a_coeffs.reshape(*a_coeffs.shape, 1, 1)  # (..., 5, 1, 1)
-        b_coeffs = b_coeffs.reshape(*b_coeffs.shape, 1, 1)  # (..., 5, 1, 1)
-        
-        exp_terms = torch.exp(-b_coeffs * s2.unsqueeze(-3))  # (..., 5, n_s, 1)
-        
-        f = torch.sum(a_coeffs * exp_terms, dim=-3) + constant_term  # (..., n_s, 1)
-    
-    four_pi_s = 4 * torch.pi * s_expanded  # (..., n_s, 1)
-    w = 8 * f * torch.exp(-bfactor_expanded * s2) * s_expanded  # (..., n_s, 1)
-    
+        a_coeffs = asf[..., :5, 0]  # [..., 5]
+        b_coeffs = asf[..., :5, 1]  # [..., 5]
+        constant_term = asf[..., 5, 0].reshape(*asf.shape[:-2], 1, 1)  # [..., 1, 1]
+
+        a_coeffs = a_coeffs.reshape(*a_coeffs.shape, 1, 1)  # [..., 5, 1, 1]
+        b_coeffs = b_coeffs.reshape(*b_coeffs.shape, 1, 1)  # [..., 5, 1, 1]
+
+        exp_terms = torch.exp(-b_coeffs * s2.unsqueeze(-3))  # [..., 5, n_s, 1]
+
+        f = torch.sum(a_coeffs * exp_terms, dim=-3) + constant_term  # [..., n_s, 1]
+
+    four_pi_s = 4 * torch.pi * s_expanded  # [..., n_s, 1]
+    w = 8 * f * torch.exp(-bfactor_expanded * s2) * s_expanded  # [..., n_s, 1]
+
     eps = 1e-4
-    r_small_mask = (r_expanded < eps).expand(s_expanded.shape[:-1] + r_expanded.shape[-1:])  # (..., n_s, n_r)
-    
-    ar = four_pi_s * r_expanded  # (..., n_s, n_r)
+    r_small_mask = (r_expanded < eps).expand(
+        s_expanded.shape[:-1] + r_expanded.shape[-1:]
+    )  # [..., n_s, n_r]
+
+    ar = four_pi_s * r_expanded  # [..., n_s, n_r]
     ar2 = ar * ar
-    
+
     # prevent singularity with 4th order Taylor expansion
     taylor_term = 1.0 - ar2 / 6.0
-    small_r_values = w * four_pi_s * taylor_term  # (..., n_s, n_r)
-    
+    small_r_values = w * four_pi_s * taylor_term  # [..., n_s, n_r]
+
     sin_term = torch.sin(ar)
-    
+
     safe_r = torch.where(r_expanded > 0, r_expanded, torch.ones_like(r_expanded))
-    large_r_values = w * sin_term / safe_r  # (..., n_s, n_r)
-    
+    large_r_values = w * sin_term / safe_r  # [..., n_s, n_r]
+
     result = torch.where(r_small_mask, small_r_values, large_r_values)
-    
+
     return result
 
 
