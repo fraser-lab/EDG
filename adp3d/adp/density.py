@@ -703,7 +703,7 @@ def dilate_points_torch(
     chunk_size: int = 256,
 ) -> torch.Tensor:
     """Point dilation onto a grid across batches.
-    Batch could be either many structures for many density maps, 
+    Batch could be either many structures for many density maps,
     or an ensemble, where you would need to sum across the output batch to get a map.
 
     Parameters
@@ -715,7 +715,7 @@ def dilate_points_torch(
     occupancies : torch.Tensor
         Occupancies of shape (batch_size, n_atoms).
     lmax : torch.Tensor
-        Maximum distances in grid units of shape (3,).
+        Maximum distances from atom to consider in grid units of shape (3,).
     radial_densities : torch.Tensor
         Precomputed radial densities of shape (batch_size, n_atoms, n_radial).
     rstep : float
@@ -727,7 +727,7 @@ def dilate_points_torch(
     grid_shape : Tuple[int, int, int]
         Output grid shape (int, int, int).
     chunk_size : int, optional
-        Number of atoms to process in each chunk, by default 256.
+        Number of grid points to process in each chunk, by default 256.
 
     Returns
     -------
@@ -776,7 +776,6 @@ def dilate_points_torch(
         active_densities = batch_densities[
             active_mask
         ]  # [n_active_atoms, n_radial_steps]
-        n_active_atoms = active_coords.shape[0]
 
         flat_grid_coords = torch.stack(
             [flat_grid_a, flat_grid_b, flat_grid_c], dim=-1
