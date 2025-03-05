@@ -731,7 +731,7 @@ def dilate_points_torch(
     grid_shape : Tuple[int, int, int]
         Output grid shape (int, int, int).
     chunk_size : int, optional
-        Number of grid points to process in each chunk, by default 256.
+        Number of grid points to process in each chunk, by default 50000.
 
     Returns
     -------
@@ -771,7 +771,7 @@ def dilate_points_torch(
 
     if not torch.any(active):
         return result
-    
+
     n_chunks = (n_grid_points + chunk_size - 1) // chunk_size
 
     flat_result = result.reshape(
@@ -859,7 +859,9 @@ def dilate_points_torch(
         )  # [batch_size, chunk_size, n_atoms]
         flat_atom_indices = atom_indices.reshape(flat_batch_size)  # [flat_batch_size]
 
-        flat_rad_indices_low = rad_indices_low.reshape(flat_batch_size)  # [flat_batch_size]
+        flat_rad_indices_low = rad_indices_low.reshape(
+            flat_batch_size
+        )  # [flat_batch_size]
         flat_rad_indices_high = rad_indices_high.reshape(
             flat_batch_size
         )  # [flat_batch_size]
@@ -873,7 +875,8 @@ def dilate_points_torch(
             flat_batch_indices, flat_atom_indices, flat_rad_indices_high
         ]  # [flat_batch_size]
         flat_densities = (
-            flat_weights_low * flat_densities_low + flat_weights_high * flat_densities_high
+            flat_weights_low * flat_densities_low
+            + flat_weights_high * flat_densities_high
         )  # [flat_batch_size]
 
         densities = flat_densities.reshape(
@@ -889,9 +892,15 @@ def dilate_points_torch(
 
         grid_densities = torch.sum(scaled_densities, dim=2)  # [batch_size, chunk_size]
 
-        z_periodic = torch.remainder(flat_grid_c[start_idx:end_idx], grid_shape[0]).long()  # [chunk_size]
-        y_periodic = torch.remainder(flat_grid_b[start_idx:end_idx], grid_shape[1]).long()  # [chunk_size]
-        x_periodic = torch.remainder(flat_grid_a[start_idx:end_idx], grid_shape[2]).long()  # [chunk_size]
+        z_periodic = torch.remainder(
+            flat_grid_c[start_idx:end_idx], grid_shape[0]
+        ).long()  # [chunk_size]
+        y_periodic = torch.remainder(
+            flat_grid_b[start_idx:end_idx], grid_shape[1]
+        ).long()  # [chunk_size]
+        x_periodic = torch.remainder(
+            flat_grid_a[start_idx:end_idx], grid_shape[2]
+        ).long()  # [chunk_size]
 
         batch_grid_indices = torch.arange(batch_size, device=device).view(
             batch_size, 1
