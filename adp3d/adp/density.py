@@ -761,109 +761,164 @@ def dilate_points_torch(
     flat_grid_a = grid_a.flatten()  # [n_grid_points]
     n_grid_points = flat_grid_c.shape[0]
 
-    for b in range(batch_size):
-        batch_active = active[b]  # [n_atoms]
-        batch_coords = coordinates[b]  # [n_atoms, 3]
-        batch_occ = occupancies[b]  # [n_atoms]
-        batch_densities = radial_densities[b]  # [n_atoms, n_radial_steps]
+    flat_grid_coords = torch.stack(
+        [flat_grid_a, flat_grid_b, flat_grid_c], dim=-1
+    )  # [n_grid_points, 3]
 
-        if not torch.any(batch_active):
-            continue
+    if not torch.any(active):
+        return result
 
-        active_mask = batch_active.bool()
-        active_coords = batch_coords[active_mask]  # [n_active_atoms, 3]
-        active_occ = batch_occ[active_mask]  # [n_active_atoms]
-        active_densities = batch_densities[
-            active_mask
-        ]  # [n_active_atoms, n_radial_steps]
+    grid_coords_expanded = flat_grid_coords.unsqueeze(0).unsqueeze(
+        2
+    )  # [1, n_grid_points, 1, 3]
+    grid_coords_expanded = grid_coords_expanded.expand(
+        batch_size, n_grid_points, n_atoms, 3
+    )  # [batch_size, n_grid_points, n_atoms, 3]
 
-        flat_grid_coords = torch.stack(
-            [flat_grid_a, flat_grid_b, flat_grid_c], dim=-1
-        )  # [n_grid_points, 3]
-        grid_coords_expanded = flat_grid_coords.unsqueeze(1)  # [n_grid_points, 1, 3]
+    atom_coords_expanded = coordinates.unsqueeze(1)  # [batch_size, 1, n_atoms, 3]
+    atom_coords_expanded = atom_coords_expanded.expand(
+        batch_size, n_grid_points, n_atoms, 3
+    )  # [batch_size, n_grid_points, n_atoms, 3]
 
-        atom_coords_expanded = active_coords.unsqueeze(0)  # [1, n_active_atoms, 3]
+    delta = (
+        grid_coords_expanded - atom_coords_expanded
+    )  # [batch_size, n_grid_points, n_atoms, 3]
 
-        delta = (
-            grid_coords_expanded - atom_coords_expanded
-        )  # [n_grid_points, n_active_atoms, 3]
+    dx, dy, dz = (
+        delta[..., 0],
+        delta[..., 1],
+        delta[..., 2],
+    )  # [batch_size, n_grid_points, n_atoms]
 
-        dx, dy, dz = delta[:, :, 0], delta[:, :, 1], delta[:, :, 2]
-        cart_dz = g22 * dz  # [n_grid_points, n_active_atoms]
-        cart_dy = g12 * dz + g11 * dy  # [n_grid_points, n_active_atoms]
-        cart_dx = g02 * dz + g01 * dy + g00 * dx  # [n_grid_points, n_active_atoms]
+    cart_dz = g22 * dz
+    cart_dy = g12 * dz + g11 * dy
+    cart_dx = g02 * dz + g01 * dy + g00 * dx
 
-        d2 = (
-            cart_dx * cart_dx + cart_dy * cart_dy + cart_dz * cart_dz
-        )  # [n_grid_points, n_active_atoms]
+    d2 = cart_dx**2 + cart_dy**2 + cart_dz**2  # [batch_size, n_grid_points, n_atoms]
 
-        mask = (d2 <= rmax2).float()  # [n_grid_points, n_active_atoms]
+    distance_mask = (d2 <= rmax2).float()  # [batch_size, n_grid_points, n_atoms]
+    active_expanded = active.unsqueeze(1).expand(
+        batch_size, n_grid_points, n_atoms
+    )  # [batch_size, n_grid_points, n_atoms]
+    combined_mask = (
+        distance_mask * active_expanded.float()
+    )  # [batch_size, n_grid_points, n_atoms]
 
-        if not torch.any(mask):
-            continue
+    if not torch.any(combined_mask):
+        return result
 
-        distances = torch.sqrt(d2)  # [n_grid_points, n_active_atoms]
+    distances = torch.sqrt(d2)  # [batch_size, n_grid_points, n_atoms]
+    rad_continuous = distances / rstep  # [batch_size, n_grid_points, n_atoms]
+    rad_indices_low = torch.floor(
+        rad_continuous
+    ).long()  # [batch_size, n_grid_points, n_atoms]
+    weights_high = (
+        rad_continuous - rad_indices_low.float()
+    )  # [batch_size, n_grid_points, n_atoms]
+    weights_low = 1.0 - weights_high  # [batch_size, n_grid_points, n_atoms]
 
-        # continuous interpolation to maintain differentiability
-        rad_continuous = distances / rstep  # [n_grid_points, n_active_atoms]
-        rad_indices_low = torch.floor(
-            rad_continuous
-        ).long()  # [n_grid_points, n_active_atoms]
-        weights_high = (
-            rad_continuous - rad_indices_low.float()
-        )  # [n_grid_points, n_active_atoms]
-        weights_low = 1.0 - weights_high  # [n_grid_points, n_active_atoms]
+    max_rad_idx = radial_densities.shape[-1] - 1
+    rad_indices_low = torch.clamp(
+        rad_indices_low, 0, max_rad_idx
+    )  # [batch_size, n_grid_points, n_atoms]
+    rad_indices_high = torch.clamp(
+        rad_indices_low + 1, 0, max_rad_idx
+    )  # [batch_size, n_grid_points, n_atoms]
 
-        max_rad_idx = active_densities.shape[1] - 1
-        rad_indices_low = torch.clamp(
-            rad_indices_low, 0, max_rad_idx
-        )  # [n_grid_points, n_active_atoms]
-        rad_indices_high = torch.clamp(
-            rad_indices_low + 1, 0, max_rad_idx
-        )  # [n_grid_points, n_active_atoms]
+    flat_batch_size = batch_size * n_grid_points * n_atoms
 
-        expanded_densities = active_densities.unsqueeze(0).expand(
-            n_grid_points, -1, -1
-        )  # [n_grid_points, n_active_atoms, n_radial_steps]
+    batch_indices = torch.arange(batch_size, device=device).view(
+        batch_size, 1, 1
+    )  # [batch_size, 1, 1]
+    batch_indices = batch_indices.expand(
+        batch_size, n_grid_points, n_atoms
+    )  # [batch_size, n_grid_points, n_atoms]
+    flat_batch_indices = batch_indices.reshape(flat_batch_size)  # [flat_batch_size]
 
-        indices_low = rad_indices_low.unsqueeze(
-            -1
-        )  # [n_grid_points, n_active_atoms, 1]
-        indices_high = rad_indices_high.unsqueeze(
-            -1
-        )  # [n_grid_points, n_active_atoms, 1]
+    atom_indices = torch.arange(n_atoms, device=device).view(
+        1, 1, n_atoms
+    )  # [1, 1, n_atoms]
+    atom_indices = atom_indices.expand(
+        batch_size, n_grid_points, n_atoms
+    )  # [batch_size, n_grid_points, n_atoms]
+    flat_atom_indices = atom_indices.reshape(flat_batch_size)  # [flat_batch_size]
 
-        density_values_low = torch.gather(expanded_densities, 2, indices_low).squeeze(
-            -1
-        )  # [n_grid_points, n_active_atoms]
-        density_values_high = torch.gather(expanded_densities, 2, indices_high).squeeze(
-            -1
-        )  # [n_grid_points, n_active_atoms]
+    flat_rad_indices_low = rad_indices_low.reshape(flat_batch_size)  # [flat_batch_size]
+    flat_rad_indices_high = rad_indices_high.reshape(
+        flat_batch_size
+    )  # [flat_batch_size]
+    flat_weights_low = weights_low.reshape(flat_batch_size)  # [flat_batch_size]
+    flat_weights_high = weights_high.reshape(flat_batch_size)  # [flat_batch_size]
 
-        densities = (
-            weights_low * density_values_low + weights_high * density_values_high
-        )  # [n_grid_points, n_active_atoms]
+    flat_densities_low = radial_densities[
+        flat_batch_indices, flat_atom_indices, flat_rad_indices_low
+    ]  # [flat_batch_size]
+    flat_densities_high = radial_densities[
+        flat_batch_indices, flat_atom_indices, flat_rad_indices_high
+    ]  # [flat_batch_size]
+    flat_densities = (
+        flat_weights_low * flat_densities_low + flat_weights_high * flat_densities_high
+    )  # [flat_batch_size]
 
-        scaled_densities = (
-            active_occ.unsqueeze(0) * densities * mask
-        )  # [n_grid_points, n_active_atoms]
+    densities = flat_densities.reshape(
+        batch_size, n_grid_points, n_atoms
+    )  # [batch_size, n_grid_points, n_atoms]
 
-        grid_densities = torch.sum(scaled_densities, dim=1)  # [n_grid_points]
+    occupancies_expanded = occupancies.unsqueeze(1).expand(
+        batch_size, n_grid_points, n_atoms
+    )  # [batch_size, n_grid_points, n_atoms]
+    scaled_densities = (
+        occupancies_expanded * densities * combined_mask
+    )  # [batch_size, n_grid_points, n_atoms]
 
-        # apply periodic boundary conditions
-        z_periodic = torch.remainder(
-            flat_grid_c, grid_shape[0]
-        ).long()  # [n_grid_points]
-        y_periodic = torch.remainder(
-            flat_grid_b, grid_shape[1]
-        ).long()  # [n_grid_points]
-        x_periodic = torch.remainder(
-            flat_grid_a, grid_shape[2]
-        ).long()  # [n_grid_points]
+    grid_densities = torch.sum(scaled_densities, dim=2)  # [batch_size, n_grid_points]
 
-        result[b].index_put_(
-            (z_periodic, y_periodic, x_periodic), grid_densities, accumulate=True
-        )
+    flat_result = result.reshape(
+        -1
+    )  # [batch_size * grid_shape[0] * grid_shape[1] * grid_shape[2]]
+
+    z_periodic = torch.remainder(flat_grid_c, grid_shape[0]).long()  # [n_grid_points]
+    y_periodic = torch.remainder(flat_grid_b, grid_shape[1]).long()  # [n_grid_points]
+    x_periodic = torch.remainder(flat_grid_a, grid_shape[2]).long()  # [n_grid_points]
+
+    batch_grid_indices = torch.arange(batch_size, device=device).view(
+        batch_size, 1
+    )  # [batch_size, 1]
+    batch_grid_indices = batch_grid_indices.expand(
+        batch_size, n_grid_points
+    )  # [batch_size, n_grid_points]
+    flat_batch_grid_indices = batch_grid_indices.reshape(
+        -1
+    )  # [batch_size * n_grid_points]
+
+    flat_grid_densities = grid_densities.reshape(-1)  # [batch_size * n_grid_points]
+
+    z_repeated = (
+        z_periodic.unsqueeze(0).expand(batch_size, n_grid_points).reshape(-1)
+    )  # [batch_size * n_grid_points]
+    y_repeated = (
+        y_periodic.unsqueeze(0).expand(batch_size, n_grid_points).reshape(-1)
+    )  # [batch_size * n_grid_points]
+    x_repeated = (
+        x_periodic.unsqueeze(0).expand(batch_size, n_grid_points).reshape(-1)
+    )  # [batch_size * n_grid_points]
+
+    grid_z_stride = grid_shape[1] * grid_shape[2]
+    grid_y_stride = grid_shape[2]
+    batch_stride = grid_shape[0] * grid_shape[1] * grid_shape[2]
+
+    flat_indices = (
+        flat_batch_grid_indices * batch_stride
+        + z_repeated * grid_z_stride
+        + y_repeated * grid_y_stride
+        + x_repeated
+    ).long()  # [batch_size * n_grid_points]
+
+    flat_result.scatter_add_(0, flat_indices, flat_grid_densities)
+
+    result = flat_result.reshape(
+        (batch_size,) + grid_shape
+    )  # [batch_size, grid_shape[0], grid_shape[1], grid_shape[2]]
 
     return result
 
