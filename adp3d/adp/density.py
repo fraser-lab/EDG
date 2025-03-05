@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import torch.nn.functional as F
 import numpy as np
 import warnings
+from einops import rearrange
 
 from adp3d.qfit.volume import XMap, EMMap, GridParameters, Resolution
 from adp3d.qfit.unitcell import UnitCell
@@ -94,6 +95,7 @@ class XMap_torch:
             self.resolution = xmap.resolution
             self.hkl = xmap.hkl
             self.origin = xmap.origin
+            self.array = torch.tensor(xmap.array, device=device)
             self.shape = xmap.shape
 
             self.voxelspacing = torch.tensor(xmap.voxelspacing, device=device)
@@ -783,18 +785,10 @@ def dilate_points_torch(
         end_idx = min((i + 1) * chunk_size, n_grid_points)
         chunk_size = min(end_idx - start_idx, chunk_size)
 
-        grid_coords_chunk = flat_grid_coords[start_idx:end_idx, :]
-        grid_coords_chunk_expanded = grid_coords_chunk.unsqueeze(0).unsqueeze(
-            2
-        )  # [1, chunk_size, 1, 3]
-        grid_coords_chunk_expanded = grid_coords_chunk_expanded.expand(
-            batch_size, chunk_size, n_atoms, 3
-        )  # [batch_size, chunk_size, n_atoms, 3]
+        grid_coords_chunk = flat_grid_coords[start_idx:end_idx]
+        grid_coords_chunk_expanded = rearrange(grid_coords_chunk, "g c -> 1 g 1 c")  # [1, chunk_size, 1, 3]
 
-        atom_coords_expanded = coordinates.unsqueeze(1)  # [batch_size, 1, n_atoms, 3]
-        atom_coords_expanded = atom_coords_expanded.expand(
-            batch_size, chunk_size, n_atoms, 3
-        )  # [batch_size, chunk_size, n_atoms, 3]
+        atom_coords_expanded = rearrange(coordinates, "b n c -> b 1 n c")  # [batch_size, 1, n_atoms, 3]
 
         delta = (
             grid_coords_chunk_expanded - atom_coords_expanded
@@ -813,11 +807,9 @@ def dilate_points_torch(
         d2 = cart_dx**2 + cart_dy**2 + cart_dz**2  # [batch_size, chunk_size, n_atoms]
 
         distance_mask = (d2 <= rmax2).float()  # [batch_size, chunk_size, n_atoms]
-        active_expanded = active.unsqueeze(1).expand(
-            batch_size, chunk_size, n_atoms
-        )  # [batch_size, chunk_size, n_atoms]
+        active_mask = active.unsqueeze(1) # [batch_size, 1, n_atoms]
         combined_mask = (
-            distance_mask * active_expanded.float()
+            distance_mask * active_mask.float()
         )  # [batch_size, chunk_size, n_atoms]
 
         if not torch.any(combined_mask):
