@@ -24,9 +24,12 @@ from boltz.data.types import Structure
 from boltz.main import BoltzDiffusionParams
 from boltz.model.model import Boltz1
 from boltz.data.feature.pad import pad_dim
-from adp3d.adp.density import DifferentiableTransformer, normalize, to_f_density
+
+from adp3d.adp.density import DifferentiableTransformer, XMap_torch,  normalize, to_f_density
+from adp3d.qfit.volume import XMap
 from adp3d.data.io import export_density_map, structure_to_density_input, write_mmcif
 from adp3d.data.mmcif import parse_mmcif
+from adp3d.data.sf import ATOM_STRUCTURE_FACTORS, ELECTRON_SCATTERING_FACTORS, ATOMIC_NUM_TO_ELEMENT
 from adp3d.adp.diffusion import DiffusionStepper, DensityGuidedDiffusionStepper
 from adp3d.utils.utility import try_gpu
 
@@ -64,6 +67,7 @@ class DensityGuidedDiffusion:
         structure: str,
         output_path: str,
         em: bool = False,
+        resolution: float = None,
         step_scale: float = 1.638,  # default step scale, ok results down to 0.8 with higher diversity
         ckpt_path: Path = Path("~/.boltz/boltz1_conf.pkl").expanduser(),
         model: Optional[Boltz1] = None,
@@ -84,6 +88,8 @@ class DensityGuidedDiffusion:
             Directory path for output files
         em : bool, optional
             Flag for electron microscopy mode, by default False
+        resolution : float, optional
+            Map resolution in Angstroms, by default None. MTZ files have resolution information, but CCP4, MRC, and MAP files do not.
         step_scale : float, optional
             Scale factor for diffusion steps, by default 1.638
         ckpt_path : Path, optional
@@ -121,42 +127,30 @@ class DensityGuidedDiffusion:
         self.structure = parse_mmcif(structure, ccd)
 
         # coords, _, _ = structure_to_density_input(self.structure)
-        # self.center_shift = torch.mean(coords, dim=0) # FIXME: doesn't quite work right now for unknown reason
-        # ^ not sure if we want to do this because we have possible spacegroup issues
-        self.center_shift = torch.zeros(3, device=self.device)
 
-        self.density_extension = os.path.splitext(y)[1]
-        if self.density_extension not in (".ccp4", ".map", ".mtz", ".cif"):
-            warnings.warn("Density map must be a CCP4, MRC, SF-CIF, or MTZ file.")
-
-        if self.density_extension in (
-            ".mtz",
-            ".cif",
-        ):  # NOTE: MTZ or SF-CIF aren't used currently
-            raise NotImplementedError(
-                "MTZ and SF-CIF files are not yet supported for density input."
-            )
-        elif self.density_extension in (".ccp4", ".map", ".mrc"):
-            map = gemmi.read_ccp4_map(y)
-            map.setup(
-                np.nan, gemmi.MapSetup.ReorderOnly
-            )  # necessary to get the proper spacing
-            self.grid = map.grid
-            if map.grid.spacing == (0.0, 0.0, 0.0):
-                raise ValueError(
-                    "Spacing of the density map is zero. Make sure your input map is properly processed."
-                )
-            self.y = normalize(
-                torch.from_numpy(np.ascontiguousarray(self.grid.array)).to(
-                    self.device, dtype=torch.float32
-                )
-            )
-            self.f_y = normalize(to_f_density(self.y))
+        extension = os.path.splitext(y)[1]
+        if extension not in (".ccp4", ".mrc", ".map", ".mtz"):
+            warnings.warn("Density map/reflections must be a CCP4, MRC, MTZ file.")
+        if extension in (".ccp4", ".map", ".mrc"):
+            if resolution is None:
+                raise ValueError("Map resolution must be provided for CCP4, MRC, or MAP files.")
+            xmap = XMap.fromfile(y, resolution=resolution)
         else:
-            raise ValueError("Density map must be a CCP4, MRC, SF-CIF, or MTZ file.")
+            xmap = XMap.fromfile(y)
+
+        xmap = XMap_torch(xmap, device=self.device)
+
+        scattering_factors = ELECTRON_SCATTERING_FACTORS if em else ATOM_STRUCTURE_FACTORS
+
+        self._setup_scattering_params(scattering_factors)
 
         self.density_calculator = torch.jit.script(
-            DensityCalculator(self.grid, self.center_shift, self.device, em=em)
+            DifferentiableTransformer(
+                xmap,
+                scattering_params=self.scattering_params,
+                em=self.em,
+                device=self.device,
+            )
         )
 
         diffusion_args = BoltzDiffusionParams(step_scale=step_scale)
@@ -169,11 +163,35 @@ class DensityGuidedDiffusion:
             model=model,
         )
 
+    def _setup_scattering_params(self, structure_factors: dict):
+        """Set up scattering parameters for density calculation."""
+        elements = [ATOMIC_NUM_TO_ELEMENT[e] for e in self.structure.data.atoms["element"]]
+        unique_elements = sorted(set(elements))
+        element_indices = {elem: i for i, elem in enumerate(unique_elements)}
+        # FIXME: convert to using qFit-like Structures instead of Boltz, then we can get rid of this and probably this whole function
+        self.elements_to_ids = {e: element_indices[ATOMIC_NUM_TO_ELEMENT[e]] for e in np.unique(self.structure.data.atoms["element"])}
+
+        # Prepare scattering factors dictionary
+        max_elem_idx = max(element_indices.values())
+        tensor_shape = list(torch.tensor(next(iter(structure_factors.values()))).T.shape)
+        scattering_params = torch.zeros([max_elem_idx + 1] + tensor_shape)
+
+        for elem in unique_elements:
+            idx = element_indices[elem]
+            if elem in structure_factors:
+                scattering_params[idx] = torch.tensor(structure_factors[elem]).T # (2, range) -> (range, 2)
+            else:
+                print(f"Warning: Scattering factors for {elem} not found, using C instead")
+                scattering_params[idx] = torch.tensor(structure_factors["C"]).T # (2, range) -> (range, 2)
+
+        self.scattering_params = scattering_params
+
     def density_score(
         self,
         coords: torch.Tensor,
         elements: torch.Tensor,
-        resolution: float = 2.0,
+        b_factors: torch.Tensor,
+        occupancies: torch.Tensor,
         norm: int = 1,
     ) -> torch.Tensor:
         """Calculate density score for current coordinates.
@@ -181,20 +199,25 @@ class DensityGuidedDiffusion:
         Parameters
         ----------
         coords : torch.Tensor
-            Current atomic coordinates
+            Current atomic coordinates, shape [batch, atoms, 3]
         elements : torch.Tensor
-            Element types for each atom
-        resolution : float, optional
-            Map resolution to compare at, by default 2.0
+            Element atomic numbers for each atom, shape [batch, atoms]
+        b_factors : torch.Tensor
+            B-factors for each atom, shape [batch, atoms]
+        occupancies : torch.Tensor
+            Occupancies for each atom, shape [batch, atoms]
+        norm : int, optional
+            Which norm to use for the score, by default 1
 
         Returns
         -------
         torch.Tensor
             Density correlation score
         """
+        element_ids = torch.tensor([self.elements_to_ids[e] for e in elements.flatten()]).reshape(elements.shape).to(self.device)
         model_map = self.density_calculator(
-            coords, elements, resolution=resolution, real=True, to_normalize=True
-        )  # TODO: dont use normalization, use e-/A^3
+            coords, element_ids, b_factors, occupancies, chunk_size=50000
+        ).sum(0)  # TODO: dont use normalization, use e-/A^3
         return torch.linalg.norm(torch.flatten(model_map) - torch.flatten(self.y), ord=norm)
         # # SiLU (swish) to penalize the model going out into solvent, but not penalize being not in exactly the density as much
         # return torch.linalg.norm(torch.nn.SiLU(torch.flatten(self.y) - torch.flatten(model_map)))

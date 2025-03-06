@@ -9,7 +9,6 @@ from einops import rearrange
 from adp3d.qfit.volume import XMap, EMMap, GridParameters, Resolution
 from adp3d.qfit.unitcell import UnitCell
 from adp3d.qfit.spacegroups import GetSpaceGroup
-from adp3d.data.sf import ATOM_STRUCTURE_FACTORS, ELECTRON_SCATTERING_FACTORS
 from adp3d.utils.quadrature import GaussLegendreQuadrature
 
 
@@ -362,13 +361,14 @@ class DifferentiableTransformer(torch.nn.Module):
             Differentiable XMap object.
         scattering_params : torch.Tensor
             Atomic scattering parameters for each element, of shape [n_elem, n_coeffs, 2].
+            NOTE: The indexing on the elements MUST match the element indices in the input to forward!
         density_params : Optional[DensityParameters], optional
             Parameters for density calculation, by default None.
             Min and max scattering vector magnitudes will be updated by resolutions in the XMap.
         em : bool, optional
             Whether to use electron microscopy mode, by default False.
         space_group : Optional[int], optional
-            Space group number, by default None.
+            Space group number, by default None (in which case it is expected from the XMap unit cell).
         device : torch.device, optional
             Device to use for computations, by default 'cpu'.
         """
@@ -381,6 +381,8 @@ class DifferentiableTransformer(torch.nn.Module):
 
         self.register_buffer("voxelspacing", xmap.voxelspacing)
         self.grid_shape = xmap.shape
+
+        # TODO: currently this means we're essentially forced to use the existing B-factors
         self.scattering_params = scattering_params.to(device)
         self.density_params = density_params or DensityParameters()
         self.em = em
@@ -441,6 +443,7 @@ class DifferentiableTransformer(torch.nn.Module):
             Atomic coordinates of shape (batch_size, n_atoms, 3).
         elements : torch.Tensor
             Element indices of shape (batch_size, n_atoms).
+            NOTE: The indexing on the elements MUST match the element indices in the input to forward!
         b_factors : torch.Tensor
             B-factors of shape (batch_size, n_atoms).
         occupancies : torch.Tensor
