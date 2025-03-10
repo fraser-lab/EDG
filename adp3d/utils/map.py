@@ -70,6 +70,7 @@ class ProcessingConfig:
 
 class ProcessingError(Exception):
     """Custom exception for processing errors."""
+
     pass
 
 
@@ -106,23 +107,25 @@ class SFProcessor:
         )
         self.logger = logging.getLogger(__name__)
 
-    def process_structure(self, pdb_id: str) -> None:
+    def process_structure(self, pdb_id: str, pdb_instead: bool = False) -> None:
         """Process a single structure through the pipeline.
 
         Parameters
         ----------
         pdb_id : str
             PDB ID to process.
+        pdb_instead : bool
+            Whether to download a PDB file instead of mmCIF.
         """
         sf_file = self.download_sf(pdb_id)
-        cif_file, fasta_file = self.download_mmcif_and_sequence(pdb_id)
+        cif_file, fasta_file = self.download_mmcif_and_sequence(pdb_id, pdb_instead)
         mtz_file = self.convert_to_mtz(sf_file)
         self.logger.info(f"Converted {pdb_id} to MTZ: {mtz_file}")
 
         refined_files = self.refine_structure(mtz_file, cif_file, fasta_file)
         p1_mtz = self.expand_to_p1(refined_files["mtz"])
         self.calculate_map(refined_files["cif"], p1_mtz)
-        
+
     def run_subprocess(
         self, cmd: List[str], description: str, log_output: bool = False
     ) -> subprocess.CompletedProcess:
@@ -157,6 +160,7 @@ class SFProcessor:
         except subprocess.CalledProcessError as e:
             self.logger.error(f"Command failed with exit code {e.returncode}")
             self.logger.error(f"Error output:\n{e.stderr}")
+            self.logger.error(f"Command output:\n{e.stdout}")
             raise
 
     def download_sf(self, pdb_id: str) -> Path:
@@ -184,31 +188,42 @@ class SFProcessor:
 
         return output_file
 
-    def download_mmcif_and_sequence(self, pdb_id: str) -> Tuple[Path, Path]:
-        """Download mmCIF file and FASTA from RCSB.
+    def download_mmcif_and_sequence(
+        self, pdb_id: str, pdb_instead: bool = False
+    ) -> Tuple[Path, Path]:
+        """Download mmCIF/PDB file and FASTA from RCSB.
 
         Parameters
         ----------
         pdb_id : str
             PDB ID to download.
+        pdb_instead : bool
+            Whether to download a PDB file instead of mmCIF.
 
         Returns
         -------
         Tuple[Path, Path]
             Path to downloaded file.
         """
-        mmcif_url = f"https://files.rcsb.org/download/{pdb_id}.cif"
+        if pdb_instead:
+            mmcif_url = f"https://files.rcsb.org/download/{pdb_id}.pdb"
+            output_file = self.download_dir / f"{pdb_id}.pdb"
+        else:
+            mmcif_url = f"https://files.rcsb.org/download/{pdb_id}.cif"
+            output_file = self.download_dir / f"{pdb_id}.cif"
+
         fasta_url = f"https://www.rcsb.org/fasta/entry/{pdb_id}"
-        output_file = self.download_dir / f"{pdb_id}.cif"
         fasta_file = self.download_dir / f"{pdb_id}.fa"
 
         if not output_file.exists():
             try:
                 urllib.request.urlretrieve(mmcif_url, output_file)
-                self.logger.info(f"Downloaded {pdb_id} mmCIF")
+                self.logger.info(
+                    f"Downloaded {pdb_id} {'PDB' if pdb_instead else 'mmCIF'}"
+                )
             except urllib.error.URLError as e:
                 raise ProcessingError(f"Failed to download {pdb_id}") from e
-            
+
         if not fasta_file.exists():
             try:
                 urllib.request.urlretrieve(fasta_url, fasta_file)
@@ -244,7 +259,9 @@ class SFProcessor:
         except Exception as e:
             raise ProcessingError(f"Failed to convert {sf_file} to MTZ") from e
 
-    def refine_structure(self, mtz_file: Path, cif_file: Path, fasta_file: Path) -> Dict[str, Path]:
+    def refine_structure(
+        self, mtz_file: Path, cif_file: Path, fasta_file: Path
+    ) -> Dict[str, Path]:
         """Refine structure with provided script.
 
         Parameters
@@ -259,8 +276,13 @@ class SFProcessor:
         Dict[str, Path]
             Paths to refined output files.
         """
-        cmd = [self.config.refinement_script, str(mtz_file), str(cif_file), str(fasta_file)]
-        self.run_subprocess(cmd, "structure refinement")
+        cmd = [
+            self.config.refinement_script,
+            str(mtz_file),
+            str(cif_file),
+            str(fasta_file),
+        ]
+        self.run_subprocess(cmd, "structure refinement", True)
 
         output_prefix = f"{Path(mtz_file).stem}_single_001"
         return {
@@ -308,15 +330,15 @@ class SFProcessor:
             Path to output map file.
         """
         cmd = [
-            self.config.map_box_script, # this script only outputs in the same directory as it is run, so need stem in the input models
+            self.config.map_box_script,  # this script only outputs in the same directory as it is run, so need stem in the input models
             str(model_file.name),
             str(mtz_file.name),
             ",".join(self.config.mtz_labels),
             str(self.config.ignore_symmetry_conflicts),
             str(self.config.mask_atoms),
             str(self.config.wrapping),
-            f'"{self.config.selection}"',
-            str(model_file.parent), 
+            str(self.config.selection),
+            str(model_file.parent),
         ]
 
         self.run_subprocess(cmd, "map calculation", log_output=True)

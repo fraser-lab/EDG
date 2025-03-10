@@ -789,9 +789,13 @@ def dilate_points_torch(
         chunk_size = min(end_idx - start_idx, chunk_size)
 
         grid_coords_chunk = flat_grid_coords[start_idx:end_idx]
-        grid_coords_chunk_expanded = rearrange(grid_coords_chunk, "g c -> 1 g 1 c")  # [1, chunk_size, 1, 3]
+        grid_coords_chunk_expanded = rearrange(
+            grid_coords_chunk, "g c -> 1 g 1 c"
+        )  # [1, chunk_size, 1, 3]
 
-        atom_coords_expanded = rearrange(coordinates, "b n c -> b 1 n c")  # [batch_size, 1, n_atoms, 3]
+        atom_coords_expanded = rearrange(
+            coordinates, "b n c -> b 1 n c"
+        )  # [batch_size, 1, n_atoms, 3]
 
         delta = (
             grid_coords_chunk_expanded - atom_coords_expanded
@@ -810,7 +814,7 @@ def dilate_points_torch(
         d2 = cart_dx**2 + cart_dy**2 + cart_dz**2  # [batch_size, chunk_size, n_atoms]
 
         distance_mask = (d2 <= rmax2).float()  # [batch_size, chunk_size, n_atoms]
-        active_mask = active.unsqueeze(1) # [batch_size, 1, n_atoms]
+        active_mask = active.unsqueeze(1)  # [batch_size, 1, n_atoms]
         combined_mask = (
             distance_mask * active_mask.float()
         )  # [batch_size, chunk_size, n_atoms]

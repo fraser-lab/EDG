@@ -4,7 +4,7 @@ Implements density-guided diffusion for conformational optimization of atomic mo
 using the Boltz-1 diffusion model as a prior and real-space map likelihood.
 
 Author: Karson Chrispens
-Created: 6 Aug 2024 
+Created: 6 Aug 2024
 Updated: 19 Dec 2024
 """
 
@@ -25,11 +25,20 @@ from boltz.main import BoltzDiffusionParams
 from boltz.model.model import Boltz1
 from boltz.data.feature.pad import pad_dim
 
-from adp3d.adp.density import DifferentiableTransformer, XMap_torch,  normalize, to_f_density
+from adp3d.adp.density import (
+    DifferentiableTransformer,
+    XMap_torch,
+    normalize,
+    to_f_density,
+)
 from adp3d.qfit.volume import XMap
 from adp3d.data.io import export_density_map, structure_to_density_input, write_mmcif
 from adp3d.data.mmcif import parse_mmcif
-from adp3d.data.sf import ATOM_STRUCTURE_FACTORS, ELECTRON_SCATTERING_FACTORS, ATOMIC_NUM_TO_ELEMENT
+from adp3d.data.sf import (
+    ATOM_STRUCTURE_FACTORS,
+    ELECTRON_SCATTERING_FACTORS,
+    ATOMIC_NUM_TO_ELEMENT,
+)
 from adp3d.adp.diffusion import DiffusionStepper, DensityGuidedDiffusionStepper
 from adp3d.utils.utility import try_gpu
 
@@ -133,14 +142,18 @@ class DensityGuidedDiffusion:
             warnings.warn("Density map/reflections must be a CCP4, MRC, MTZ file.")
         if extension in (".ccp4", ".map", ".mrc"):
             if resolution is None:
-                raise ValueError("Map resolution must be provided for CCP4, MRC, or MAP files.")
+                raise ValueError(
+                    "Map resolution must be provided for CCP4, MRC, or MAP files."
+                )
             xmap = XMap.fromfile(y, resolution=resolution)
         else:
             xmap = XMap.fromfile(y)
 
         xmap = XMap_torch(xmap, device=self.device)
 
-        scattering_factors = ELECTRON_SCATTERING_FACTORS if em else ATOM_STRUCTURE_FACTORS
+        scattering_factors = (
+            ELECTRON_SCATTERING_FACTORS if em else ATOM_STRUCTURE_FACTORS
+        )
 
         self._setup_scattering_params(scattering_factors)
 
@@ -165,24 +178,37 @@ class DensityGuidedDiffusion:
 
     def _setup_scattering_params(self, structure_factors: dict):
         """Set up scattering parameters for density calculation."""
-        elements = [ATOMIC_NUM_TO_ELEMENT[e] for e in self.structure.data.atoms["element"]]
+        elements = [
+            ATOMIC_NUM_TO_ELEMENT[e] for e in self.structure.data.atoms["element"]
+        ]
         unique_elements = sorted(set(elements))
         element_indices = {elem: i for i, elem in enumerate(unique_elements)}
         # FIXME: convert to using qFit-like Structures instead of Boltz, then we can get rid of this and probably this whole function
-        self.elements_to_ids = {e: element_indices[ATOMIC_NUM_TO_ELEMENT[e]] for e in np.unique(self.structure.data.atoms["element"])}
+        self.elements_to_ids = {
+            e: element_indices[ATOMIC_NUM_TO_ELEMENT[e]]
+            for e in np.unique(self.structure.data.atoms["element"])
+        }
 
         # Prepare scattering factors dictionary
         max_elem_idx = max(element_indices.values())
-        tensor_shape = list(torch.tensor(next(iter(structure_factors.values()))).T.shape)
+        tensor_shape = list(
+            torch.tensor(next(iter(structure_factors.values()))).T.shape
+        )
         scattering_params = torch.zeros([max_elem_idx + 1] + tensor_shape)
 
         for elem in unique_elements:
             idx = element_indices[elem]
             if elem in structure_factors:
-                scattering_params[idx] = torch.tensor(structure_factors[elem]).T # (2, range) -> (range, 2)
+                scattering_params[idx] = torch.tensor(
+                    structure_factors[elem]
+                ).T  # (2, range) -> (range, 2)
             else:
-                print(f"Warning: Scattering factors for {elem} not found, using C instead")
-                scattering_params[idx] = torch.tensor(structure_factors["C"]).T # (2, range) -> (range, 2)
+                print(
+                    f"Warning: Scattering factors for {elem} not found, using C instead"
+                )
+                scattering_params[idx] = torch.tensor(
+                    structure_factors["C"]
+                ).T  # (2, range) -> (range, 2)
 
         self.scattering_params = scattering_params
 
@@ -214,11 +240,19 @@ class DensityGuidedDiffusion:
         torch.Tensor
             Density correlation score
         """
-        element_ids = torch.tensor([self.elements_to_ids[e] for e in elements.flatten()]).reshape(elements.shape).to(self.device)
+        element_ids = (
+            torch.tensor([self.elements_to_ids[e] for e in elements.flatten()])
+            .reshape(elements.shape)
+            .to(self.device)
+        )
         model_map = self.density_calculator(
             coords, element_ids, b_factors, occupancies, chunk_size=50000
-        ).sum(0)  # TODO: dont use normalization, use e-/A^3
-        return torch.linalg.norm(torch.flatten(model_map) - torch.flatten(self.y), ord=norm)
+        ).sum(
+            0
+        )  # TODO: dont use normalization, use e-/A^3
+        return torch.linalg.norm(
+            torch.flatten(model_map) - torch.flatten(self.y), ord=norm
+        )
         # # SiLU (swish) to penalize the model going out into solvent, but not penalize being not in exactly the density as much
         # return torch.linalg.norm(torch.nn.SiLU(torch.flatten(self.y) - torch.flatten(model_map)))
 
@@ -320,8 +354,12 @@ class DensityGuidedDiffusion:
 
                 # only do gradient on partially diffused atoms
                 if diffusion_kwargs["selector"] is not None:
-                    selector = torch.from_numpy(diffusion_kwargs["selector"]).to(self.device)
-                    selector = pad_dim(selector, 0, step_coords.shape[1] - selector.shape[0])
+                    selector = torch.from_numpy(diffusion_kwargs["selector"]).to(
+                        self.device
+                    )
+                    selector = pad_dim(
+                        selector, 0, step_coords.shape[1] - selector.shape[0]
+                    )
                     full_grad[~selector, :] = 0
 
             pbar.set_postfix(
@@ -332,7 +370,11 @@ class DensityGuidedDiffusion:
             scores.append(density_score.item())
 
             step_coords = self.stepper.step(
-                step_coords, full_grad, guidance_scale=step_lr, augmentation=True, align_to_input=True
+                step_coords,
+                full_grad,
+                guidance_scale=step_lr,
+                augmentation=True,
+                align_to_input=True,
             )
 
             # Gradient descent with momentum # TODO: try others?

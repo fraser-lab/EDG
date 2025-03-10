@@ -862,6 +862,8 @@ def parse_mmcif(  # noqa: C901, PLR0915, PLR0912
 
     # Load structure object
     structure = gemmi.make_structure_from_block(block)
+    # NOTE: This becomes necessary on objects where the _entity.type is not initialized and I paste it in
+    structure.setup_entities()
 
     # Clean up the structure
     structure.merge_chain_parts()
