@@ -180,7 +180,7 @@ def structure_to_density_input(
             elements,
             b_factors,
             occupancies,
-            structure.info.resolution if structure.info.resolution > 0 else 2.0,
+            structure.resolution if structure.resolution > 0 else 2.0,
         )
     else:
         raise ValueError("structure must be a Boltz-1 or qFit Structure object.")

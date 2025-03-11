@@ -80,6 +80,7 @@ class DensityGuidedDiffusion:
         model: Optional[Boltz1] = None,
         ccd_path: Path = Path("~/.boltz/ccd.pkl").expanduser(),
         device: Optional[str] = None,
+        **kwargs,
     ):
         """Initialize the density-guided diffusion optimizer.
 
@@ -107,6 +108,8 @@ class DensityGuidedDiffusion:
             Path to the CCD dictionary file, by default "~/.boltz/ccd.pkl"
         device : str, optional
             Device to run computations on ('cpu', 'cuda', etc.), by default None
+        **kwargs
+            Additional keyword arguments.
 
         Raises
         ------
@@ -147,7 +150,12 @@ class DensityGuidedDiffusion:
                 )
             xmap = XMap.fromfile(y, resolution=resolution)
         else:
-            xmap = XMap.fromfile(y)
+            try:
+                xmap = XMap.fromfile(y)
+            except:
+                xmap = XMap.fromfile(
+                    y, label=kwargs.get("label", "2FOFCWT,PH2FOFCWT")
+                )  # try 2FO-FC map if initial fails
 
         xmap = XMap_torch(xmap, device=self.device)
 
@@ -157,13 +165,11 @@ class DensityGuidedDiffusion:
 
         self._setup_scattering_params(scattering_factors)
 
-        self.density_calculator = torch.jit.script(
-            DifferentiableTransformer(
-                xmap,
-                scattering_params=self.scattering_params,
-                em=self.em,
-                device=self.device,
-            )
+        self.density_calculator = DifferentiableTransformer(
+            xmap,
+            scattering_params=self.scattering_params,
+            em=self.em,
+            device=self.device,
         )
 
         diffusion_args = BoltzDiffusionParams(step_scale=step_scale)
@@ -179,8 +185,10 @@ class DensityGuidedDiffusion:
     def _setup_scattering_params(self, structure_factors: dict):
         """Set up scattering parameters for density calculation."""
         unique_elements = sorted(set(self.structure.e))
-        atomic_num_dict = {elem: ATOMIC_NUM_TO_ELEMENT.index(elem) for elem in unique_elements}
-        
+        atomic_num_dict = {
+            elem: ATOMIC_NUM_TO_ELEMENT.index(elem) for elem in unique_elements
+        }
+
         max_atomic_num = max(atomic_num_dict.values())
         indices = []
         values = []
@@ -196,7 +204,9 @@ class DensityGuidedDiffusion:
                 )
                 factor = structure_factors["C"]
 
-            factor = torch.tensor(factor, dtype=torch.float32).T # (2, range) -> (range, 2)
+            factor = torch.tensor(
+                factor, dtype=torch.float32
+            ).T  # (2, range) -> (range, 2)
 
             for i in range(factor.shape[0]):  # range
                 for j in range(factor.shape[1]):  # 2
@@ -206,7 +216,9 @@ class DensityGuidedDiffusion:
         sparse_indices = torch.tensor(indices, dtype=torch.long).t()
         sparse_values = torch.tensor(values, dtype=torch.float32)
 
-        sparse_size = torch.Size([max_atomic_num + 1, len(structure_factors["C"][0]), 2])
+        sparse_size = torch.Size(
+            [max_atomic_num + 1, len(structure_factors["C"][0]), 2]
+        )
         scattering_sparse_tensor = torch.sparse_coo_tensor(
             sparse_indices, sparse_values, sparse_size
         )
@@ -296,7 +308,9 @@ class DensityGuidedDiffusion:
         """
         os.makedirs(output_dir, exist_ok=True)
 
-        coords, elements, b_factors, occupancies, resolution = structure_to_density_input(self.structure)
+        coords, elements, b_factors, occupancies, resolution = (
+            structure_to_density_input(self.structure)
+        )
         coords = repeat(coords, "a c -> n a c", n=num_samples)
         elements = repeat(elements, "e -> n e", n=num_samples)
         # FIXME: using uniform b-factors and occupancies for now
@@ -350,7 +364,9 @@ class DensityGuidedDiffusion:
                 coords_to_grad = masked_coords.detach().clone()
                 coords_to_grad = coords_to_grad.requires_grad_(True)
 
-                density_score = self.density_score(coords_to_grad, elements, b_factors, occupancies, resolution)
+                density_score = self.density_score(
+                    coords_to_grad, elements, b_factors, occupancies, resolution
+                )
                 density_score.backward()
 
                 if coords_to_grad.grad is None:
@@ -395,16 +411,28 @@ class DensityGuidedDiffusion:
             # step_coords = step_coords - step_lr * full_grad.unsqueeze(
             #     0
             # )
-            structure = copy.deepcopy(self.structure) # q and b will need to be updated in the future
-            structure.coor = self.stepper.diffusion_trajectory[
+            structure = copy.deepcopy(
+                self.structure
+            )  # q and b will need to be updated in the future
+            structure.coor = (
+                self.stepper.diffusion_trajectory[
                     f"step_{self.stepper.current_step - 1}"
-                ]["coords"].cpu().numpy()
+                ]["coords"]
+                .cpu()
+                .numpy()
+            )
             structure.tofile(f"{output_dir}/step_{i}.cif")
-        
-        structure = copy.deepcopy(self.structure) # q and b will need to be updated in the future
-        structure.coor = self.stepper.diffusion_trajectory[
-                f"step_{self.stepper.current_step - 1}"
-            ]["coords"].cpu().numpy()
+
+        structure = copy.deepcopy(
+            self.structure
+        )  # q and b will need to be updated in the future
+        structure.coor = (
+            self.stepper.diffusion_trajectory[f"step_{self.stepper.current_step - 1}"][
+                "coords"
+            ]
+            .cpu()
+            .numpy()
+        )
         structure.tofile(f"{output_dir}/final.cif")
-        
+
         return structure, scores
