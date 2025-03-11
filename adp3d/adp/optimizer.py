@@ -10,21 +10,20 @@ Updated: 19 Dec 2024
 
 from pathlib import Path
 import os
-import pickle
+import copy
 from typing import Optional, Union, List
 import warnings
 
 import torch
 import torch.nn.functional as F
-import numpy as np
-import gemmi
 from tqdm import tqdm
+from einops import rearrange, repeat
 
-from boltz.data.types import Structure
 from boltz.main import BoltzDiffusionParams
 from boltz.model.model import Boltz1
 from boltz.data.feature.pad import pad_dim
 
+from adp3d.data import Structure
 from adp3d.adp.density import (
     DifferentiableTransformer,
     XMap_torch,
@@ -32,8 +31,7 @@ from adp3d.adp.density import (
     to_f_density,
 )
 from adp3d.qfit.volume import XMap
-from adp3d.data.io import export_density_map, structure_to_density_input, write_mmcif
-from adp3d.data.mmcif import parse_mmcif
+from adp3d.data.io import export_density_map, structure_to_density_input
 from adp3d.data.sf import (
     ATOM_STRUCTURE_FACTORS,
     ELECTRON_SCATTERING_FACTORS,
@@ -92,7 +90,7 @@ class DensityGuidedDiffusion:
         y : str
             Path to the density map file (CCP4, MRC, SF-CIF, or MTZ format)
         structure : str
-            Path to the structure file in mmCIF format
+            Path to the structure file in mmCIF or PDB format
         output_path : str
             Directory path for output files
         em : bool, optional
@@ -131,9 +129,11 @@ class DensityGuidedDiffusion:
 
         self.em = em
 
-        with ccd_path.open("rb") as f:
-            ccd = pickle.load(f)
-        self.structure = parse_mmcif(structure, ccd)
+        st = Structure.fromfile(structure)
+        # remove hydrogens
+        st = st.extract(st.select("e", "H", comparison="!="))
+        st = st.reorder()
+        self.structure = st
 
         # coords, _, _ = structure_to_density_input(self.structure)
 
@@ -178,39 +178,40 @@ class DensityGuidedDiffusion:
 
     def _setup_scattering_params(self, structure_factors: dict):
         """Set up scattering parameters for density calculation."""
-        elements = [
-            ATOMIC_NUM_TO_ELEMENT[e] for e in self.structure.data.atoms["element"]
-        ]
-        unique_elements = sorted(set(elements))
-        element_indices = {elem: i for i, elem in enumerate(unique_elements)}
-        # FIXME: convert to using qFit-like Structures instead of Boltz, then we can get rid of this and probably this whole function
-        self.elements_to_ids = {
-            e: element_indices[ATOMIC_NUM_TO_ELEMENT[e]]
-            for e in np.unique(self.structure.data.atoms["element"])
-        }
-
-        # Prepare scattering factors dictionary
-        max_elem_idx = max(element_indices.values())
-        tensor_shape = list(
-            torch.tensor(next(iter(structure_factors.values()))).T.shape
-        )
-        scattering_params = torch.zeros([max_elem_idx + 1] + tensor_shape)
+        unique_elements = sorted(set(self.structure.e))
+        atomic_num_dict = {elem: ATOMIC_NUM_TO_ELEMENT.index(elem) for elem in unique_elements}
+        
+        max_atomic_num = max(atomic_num_dict.values())
+        indices = []
+        values = []
 
         for elem in unique_elements:
-            idx = element_indices[elem]
+            atomic_num = atomic_num_dict[elem]
+
             if elem in structure_factors:
-                scattering_params[idx] = torch.tensor(
-                    structure_factors[elem]
-                ).T  # (2, range) -> (range, 2)
+                factor = structure_factors[elem]
             else:
                 print(
                     f"Warning: Scattering factors for {elem} not found, using C instead"
                 )
-                scattering_params[idx] = torch.tensor(
-                    structure_factors["C"]
-                ).T  # (2, range) -> (range, 2)
+                factor = structure_factors["C"]
 
-        self.scattering_params = scattering_params
+            factor = torch.tensor(factor, dtype=torch.float32).T # (2, range) -> (range, 2)
+
+            for i in range(factor.shape[0]):  # range
+                for j in range(factor.shape[1]):  # 2
+                    indices.append([atomic_num, i, j])
+                    values.append(factor[i, j].item())
+
+        sparse_indices = torch.tensor(indices, dtype=torch.long).t()
+        sparse_values = torch.tensor(values, dtype=torch.float32)
+
+        sparse_size = torch.Size([max_atomic_num + 1, len(structure_factors["C"][0]), 2])
+        scattering_sparse_tensor = torch.sparse_coo_tensor(
+            sparse_indices, sparse_values, sparse_size
+        )
+
+        self.scattering_params = scattering_sparse_tensor
 
     def density_score(
         self,
@@ -295,15 +296,24 @@ class DensityGuidedDiffusion:
         """
         os.makedirs(output_dir, exist_ok=True)
 
-        coords, elements, resolution = structure_to_density_input(self.structure)
+        coords, elements, b_factors, occupancies, resolution = structure_to_density_input(self.structure)
+        coords = repeat(coords, "a c -> n a c", n=num_samples)
+        elements = repeat(elements, "e -> n e", n=num_samples)
+        # FIXME: using uniform b-factors and occupancies for now
+        b_factors = repeat(b_factors, "b -> n b", n=num_samples) / num_samples
+        occupancies = repeat(occupancies, "q -> n q", n=num_samples) / num_samples
 
-        if resolution == 0.0:
+        if resolution == 0.0 or resolution is None:
+            if self.density_calculator.xmap.resolution is not None:
+                resolution = self.density_calculator.xmap.resolution.high
             warnings.warn(
                 f"Resolution of input structure is {resolution}. Using 2.0 A instead."
             )
 
         coords = coords.to(self.device)
         elements = elements.to(self.device)
+        b_factors = b_factors.to(self.device)
+        occupancies = occupancies.to(self.device)
 
         if partial_diffusion:
             self.stepper.initialize_partial_diffusion(
@@ -340,7 +350,7 @@ class DensityGuidedDiffusion:
                 coords_to_grad = masked_coords.detach().clone()
                 coords_to_grad = coords_to_grad.requires_grad_(True)
 
-                density_score = self.density_score(coords_to_grad, elements, resolution)
+                density_score = self.density_score(coords_to_grad, elements, b_factors, occupancies, resolution)
                 density_score.backward()
 
                 if coords_to_grad.grad is None:
@@ -385,23 +395,16 @@ class DensityGuidedDiffusion:
             # step_coords = step_coords - step_lr * full_grad.unsqueeze(
             #     0
             # )
-
-            write_mmcif(
-                self.stepper.diffusion_trajectory[
+            structure = copy.deepcopy(self.structure) # q and b will need to be updated in the future
+            structure.coor = self.stepper.diffusion_trajectory[
                     f"step_{self.stepper.current_step - 1}"
-                ]["coords"],
-                self.structure.data,
-                f"{output_dir}/step_{self.stepper.current_step - 1}.cif",
-                elements,
-            )
-
-        structure = write_mmcif(
-            self.stepper.diffusion_trajectory[f"step_{self.stepper.current_step - 1}"][
-                "coords"
-            ],
-            self.structure.data,
-            f"{output_dir}/final.cif",
-            elements,
-            return_structure=True,
-        )
+                ]["coords"].cpu().numpy()
+            structure.tofile(f"{output_dir}/step_{i}.cif")
+        
+        structure = copy.deepcopy(self.structure) # q and b will need to be updated in the future
+        structure.coor = self.stepper.diffusion_trajectory[
+                f"step_{self.stepper.current_step - 1}"
+            ]["coords"].cpu().numpy()
+        structure.tofile(f"{output_dir}/final.cif")
+        
         return structure, scores
