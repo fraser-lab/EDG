@@ -379,7 +379,6 @@ class DifferentiableTransformer(torch.nn.Module):
         if space_group is not None:
             self.unit_cell.space_group = GetSpaceGroup(space_group)
 
-        self.register_buffer("voxelspacing", xmap.voxelspacing)
         self.grid_shape = xmap.shape
 
         # TODO: currently this means we're essentially forced to use the existing B-factors
@@ -406,23 +405,22 @@ class DifferentiableTransformer(torch.nn.Module):
             torch.float32
         )  # need to set this here or else doubles start popping up and ruining operations
 
-        abc = torch.tensor(self.unit_cell.abc, dtype=self.dtype, device=self.device)
-
-        lattice_to_cartesian = self._unit_cell_to_cartesian_matrix()
+        lattice_to_cartesian = self.xmap.unit_cell.frac_to_orth / self.xmap.unit_cell.abc
+        cartesian_to_lattice = self.xmap.unit_cell.orth_to_frac * self.xmap.unit_cell.abc.reshape(3, 1)
+        grid_to_cartesian = lattice_to_cartesian * self.xmap.voxelspacing.cpu().numpy()
         self.register_buffer(
             "lattice_to_cartesian",
-            (lattice_to_cartesian / abc.reshape(3, 1)).to(dtype=self.dtype),
+            torch.tensor(lattice_to_cartesian).to(dtype=self.dtype),
         )
 
         self.register_buffer(
             "cartesian_to_lattice",
-            torch.inverse(self.lattice_to_cartesian).to(dtype=self.dtype),
+            torch.tensor(cartesian_to_lattice).to(dtype=self.dtype),
         )
 
-        voxelspacing = self.voxelspacing.to(dtype=self.dtype, device=self.device)
         self.register_buffer(
             "grid_to_cartesian",
-            (self.lattice_to_cartesian * voxelspacing.reshape(3, 1)).to(
+            torch.tensor(grid_to_cartesian).to(
                 dtype=self.dtype
             ),
         )
@@ -472,7 +470,7 @@ class DifferentiableTransformer(torch.nn.Module):
 
         batch_size = coordinates.shape[0]
 
-        radial_densities = self._compute_radial_densities(elements, b_factors)
+        radial_densities = self._compute_radial_densities(elements, b_factors).to(self.dtype) # integrator seems to be promoting to float64?
 
         density = torch.zeros(
             (batch_size,) + self.grid_shape, device=self.device, dtype=coordinates.dtype
@@ -483,7 +481,7 @@ class DifferentiableTransformer(torch.nn.Module):
         )
 
         lmax = torch.tensor(
-            [self.density_params.rmax / vs for vs in self.voxelspacing],
+            [self.density_params.rmax / vs for vs in self.xmap.voxelspacing],
             device=self.device,
         )
         active = torch.ones_like(elements, dtype=torch.bool)
@@ -492,14 +490,17 @@ class DifferentiableTransformer(torch.nn.Module):
             R = self.xmap.R_matrices[i]
             t = self.xmap.t_vectors[i]
 
-            grid_coordinates_rot = torch.matmul(grid_coordinates, R.transpose(-2, -1))
+            grid_coordinates_rot = torch.matmul(grid_coordinates, R.T)
             grid_coordinates_rot = grid_coordinates_rot + t.view(
                 1, 1, 3
             ) * torch.tensor(
-                self.grid_shape, device=self.device, dtype=coordinates.dtype
+                self.grid_shape[::-1], device=self.device, dtype=coordinates.dtype
             ).view(
                 1, 1, 3
             )
+            grid_coordinates_rot = torch.remainder(grid_coordinates_rot, torch.tensor(
+                self.grid_shape[::-1], device=self.device, dtype=coordinates.dtype
+            ).view(1, 1, 3))
 
             density += dilate_points_torch(
                 grid_coordinates_rot,
@@ -645,7 +646,7 @@ class DifferentiableTransformer(torch.nn.Module):
             )
 
         grid_coordinates = torch.matmul(coordinates, self.cartesian_to_lattice.T)
-        grid_coordinates /= self.voxelspacing.to(self.device)
+        grid_coordinates /= self.xmap.voxelspacing.to(self.device)
 
         if hasattr(self.xmap, "offset"):
             grid_coordinates -= self.xmap.offset.to(
@@ -653,50 +654,6 @@ class DifferentiableTransformer(torch.nn.Module):
             )
 
         return grid_coordinates
-
-    def _unit_cell_to_cartesian_matrix(self) -> torch.Tensor:
-        """Compute transformation matrix from unit cell to Cartesian coordinates.
-
-        Returns
-        -------
-        torch.Tensor
-            Transformation matrix of shape (3, 3).
-        """
-        a, b, c = self.unit_cell.abc
-        alpha, beta, gamma = map(
-            np.deg2rad,
-            [self.unit_cell.alpha, self.unit_cell.beta, self.unit_cell.gamma],
-        )
-
-        a = torch.tensor(a, device=self.device)
-        b = torch.tensor(b, device=self.device)
-        c = torch.tensor(c, device=self.device)
-        alpha = torch.tensor(alpha, device=self.device)
-        beta = torch.tensor(beta, device=self.device)
-        gamma = torch.tensor(gamma, device=self.device)
-
-        cos_alpha = torch.cos(alpha)
-        cos_beta = torch.cos(beta)
-        cos_gamma = torch.cos(gamma)
-        sin_gamma = torch.sin(gamma)
-
-        volume_term = torch.sqrt(
-            1
-            - cos_alpha**2
-            - cos_beta**2
-            - cos_gamma**2
-            + 2 * cos_alpha * cos_beta * cos_gamma
-        )
-
-        matrix = torch.zeros((3, 3), device=self.device)
-        matrix[0, 0] = a
-        matrix[0, 1] = b * cos_gamma
-        matrix[0, 2] = c * cos_beta
-        matrix[1, 1] = b * sin_gamma
-        matrix[1, 2] = c * (cos_alpha - cos_beta * cos_gamma) / sin_gamma
-        matrix[2, 2] = (a * b * c * volume_term) / (a * b * sin_gamma)
-
-        return matrix
 
 
 def dilate_points_torch(
