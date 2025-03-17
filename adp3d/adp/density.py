@@ -70,7 +70,7 @@ class XMap_torch:
         origin: Optional[torch.Tensor] = None,
         device: torch.device = torch.device("cpu"),
     ) -> None:
-        """Initialize differentiable XMap.
+        """Initialize differentiable XMap. # TODO: refactor this to be much better so it isn't redefining everything from XMap (maybe inherit from it)
 
         Parameters
         ----------
@@ -99,6 +99,7 @@ class XMap_torch:
 
             self.voxelspacing = torch.tensor(xmap.voxelspacing, device=device)
             self.offset = torch.tensor(xmap.offset, device=device)
+            self.xmap = xmap
         else:
             self.unit_cell = unit_cell
             self.resolution = resolution
@@ -111,6 +112,8 @@ class XMap_torch:
                 grid_parameters.voxelspacing, device=device
             )
             self.offset = torch.tensor(grid_parameters.offset, device=device)
+
+            self.xmap = XMap(array, grid_parameters, unit_cell, resolution, hkl, origin)
 
         self._validate_input(xmap)
 
@@ -173,6 +176,27 @@ class XMap_torch:
 
         self.R_matrices = R_matrices
         self.t_vectors = t_vectors
+
+    def tofile(self, filename: str, density: torch.Tensor = None) -> None:
+        """Save the map to a file.
+
+        Parameters
+        ----------
+        filename : str
+            Output filename.
+        density : torch.Tensor, optional
+            Density grid to save, by default None.
+            If provided, it will be used to update the map array.
+        """
+        if density is not None:
+            if density.shape != self.array.shape:
+                raise ValueError(
+                    f"Density shape {density.shape} does not match map shape {self.array.shape}"
+                )
+            self.array = density.cpu().numpy()
+
+        self.xmap.array = self.array.cpu().numpy()
+        self.xmap.tofile(filename)
 
     def _apply_symmetry_chunk(
         self,
@@ -405,8 +429,12 @@ class DifferentiableTransformer(torch.nn.Module):
             torch.float32
         )  # need to set this here or else doubles start popping up and ruining operations
 
-        lattice_to_cartesian = self.xmap.unit_cell.frac_to_orth / self.xmap.unit_cell.abc
-        cartesian_to_lattice = self.xmap.unit_cell.orth_to_frac * self.xmap.unit_cell.abc.reshape(3, 1)
+        lattice_to_cartesian = (
+            self.xmap.unit_cell.frac_to_orth / self.xmap.unit_cell.abc
+        )
+        cartesian_to_lattice = (
+            self.xmap.unit_cell.orth_to_frac * self.xmap.unit_cell.abc.reshape(3, 1)
+        )
         grid_to_cartesian = lattice_to_cartesian * self.xmap.voxelspacing.cpu().numpy()
         self.register_buffer(
             "lattice_to_cartesian",
@@ -420,9 +448,7 @@ class DifferentiableTransformer(torch.nn.Module):
 
         self.register_buffer(
             "grid_to_cartesian",
-            torch.tensor(grid_to_cartesian).to(
-                dtype=self.dtype
-            ),
+            torch.tensor(grid_to_cartesian).to(dtype=self.dtype),
         )
 
     def forward(
@@ -470,7 +496,9 @@ class DifferentiableTransformer(torch.nn.Module):
 
         batch_size = coordinates.shape[0]
 
-        radial_densities = self._compute_radial_densities(elements, b_factors).to(self.dtype) # integrator seems to be promoting to float64?
+        radial_densities = self._compute_radial_densities(elements, b_factors).to(
+            self.dtype
+        )  # integrator seems to be promoting to float64?
 
         density = torch.zeros(
             (batch_size,) + self.grid_shape, device=self.device, dtype=coordinates.dtype
@@ -498,9 +526,12 @@ class DifferentiableTransformer(torch.nn.Module):
             ).view(
                 1, 1, 3
             )
-            grid_coordinates_rot = torch.remainder(grid_coordinates_rot, torch.tensor(
-                self.grid_shape[::-1], device=self.device, dtype=coordinates.dtype
-            ).view(1, 1, 3))
+            grid_coordinates_rot = torch.remainder(
+                grid_coordinates_rot,
+                torch.tensor(
+                    self.grid_shape[::-1], device=self.device, dtype=coordinates.dtype
+                ).view(1, 1, 3),
+            )
 
             density += dilate_points_torch(
                 grid_coordinates_rot,
