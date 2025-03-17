@@ -463,7 +463,6 @@ class DifferentiableTransformer(torch.nn.Module):
         elements: torch.Tensor,
         b_factors: torch.Tensor,
         occupancies: torch.Tensor,
-        chunk_size: Optional[int] = 50000,
     ) -> torch.Tensor:
         """Forward pass computing electron density with symmetry.
 
@@ -515,7 +514,7 @@ class DifferentiableTransformer(torch.nn.Module):
         )
 
         lmax = torch.tensor(
-            [self.density_params.rmax / vs for vs in self.xmap.voxelspacing],
+            [self.density_params.rmax + 2 / vs for vs in self.xmap.voxelspacing], # FIXME + 2
             device=self.device,
         )
         active = torch.ones_like(elements, dtype=torch.bool)
@@ -532,12 +531,6 @@ class DifferentiableTransformer(torch.nn.Module):
             ).view(
                 1, 1, 3
             )
-            grid_coordinates_rot = torch.remainder(
-                grid_coordinates_rot,
-                torch.tensor(
-                    self.grid_shape[::-1], device=self.device, dtype=coordinates.dtype
-                ).view(1, 1, 3),
-            )
 
             density += dilate_points_torch(
                 grid_coordinates_rot,
@@ -546,10 +539,9 @@ class DifferentiableTransformer(torch.nn.Module):
                 lmax,
                 radial_densities,
                 self.density_params.rstep,
-                self.density_params.rmax,
+                self.density_params.rmax + 2, # FIXME + 2
                 self.grid_to_cartesian,
                 self.grid_shape,
-                chunk_size,
             )
 
         return density
@@ -703,7 +695,6 @@ def dilate_points_torch(
     rmax: float,
     grid_to_cartesian: torch.Tensor,
     grid_shape: Tuple[int, int, int],
-    chunk_size: int = 50000,
 ) -> torch.Tensor:
     """Point dilation onto a grid across batches.
     Batch could be either many structures for many density maps,
@@ -729,8 +720,6 @@ def dilate_points_torch(
         Transformation matrix from grid to Cartesian of shape (3, 3).
     grid_shape : Tuple[int, int, int]
         Output grid shape (int, int, int).
-    chunk_size : int, optional
-        Number of grid points to process in each chunk, by default 50000.
 
     Returns
     -------
@@ -752,188 +741,103 @@ def dilate_points_torch(
 
     result = torch.zeros((batch_size,) + grid_shape, device=device, dtype=dtype)
 
-    grid_c, grid_b, grid_a = torch.meshgrid(
-        torch.arange(grid_shape[0], device=device),
-        torch.arange(grid_shape[1], device=device),
-        torch.arange(grid_shape[2], device=device),
-        indexing="ij",
+    max_extent_c = int(torch.ceil(lmax[2]).item())
+    max_extent_b = int(torch.ceil(lmax[1]).item())
+    max_extent_a = int(torch.ceil(lmax[0]).item())
+    
+    # Offsets are the precomputed grid boxes for each atom that will be affected by them
+    c_offsets = torch.arange(-max_extent_c, max_extent_c+1, device=device)  # [2*max_extent_z+1]
+    b_offsets = torch.arange(-max_extent_b, max_extent_b+1, device=device)  # [2*max_extent_y+1]
+    a_offsets = torch.arange(-max_extent_a, max_extent_a+1, device=device)  # [2*max_extent_x+1]
+    
+    oc, ob, oa = torch.meshgrid(c_offsets, b_offsets, a_offsets, indexing='ij')
+    # oz, oy, ox: [2*max_extent_z+1, 2*max_extent_y+1, 2*max_extent_x+1]
+    
+    cart_dz = g22 * oc.float()  # [2*max_extent_z+1, 2*max_extent_y+1, 2*max_extent_x+1]
+    cart_dy = g12 * oc.float() + g11 * ob.float()  # [2*max_extent_z+1, 2*max_extent_y+1, 2*max_extent_x+1]
+    cart_dx = g02 * oc.float() + g01 * ob.float() + g00 * oa.float()  # [2*max_extent_z+1, 2*max_extent_y+1, 2*max_extent_x+1]
+    
+    # Calculate radial distances from the center of the offset grid
+    offset_d2 = cart_dx**2 + cart_dy**2 + cart_dz**2  # [2*max_extent_z+1, 2*max_extent_y+1, 2*max_extent_x+1]
+    
+    # Filter offsets within maximum radius
+    offset_mask = offset_d2 <= rmax2  # [2*max_extent_z+1, 2*max_extent_y+1, 2*max_extent_x+1]
+    valid_offsets_idx = torch.nonzero(offset_mask)  # [n_valid_offsets, 3]
+    
+    # Extract valid offsets in grid space
+    offsets = torch.stack([
+        oc[valid_offsets_idx[:, 0], valid_offsets_idx[:, 1], valid_offsets_idx[:, 2]],
+        ob[valid_offsets_idx[:, 0], valid_offsets_idx[:, 1], valid_offsets_idx[:, 2]],
+        oa[valid_offsets_idx[:, 0], valid_offsets_idx[:, 1], valid_offsets_idx[:, 2]]
+    ], dim=1)  # [n_valid_offsets, 3]
+    
+    # Get actual distances for valid offsets
+    valid_distances = torch.sqrt(offset_d2[offset_mask])  # [n_valid_offsets]
+    
+    # Prepare for radial density interpolation
+    rad_continuous = valid_distances / rstep  # [n_valid_offsets]
+    rad_indices_low = torch.floor(rad_continuous).long()  # [n_valid_offsets]
+    
+    weights_high = rad_continuous - rad_indices_low.float()  # [n_valid_offsets]
+    weights_low = 1.0 - weights_high  # [n_valid_offsets]
+    
+    max_rad_idx = radial_densities.shape[-1] - 1
+    rad_indices_low = torch.clamp(rad_indices_low, 0, max_rad_idx)  # [n_valid_offsets]
+    rad_indices_high = torch.clamp(rad_indices_low + 1, 0, max_rad_idx)  # [n_valid_offsets]
+    
+    # Process all active atoms
+    active_flat = active.view(batch_size * n_atoms)  # [batch_size * n_atoms]
+    active_mask = active_flat.nonzero().squeeze(-1)  # [n_active_atoms]
+    
+    batch_idx = active_mask // n_atoms  # [n_active_atoms]
+    atom_idx = active_mask % n_atoms  # [n_active_atoms]
+    
+    active_coords = coordinates[batch_idx, atom_idx].long()  # [n_active_atoms, 3]
+    
+    grid_points = active_coords.unsqueeze(1) + offsets.unsqueeze(0)  # [n_active_atoms, n_valid_offsets, 3]
+
+    # Periodic boundary
+    grid_points = torch.remainder(grid_points, torch.tensor(grid_shape[::-1], device=device)) # [n_active_atoms, n_valid_offsets, 3]
+    
+    # Filter out-of-bounds grid points (points are (x, y, z), grid_shape is (c, b, a))
+    valid_z = (grid_points[..., 0] >= 0) & (grid_points[..., 0] < grid_shape[2])  # [n_active_atoms, n_valid_offsets]
+    valid_y = (grid_points[..., 1] >= 0) & (grid_points[..., 1] < grid_shape[1])  # [n_active_atoms, n_valid_offsets]
+    valid_x = (grid_points[..., 2] >= 0) & (grid_points[..., 2] < grid_shape[0])  # [n_active_atoms, n_valid_offsets]
+    valid_grid = valid_z & valid_y & valid_x  # [n_active_atoms, n_valid_offsets]
+    
+    atom_grid_indices, offset_indices = torch.where(valid_grid)  # [n_valid_points], [n_valid_points]
+    
+    final_batch_indices = batch_idx[atom_grid_indices]  # [n_valid_points]
+    final_atom_indices = atom_idx[atom_grid_indices]  # [n_valid_points]
+    final_grid_points = grid_points[atom_grid_indices, offset_indices].long()  # [n_valid_points, 3]
+    
+    densities_low = radial_densities[final_batch_indices, final_atom_indices, rad_indices_low[offset_indices]]  # [n_valid_points]
+    densities_high = radial_densities[final_batch_indices, final_atom_indices, rad_indices_high[offset_indices]]  # [n_valid_points]
+    densities = weights_low[offset_indices] * densities_low + weights_high[offset_indices] * densities_high  # [n_valid_points]
+    
+    scaled_densities = occupancies[final_batch_indices, final_atom_indices] * densities  # [n_valid_points]
+    
+    flat_result = result.view(-1)  # [batch_size * grid_z * grid_y * grid_x]
+    
+    grid_size = grid_shape[0] * grid_shape[1] * grid_shape[2]
+    grid_z_stride = grid_shape[1] * grid_shape[2]
+    grid_y_stride = grid_shape[2]
+    
+    flat_grid_indices = (
+        final_batch_indices * grid_size +
+        final_grid_points[:, 2] * grid_z_stride +
+        final_grid_points[:, 1] * grid_y_stride +
+        final_grid_points[:, 0]
+    ).long()  # [n_valid_points]
+    
+    flat_result.scatter_add_(
+        0, 
+        flat_grid_indices, 
+        scaled_densities
     )
-
-    flat_grid_c = grid_c.flatten()  # [n_grid_points]
-    flat_grid_b = grid_b.flatten()  # [n_grid_points]
-    flat_grid_a = grid_a.flatten()  # [n_grid_points]
-    n_grid_points = flat_grid_c.shape[0]
-
-    flat_grid_coords = torch.stack(
-        [flat_grid_a, flat_grid_b, flat_grid_c], dim=-1
-    )  # [n_grid_points, 3]
-
-    if not torch.any(active):
-        return result
-
-    n_chunks = (n_grid_points + chunk_size - 1) // chunk_size
-
-    flat_result = result.reshape(
-        -1
-    )  # [batch_size * grid_shape[0] * grid_shape[1] * grid_shape[2]]
-
-    for i in range(n_chunks):
-        start_idx = i * chunk_size
-        end_idx = min((i + 1) * chunk_size, n_grid_points)
-        chunk_size = min(end_idx - start_idx, chunk_size)
-
-        grid_coords_chunk = flat_grid_coords[start_idx:end_idx]
-        grid_coords_chunk_expanded = rearrange(
-            grid_coords_chunk, "g c -> 1 g 1 c"
-        )  # [1, chunk_size, 1, 3]
-
-        atom_coords_expanded = rearrange(
-            coordinates, "b n c -> b 1 n c"
-        )  # [batch_size, 1, n_atoms, 3]
-
-        delta = (
-            grid_coords_chunk_expanded - atom_coords_expanded
-        )  # [batch_size, chunk_size, n_atoms, 3]
-
-        dx, dy, dz = (
-            delta[..., 0],
-            delta[..., 1],
-            delta[..., 2],
-        )  # [batch_size, chunk_size, n_atoms]
-
-        cart_dz = g22 * dz
-        cart_dy = g12 * dz + g11 * dy
-        cart_dx = g02 * dz + g01 * dy + g00 * dx
-
-        d2 = cart_dx**2 + cart_dy**2 + cart_dz**2  # [batch_size, chunk_size, n_atoms]
-
-        distance_mask = (d2 <= rmax2).float()  # [batch_size, chunk_size, n_atoms]
-        active_mask = active.unsqueeze(1)  # [batch_size, 1, n_atoms]
-        combined_mask = (
-            distance_mask * active_mask.float()
-        )  # [batch_size, chunk_size, n_atoms]
-
-        if not torch.any(combined_mask):
-            continue
-
-        distances = torch.sqrt(d2)  # [batch_size, chunk_size, n_atoms]
-        rad_continuous = distances / rstep  # [batch_size, chunk_size, n_atoms]
-        rad_indices_low = torch.floor(
-            rad_continuous
-        ).long()  # [batch_size, chunk_size, n_atoms]
-        weights_high = (
-            rad_continuous - rad_indices_low.float()
-        )  # [batch_size, chunk_size, n_atoms]
-        weights_low = 1.0 - weights_high  # [batch_size, chunk_size, n_atoms]
-
-        max_rad_idx = radial_densities.shape[-1] - 1
-        rad_indices_low = torch.clamp(
-            rad_indices_low, 0, max_rad_idx
-        )  # [batch_size, chunk_size, n_atoms]
-        rad_indices_high = torch.clamp(
-            rad_indices_low + 1, 0, max_rad_idx
-        )  # [batch_size, chunk_size, n_atoms]
-
-        flat_batch_size = batch_size * chunk_size * n_atoms
-
-        batch_indices = torch.arange(batch_size, device=device).view(
-            batch_size, 1, 1
-        )  # [batch_size, 1, 1]
-        batch_indices = batch_indices.expand(
-            batch_size, chunk_size, n_atoms
-        )  # [batch_size, chunk_size, n_atoms]
-        flat_batch_indices = batch_indices.reshape(flat_batch_size)  # [flat_batch_size]
-
-        atom_indices = torch.arange(n_atoms, device=device).view(
-            1, 1, n_atoms
-        )  # [1, 1, n_atoms]
-        atom_indices = atom_indices.expand(
-            batch_size, chunk_size, n_atoms
-        )  # [batch_size, chunk_size, n_atoms]
-        flat_atom_indices = atom_indices.reshape(flat_batch_size)  # [flat_batch_size]
-
-        flat_rad_indices_low = rad_indices_low.reshape(
-            flat_batch_size
-        )  # [flat_batch_size]
-        flat_rad_indices_high = rad_indices_high.reshape(
-            flat_batch_size
-        )  # [flat_batch_size]
-        flat_weights_low = weights_low.reshape(flat_batch_size)  # [flat_batch_size]
-        flat_weights_high = weights_high.reshape(flat_batch_size)  # [flat_batch_size]
-
-        flat_densities_low = radial_densities[
-            flat_batch_indices, flat_atom_indices, flat_rad_indices_low
-        ]  # [flat_batch_size]
-        flat_densities_high = radial_densities[
-            flat_batch_indices, flat_atom_indices, flat_rad_indices_high
-        ]  # [flat_batch_size]
-        flat_densities = (
-            flat_weights_low * flat_densities_low
-            + flat_weights_high * flat_densities_high
-        )  # [flat_batch_size]
-
-        densities = flat_densities.reshape(
-            batch_size, chunk_size, n_atoms
-        )  # [batch_size, chunk_size, n_atoms]
-
-        occupancies_expanded = occupancies.unsqueeze(1).expand(
-            batch_size, chunk_size, n_atoms
-        )  # [batch_size, chunk_size, n_atoms]
-        scaled_densities = (
-            occupancies_expanded * densities * combined_mask
-        )  # [batch_size, chunk_size, n_atoms]
-
-        grid_densities = torch.sum(scaled_densities, dim=2)  # [batch_size, chunk_size]
-
-        z_periodic = torch.remainder(
-            flat_grid_c[start_idx:end_idx], grid_shape[0]
-        ).long()  # [chunk_size]
-        y_periodic = torch.remainder(
-            flat_grid_b[start_idx:end_idx], grid_shape[1]
-        ).long()  # [chunk_size]
-        x_periodic = torch.remainder(
-            flat_grid_a[start_idx:end_idx], grid_shape[2]
-        ).long()  # [chunk_size]
-
-        batch_grid_indices = torch.arange(batch_size, device=device).view(
-            batch_size, 1
-        )  # [batch_size, 1]
-        batch_grid_indices = batch_grid_indices.expand(
-            batch_size, chunk_size
-        )  # [batch_size, chunk_size]
-        flat_batch_grid_indices = batch_grid_indices.reshape(
-            -1
-        )  # [batch_size * chunk_size]
-
-        flat_grid_densities = grid_densities.reshape(-1)  # [batch_size * chunk_size]
-
-        z_repeated = (
-            z_periodic.unsqueeze(0).expand(batch_size, chunk_size).reshape(-1)
-        )  # [batch_size * chunk_size]
-        y_repeated = (
-            y_periodic.unsqueeze(0).expand(batch_size, chunk_size).reshape(-1)
-        )  # [batch_size * chunk_size]
-        x_repeated = (
-            x_periodic.unsqueeze(0).expand(batch_size, chunk_size).reshape(-1)
-        )  # [batch_size * chunk_size]
-
-        grid_z_stride = grid_shape[1] * grid_shape[2]
-        grid_y_stride = grid_shape[2]
-        batch_stride = grid_shape[0] * grid_shape[1] * grid_shape[2]
-
-        flat_indices = (
-            flat_batch_grid_indices * batch_stride
-            + z_repeated * grid_z_stride
-            + y_repeated * grid_y_stride
-            + x_repeated
-        ).long()  # [batch_size * chunk_size]
-
-        flat_result.scatter_add_(0, flat_indices, flat_grid_densities)
-
-    result = flat_result.reshape(
-        (batch_size,) + grid_shape
-    )  # [batch_size, grid_shape[0], grid_shape[1], grid_shape[2]]
-
+    
+    result = flat_result.reshape((batch_size,) + grid_shape)  # [batch_size, grid_z, grid_y, grid_x]
+    
     return result
 
 
