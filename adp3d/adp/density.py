@@ -1,5 +1,6 @@
 import torch
 from typing import Dict, Optional, Tuple, List, Union
+from copy import deepcopy
 from dataclasses import dataclass
 import torch.nn.functional as F
 import numpy as np
@@ -193,10 +194,13 @@ class XMap_torch:
                 raise ValueError(
                     f"Density shape {density.shape} does not match map shape {self.array.shape}"
                 )
-            self.array = density.cpu().numpy()
+            density = density.cpu().numpy()
+        else:
+            density = self.array.cpu().numpy()
 
-        self.xmap.array = self.array.cpu().numpy()
-        self.xmap.tofile(filename)
+        xmap_writer = deepcopy(self.xmap)
+        xmap_writer.array = density
+        xmap_writer.tofile(filename)
 
     def _apply_symmetry_chunk(
         self,
