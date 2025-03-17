@@ -4,6 +4,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 import torch.nn.functional as F
 import numpy as np
+from numpy.typing import NDArray
 import warnings
 from einops import rearrange
 
@@ -178,14 +179,14 @@ class XMap_torch:
         self.R_matrices = R_matrices
         self.t_vectors = t_vectors
 
-    def tofile(self, filename: str, density: torch.Tensor = None) -> None:
+    def tofile(self, filename: str, density: Union[torch.Tensor, NDArray] = None) -> None:
         """Save the map to a file.
 
         Parameters
         ----------
         filename : str
             Output filename.
-        density : torch.Tensor, optional
+        density : Union[torch.Tensor, NDArray], optional
             Density grid to save, by default None.
             If provided, it will be used to update the map array.
         """
@@ -194,7 +195,8 @@ class XMap_torch:
                 raise ValueError(
                     f"Density shape {density.shape} does not match map shape {self.array.shape}"
                 )
-            density = density.cpu().numpy()
+            if isinstance(density, torch.Tensor):
+                density = density.cpu().numpy()
         else:
             density = self.array.cpu().numpy()
 
