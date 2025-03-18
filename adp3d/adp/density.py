@@ -731,14 +731,6 @@ def dilate_points_torch(
     batch_size, n_atoms = coordinates.shape[:2]
     rmax2 = rmax * rmax
 
-    g00, g01, g02 = (
-        grid_to_cartesian[0, 0],
-        grid_to_cartesian[0, 1],
-        grid_to_cartesian[0, 2],
-    )
-    g11, g12 = grid_to_cartesian[1, 1], grid_to_cartesian[1, 2]
-    g22 = grid_to_cartesian[2, 2]
-
     result = torch.zeros((batch_size,) + grid_shape, device=device, dtype=dtype)
 
     max_extent_c = int(torch.ceil(lmax[2]).item())
@@ -753,39 +745,26 @@ def dilate_points_torch(
     oc, ob, oa = torch.meshgrid(c_offsets, b_offsets, a_offsets, indexing='ij')
     # oz, oy, ox: [2*max_extent_z+1, 2*max_extent_y+1, 2*max_extent_x+1]
     
-    cart_dz = g22 * oc.float()  # [2*max_extent_z+1, 2*max_extent_y+1, 2*max_extent_x+1]
-    cart_dy = g12 * oc.float() + g11 * ob.float()  # [2*max_extent_z+1, 2*max_extent_y+1, 2*max_extent_x+1]
-    cart_dx = g02 * oc.float() + g01 * ob.float() + g00 * oa.float()  # [2*max_extent_z+1, 2*max_extent_y+1, 2*max_extent_x+1]
-    
-    # Calculate radial distances from the center of the offset grid
-    offset_d2 = cart_dx**2 + cart_dy**2 + cart_dz**2  # [2*max_extent_z+1, 2*max_extent_y+1, 2*max_extent_x+1]
-    
-    # Filter offsets within maximum radius
-    offset_mask = offset_d2 <= rmax2  # [2*max_extent_z+1, 2*max_extent_y+1, 2*max_extent_x+1]
-    valid_offsets_idx = torch.nonzero(offset_mask)  # [n_valid_offsets, 3]
-    
-    # Extract valid offsets in grid space
     offsets = torch.stack([
-        oc[valid_offsets_idx[:, 0], valid_offsets_idx[:, 1], valid_offsets_idx[:, 2]],
-        ob[valid_offsets_idx[:, 0], valid_offsets_idx[:, 1], valid_offsets_idx[:, 2]],
-        oa[valid_offsets_idx[:, 0], valid_offsets_idx[:, 1], valid_offsets_idx[:, 2]]
-    ], dim=1)  # [n_valid_offsets, 3]
+        oc.flatten(),
+        ob.flatten(),
+        oa.flatten()
+    ], dim=1)  # [n_nearby, 3]
     
-    # Get actual distances for valid offsets
-    valid_distances = torch.sqrt(offset_d2[offset_mask])  # [n_valid_offsets]
+    delta_to_nearby = coordinates.view(batch_size, n_atoms, 1, 3) - offsets.view(1, 1, -1, 3) # [batch_size, n_atoms, n_nearby, 3]
+    distances_to_nearby = torch.sum(delta_to_nearby ** 2, dim=-1)  # [batch_size, n_atoms, n_nearby]
     
-    # Prepare for radial density interpolation
-    rad_continuous = valid_distances / rstep  # [n_valid_offsets]
-    rad_indices_low = torch.floor(rad_continuous).long()  # [n_valid_offsets]
+    rad_continuous = distances_to_nearby / rstep  # [batch_size, n_atoms, n_nearby]
+    rad_indices_low = torch.floor(rad_continuous).long()  # [batch_size, n_atoms, n_nearby]
     
-    weights_high = rad_continuous - rad_indices_low.float()  # [n_valid_offsets]
-    weights_low = 1.0 - weights_high  # [n_valid_offsets]
+    weights_high = rad_continuous - rad_indices_low.float()  # [batch_size, n_atoms, n_nearby]
+    weights_low = 1.0 - weights_high  # [batch_size, n_atoms, n_nearby]
     
+    # FIXME: CONTINUE DOING DIFFERENTIABLE INTERPOLATION NOW THAT rad_continuous IS RIGHT, check rest of function
     max_rad_idx = radial_densities.shape[-1] - 1
-    rad_indices_low = torch.clamp(rad_indices_low, 0, max_rad_idx)  # [n_valid_offsets]
-    rad_indices_high = torch.clamp(rad_indices_low + 1, 0, max_rad_idx)  # [n_valid_offsets]
+    rad_indices_low = torch.clamp(rad_indices_low, 0, max_rad_idx)  # [n_nearby]
+    rad_indices_high = torch.clamp(rad_indices_low + 1, 0, max_rad_idx)  # [n_nearby]
     
-    # Process all active atoms
     active_flat = active.view(batch_size * n_atoms)  # [batch_size * n_atoms]
     active_mask = active_flat.nonzero().squeeze(-1)  # [n_active_atoms]
     
@@ -794,28 +773,26 @@ def dilate_points_torch(
     
     active_coords = coordinates[batch_idx, atom_idx].long()  # [n_active_atoms, 3]
     
-    grid_points = active_coords.unsqueeze(1) + offsets.unsqueeze(0)  # [n_active_atoms, n_valid_offsets, 3]
+    grid_points = active_coords.unsqueeze(1) + offsets.unsqueeze(0)  # [n_active_atoms, n_nearby, 3]
 
     # Periodic boundary
-    grid_points = torch.remainder(grid_points, torch.tensor(grid_shape[::-1], device=device)) # [n_active_atoms, n_valid_offsets, 3]
+    grid_points = torch.remainder(grid_points, torch.tensor(grid_shape[::-1], device=device))  # [n_active_atoms, n_nearby, 3]
     
-    # Filter out-of-bounds grid points (points are (x, y, z), grid_shape is (c, b, a))
-    valid_z = (grid_points[..., 0] >= 0) & (grid_points[..., 0] < grid_shape[2])  # [n_active_atoms, n_valid_offsets]
-    valid_y = (grid_points[..., 1] >= 0) & (grid_points[..., 1] < grid_shape[1])  # [n_active_atoms, n_valid_offsets]
-    valid_x = (grid_points[..., 2] >= 0) & (grid_points[..., 2] < grid_shape[0])  # [n_active_atoms, n_valid_offsets]
-    valid_grid = valid_z & valid_y & valid_x  # [n_active_atoms, n_valid_offsets]
+    n_active_atoms = active_coords.shape[0]
+    n_nearby = offsets.shape[0]
     
-    atom_grid_indices, offset_indices = torch.where(valid_grid)  # [n_valid_points], [n_valid_points]
+    atom_indices = torch.arange(n_active_atoms, device=device).repeat_interleave(n_nearby)  # [n_active_atoms * n_nearby]
+    offset_indices = torch.arange(n_nearby, device=device).repeat(n_active_atoms)  # [n_active_atoms * n_nearby]
     
-    final_batch_indices = batch_idx[atom_grid_indices]  # [n_valid_points]
-    final_atom_indices = atom_idx[atom_grid_indices]  # [n_valid_points]
-    final_grid_points = grid_points[atom_grid_indices, offset_indices].long()  # [n_valid_points, 3]
+    final_batch_indices = batch_idx[atom_indices]  # [n_active_atoms * n_nearby]
+    final_atom_indices = atom_idx[atom_indices]  # [n_active_atoms * n_nearby]
+    final_grid_points = grid_points.reshape(-1, 3).long()  # [n_active_atoms * n_nearby, 3]
+ 
+    densities_low = radial_densities[final_batch_indices, final_atom_indices, rad_indices_low[offset_indices]]  # [n_active_atoms * n_nearby]
+    densities_high = radial_densities[final_batch_indices, final_atom_indices, rad_indices_high[offset_indices]]  # [n_active_atoms * n_nearby]
+    densities = weights_low[offset_indices] * densities_low + weights_high[offset_indices] * densities_high  # [n_active_atoms * n_nearby]
     
-    densities_low = radial_densities[final_batch_indices, final_atom_indices, rad_indices_low[offset_indices]]  # [n_valid_points]
-    densities_high = radial_densities[final_batch_indices, final_atom_indices, rad_indices_high[offset_indices]]  # [n_valid_points]
-    densities = weights_low[offset_indices] * densities_low + weights_high[offset_indices] * densities_high  # [n_valid_points]
-    
-    scaled_densities = occupancies[final_batch_indices, final_atom_indices] * densities  # [n_valid_points]
+    scaled_densities = occupancies[final_batch_indices, final_atom_indices] * densities  # [n_active_atoms * n_nearby]
     
     flat_result = result.view(-1)  # [batch_size * grid_z * grid_y * grid_x]
     
@@ -828,7 +805,7 @@ def dilate_points_torch(
         final_grid_points[:, 2] * grid_z_stride +
         final_grid_points[:, 1] * grid_y_stride +
         final_grid_points[:, 0]
-    ).long()  # [n_valid_points]
+    ).long()  # [n_active_atoms * n_nearby]
     
     flat_result.scatter_add_(
         0, 
