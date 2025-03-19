@@ -142,7 +142,7 @@ def write_mmcif(
 
 def structure_to_density_input(
     structure: Union[Structure, BoltzStructure],
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, float]:
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, float]:
     """Turn a qFit or Boltz-1 Structure object into a data needed to compute density and coordinate updates based on density.
 
     Parameters
@@ -151,8 +151,8 @@ def structure_to_density_input(
         qFit or Boltz-1 Structure object describing the structure.
     Returns
     -------
-    Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, float]
-        Tensor of Cartesian coordinates, tensor of elements (atomic numbers), b-factors, occupancies, and resolution of the structure (or 2.0 if not present).
+    Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, float]
+        Tensor of Cartesian coordinates, tensor of elements (atomic numbers), b-factors, occupancies, active atoms, and resolution of the structure (or 2.0 if not present).
     """
     if isinstance(structure, BoltzStructure):
         atoms = structure.atoms
@@ -166,20 +166,22 @@ def structure_to_density_input(
             elements,
             b_factors,
             occupancies,
+            mask_not_present,
             structure.info.resolution if structure.info.resolution > 0 else 2.0,
         )
     elif isinstance(structure, Structure):
         mask_not_present = structure.active
-        elements = [ATOMIC_NUM_TO_ELEMENT.index(e) for e in structure.e[mask_not_present]]
-        coords = torch.from_numpy(structure.coor[mask_not_present]).float()
+        elements = [ATOMIC_NUM_TO_ELEMENT.index(e) for e in structure.e]
+        coords = torch.from_numpy(structure.coor).float()
         elements = torch.tensor(elements).long()
-        b_factors = torch.from_numpy(structure.b[mask_not_present]).float()
-        occupancies = torch.from_numpy(structure.q[mask_not_present]).float()
+        b_factors = torch.from_numpy(structure.b).float()
+        occupancies = torch.from_numpy(structure.q).float()
         return (
             coords,
             elements,
             b_factors,
             occupancies,
+            mask_not_present,
             structure.resolution if structure.resolution is not None else 2.0,
         )
     else:

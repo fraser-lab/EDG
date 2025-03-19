@@ -231,6 +231,7 @@ class DensityGuidedDiffusion:
         elements: torch.Tensor,
         b_factors: torch.Tensor,
         occupancies: torch.Tensor,
+        active: torch.Tensor,
         norm: int = 1,
     ) -> torch.Tensor:
         """Calculate density score for current coordinates.
@@ -245,6 +246,8 @@ class DensityGuidedDiffusion:
             B-factors for each atom, shape [batch, atoms]
         occupancies : torch.Tensor
             Occupancies for each atom, shape [batch, atoms]
+        active : torch.Tensor
+            Mask for active atoms, shape [batch, atoms]
         norm : int, optional
             Which norm to use for the score, by default 1
 
@@ -259,7 +262,7 @@ class DensityGuidedDiffusion:
             .to(self.device)
         )
         model_map = self.density_calculator(
-            coords, element_ids, b_factors, occupancies, chunk_size=50000
+            coords, element_ids, b_factors, occupancies, active
         ).sum(
             0
         )  # TODO: dont use normalization, use e-/A^3
