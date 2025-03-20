@@ -206,84 +206,9 @@ class XMap_torch:
         xmap_writer.array = density
         xmap_writer.tofile(filename)
 
-    def _apply_symmetry_chunk(
-        self,
-        density: torch.Tensor,
-        output: torch.Tensor,
-        chunk_start: int,
-        chunk_end: int,
-        grid_shape: Tuple[int, ...],
-        batch_size: int,
-    ) -> None:
-        """Apply a chunk of symmetry operations to improve memory efficiency.
-
-        Parameters
-        ----------
-        density : torch.Tensor
-            Input density grid of shape (batch_size, *grid_shape).
-        output : torch.Tensor
-            Output density grid to be updated.
-        chunk_start : int
-            Start index of symmetry operations chunk.
-        chunk_end : int
-            End index of symmetry operations chunk.
-        grid_shape : Tuple[int, ...]
-            Shape of the density grid.
-        batch_size : int
-            Number of batches in the input.
-        """
-        device = density.device
-        chunk_size = chunk_end - chunk_start
-        grid_shape_tensor = torch.tensor(grid_shape, device=device)
-
-        base_coords = torch.stack(
-            torch.meshgrid(
-                *[torch.arange(s, device=device) for s in grid_shape], indexing="ij"
-            ),
-            dim=-1,
-        ).float()
-
-        base_coords = base_coords + self.offset
-        base_coords = base_coords.view(1, *grid_shape, 3)
-
-        R_chunk = self.R_matrices[chunk_start:chunk_end]
-        t_chunk = self.t_vectors[chunk_start:chunk_end]
-
-        coords_expanded = base_coords.expand(chunk_size, *grid_shape, 3)
-
-        transformed_coords = torch.einsum("nij,b...j->n...i", R_chunk, coords_expanded)
-
-        transformed_coords = transformed_coords + (
-            t_chunk.view(chunk_size, 1, 1, 1, 3) * grid_shape_tensor.view(1, 1, 1, 1, 3)
-        )
-
-        transformed_coords = transformed_coords % grid_shape_tensor.view(1, 1, 1, 1, 3)
-
-        normalized_coords = (
-            transformed_coords / (grid_shape_tensor.view(1, 1, 1, 1, 3) - 1)
-        ) * 2 - 1
-
-        for b in range(batch_size):
-            normalized_coords_batch = normalized_coords.view(
-                chunk_size, -1, grid_shape[1], grid_shape[2], 3
-            )
-
-            transformed_density = F.grid_sample(
-                density[b : b + 1, None].expand(chunk_size, 1, *grid_shape),
-                normalized_coords_batch,
-                mode="bilinear",
-                align_corners=True,
-                padding_mode="border",
-            )
-
-            output[b] += transformed_density.sum(dim=0)[0]
-
     def apply_symmetry(
         self,
         density: torch.Tensor,
-        normalize: bool = True,
-        chunk_size: Optional[int] = None,
-        memory_efficient: bool = True,
     ) -> torch.Tensor:
         """Apply crystallographic symmetry operations to density maps in batch.
 
@@ -291,12 +216,6 @@ class XMap_torch:
         ----------
         density : torch.Tensor
             Input density grid of shape (batch_size, *grid_shape).
-        normalize : bool, optional
-            Whether to normalize the output density, by default True.
-        chunk_size : Optional[int], optional
-            Number of symmetry operations to process at once, by default None.
-        memory_efficient : bool, optional
-            Whether to use memory-efficient implementation, by default True.
 
         Returns
         -------
@@ -308,64 +227,51 @@ class XMap_torch:
         device = density.device
         n_ops = len(self.R_matrices)
 
-        output = density.clone()
+        base_coords = torch.stack(
+            torch.meshgrid(
+                *[torch.arange(s, device=device) for s in grid_shape], indexing="ij"
+            ),
+            dim=-1,
+        ).float()
 
-        if memory_efficient or chunk_size is not None:
-            chunk_size = chunk_size or max(1, n_ops // 4)
+        base_coords = base_coords + self.offset
+        base_coords = base_coords.reshape(1, -1, 3)  # [1, z*y*x, 3]
+        grid_shape_tensor = torch.tensor(grid_shape, device=device)
 
-            for chunk_start in range(0, n_ops, chunk_size):
-                chunk_end = min(chunk_start + chunk_size, n_ops)
-                self._apply_symmetry_chunk(
-                    density, output, chunk_start, chunk_end, grid_shape, batch_size
-                )
-        else:
-            base_coords = torch.stack(
-                torch.meshgrid(
-                    *[torch.arange(s, device=device) for s in grid_shape], indexing="ij"
-                ),
-                dim=-1,
-            ).float()
+        # R_matrices: [n_ops, 3, 3], base_coords: [1, z*y*x, 3]
+        # Result: [n_ops, z*y*x, 3]
+        rotated_coords = torch.einsum("nij,bkj->nki", self.R_matrices, base_coords)
 
-            base_coords = base_coords + self.offset
-            base_coords = base_coords.view(1, *grid_shape, 3)
-            grid_shape_tensor = torch.tensor(grid_shape, device=device)
+        translated_coords = rotated_coords + self.t_vectors.unsqueeze(
+            1
+        ) * grid_shape_tensor.unsqueeze(0).unsqueeze(0)
 
-            coords_expanded = base_coords.expand(n_ops, *grid_shape, 3)
-            transformed_coords = torch.einsum(
-                "nij,b...j->n...i", self.R_matrices, coords_expanded
-            )
+        translated_coords = translated_coords % grid_shape_tensor.unsqueeze(
+            0
+        ).unsqueeze(0)
 
-            transformed_coords = transformed_coords + (
-                self.t_vectors.view(n_ops, 1, 1, 1, 3)
-                * grid_shape_tensor.view(1, 1, 1, 1, 3)
-            )
+        transformed_coords = translated_coords.reshape(n_ops, *grid_shape, 3)
 
-            transformed_coords = transformed_coords % grid_shape_tensor.view(
-                1, 1, 1, 1, 3
-            )
-            normalized_coords = (
-                transformed_coords / (grid_shape_tensor.view(1, 1, 1, 1, 3) - 1)
-            ) * 2 - 1
+        normalized_coords = (
+            transformed_coords
+            / (grid_shape_tensor.unsqueeze(0).unsqueeze(0).unsqueeze(0) - 1)
+        ) * 2 - 1
 
-            for b in range(batch_size):
-                normalized_coords_batch = normalized_coords.view(
-                    n_ops, -1, grid_shape[1], grid_shape[2], 3
-                )
+        transposed_density = density.unsqueeze(0)  # [1, batch_size, z, y, x]
 
-                transformed_density = F.grid_sample(
-                    density[b : b + 1, None].expand(n_ops, 1, *grid_shape),
-                    normalized_coords_batch,
-                    mode="bilinear",
-                    align_corners=True,
-                    padding_mode="border",
-                )
+        expanded_density = transposed_density.expand(n_ops, batch_size, *grid_shape)
 
-                output[b] += transformed_density.sum(dim=0)[0]
+        transformed_density = F.grid_sample(
+            expanded_density,  # [n_ops, batch_size, *grid_shape]
+            normalized_coords,  # [n_ops, z, y, x, 3]
+            mode="bilinear",
+            align_corners=True,
+            padding_mode="border",
+        )  # Result: [n_ops, batch_size, *grid_shape]
 
-        if normalize:
-            output = output / n_ops
+        summed_density = transformed_density.sum(dim=0)  # [batch_size, *grid_shape]
 
-        return output
+        return summed_density
 
 
 class DifferentiableTransformer(torch.nn.Module):
@@ -588,7 +494,8 @@ class DifferentiableTransformer(torch.nn.Module):
         )
 
         unique_elements = unique_combinations[:, 0].long()
-        element_asf = self.scattering_params[
+        # TODO: figure out a better way to have scattering params instead of this sparse tensor business
+        element_asf = self.scattering_params.to_dense()[
             unique_elements
         ]  # Shape: [n_unique, n_coeffs, 2]
         unique_bfactors = unique_combinations[:, 1]
