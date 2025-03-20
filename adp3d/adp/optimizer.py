@@ -256,13 +256,8 @@ class DensityGuidedDiffusion:
         torch.Tensor
             Density correlation score
         """
-        element_ids = (
-            torch.tensor([self.elements_to_ids[e] for e in elements.flatten()])
-            .reshape(elements.shape)
-            .to(self.device)
-        )
         model_map = self.density_calculator(
-            coords, element_ids, b_factors, occupancies, active
+            coords, elements, b_factors, occupancies, active
         ).sum(
             0
         )  # TODO: dont use normalization, use e-/A^3
@@ -311,7 +306,8 @@ class DensityGuidedDiffusion:
         """
         os.makedirs(output_dir, exist_ok=True)
 
-        coords, elements, b_factors, occupancies, resolution = (
+        # FIXME: resolution not needed here, will come from experimental map
+        coords, elements, b_factors, occupancies, active, resolution = (
             structure_to_density_input(self.structure)
         )
         coords = repeat(coords, "a c -> n a c", n=num_samples)
@@ -319,6 +315,7 @@ class DensityGuidedDiffusion:
         # FIXME: using uniform b-factors and occupancies for now
         b_factors = repeat(b_factors, "b -> n b", n=num_samples) / num_samples
         occupancies = repeat(occupancies, "q -> n q", n=num_samples) / num_samples
+        active = repeat(active, "a -> n a", n=num_samples)
 
         if resolution == 0.0 or resolution is None:
             if self.density_calculator.xmap.resolution is not None:
@@ -327,10 +324,10 @@ class DensityGuidedDiffusion:
                 f"Resolution of input structure is {resolution}. Using 2.0 A instead."
             )
 
-        coords = coords.to(self.device)
-        elements = elements.to(self.device)
-        b_factors = b_factors.to(self.device)
-        occupancies = occupancies.to(self.device)
+        elements = elements.to(self.device).long()
+        b_factors = b_factors.to(self.device).float()
+        occupancies = occupancies.to(self.device).float()
+        active = active.to(self.device).bool()
 
         if partial_diffusion:
             self.stepper.initialize_partial_diffusion(
@@ -363,12 +360,12 @@ class DensityGuidedDiffusion:
             )
 
             with torch.set_grad_enabled(True):  # Explicit gradient context
-                masked_coords = step_coords.clone().squeeze()[pad_mask, :]
+                masked_coords = step_coords.clone()[:, pad_mask, :]
                 coords_to_grad = masked_coords.detach().clone()
                 coords_to_grad = coords_to_grad.requires_grad_(True)
 
                 density_score = self.density_score(
-                    coords_to_grad, elements, b_factors, occupancies, resolution
+                    coords_to_grad, elements, b_factors, occupancies, active
                 )
                 density_score.backward()
 

@@ -156,7 +156,7 @@ def structure_to_density_input(
     """
     if isinstance(structure, BoltzStructure):
         atoms = structure.atoms
-        mask_not_present = atoms["is_present"]
+        mask_not_present = torch.from_numpy(atoms["is_present"])
         coords = torch.from_numpy(atoms["coords"][mask_not_present]).float()
         elements = torch.from_numpy(atoms["element"][mask_not_present]).long()
         b_factors = torch.tensor([25] * len(atoms))
@@ -170,7 +170,7 @@ def structure_to_density_input(
             structure.info.resolution if structure.info.resolution > 0 else 2.0,
         )
     elif isinstance(structure, Structure):
-        mask_not_present = structure.active
+        mask_not_present = torch.from_numpy(structure.active).bool()
         elements = [ATOMIC_NUM_TO_ELEMENT.index(e) for e in structure.e]
         coords = torch.from_numpy(structure.coor).float()
         elements = torch.tensor(elements).long()

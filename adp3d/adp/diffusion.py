@@ -11,9 +11,10 @@ from boltz.model.loss.diffusion import weighted_rigid_align
 from dataclasses import asdict, dataclass
 
 from adp3d.utils.utility import try_gpu
+from adp3d.data.structure import Structure
 from boltz.main import check_inputs, process_inputs, BoltzProcessedInput
 from boltz.data.module.inference import BoltzInferenceDataModule
-from boltz.data.types import Manifest, Structure
+from boltz.data.types import Manifest
 from boltz.data.feature.pad import pad_dim
 import numpy as np
 from numpy.typing import NDArray
@@ -252,7 +253,7 @@ class DiffusionStepper:
         ----------
         structure : Union[Structure, torch.Tensor]
             Initial structure or set of atomic coordinates. If not a tensor, it is assumed to
-            have an attribute (e.g. `atom_coords`) that contains the coordinates.
+            have an attribute (e.g. `coords`) that contains the coordinates.
         noising_steps : int, optional
             Number of noising steps.
         num_samples : Optional[int], optional
@@ -298,7 +299,7 @@ class DiffusionStepper:
 
         # atom position is noise at the beginning
         atom_coords = (
-            torch.tensor(structure.atoms["coords"], device=self.device)
+            torch.tensor(structure.coor, device=self.device).float()
             .unsqueeze(0)
             .repeat(diffusion_samples, 1, 1)
         )
