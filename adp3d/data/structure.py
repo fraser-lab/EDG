@@ -487,6 +487,28 @@ class Structure(_BaseStructure):
                                 )
                                 removed_conformers.append(conf_b.altloc[0])
         return multiconformer
+    
+    def remove_alternative_conformations(self):
+        """Remove alternative conformations from the structure"""
+        structure = copy.deepcopy(self)
+        for chain in structure:
+            for residue in chain:
+                altlocs = sorted(list(set(residue.altloc)))
+                resi = residue.resi[0]
+                chainid = residue.chain[0]
+                if len(altlocs) > 1:
+                    try:
+                        altlocs.remove("")
+                    except ValueError:
+                        pass
+                    for altloc in altlocs[1:]:
+                        sel_str = f"resi {resi} and chain {chainid} and altloc {altloc}"
+                        sel_str = f"not ({sel_str})"
+                        structure = structure.extract(sel_str)
+        structure.q = 1.0
+        structure.altloc = ""
+
+        return structure
 
     @property
     def n_residue_conformers(self):

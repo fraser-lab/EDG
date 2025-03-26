@@ -94,7 +94,7 @@ class ParsedStructure:
 
     data: Structure
     info: StructureInfo
-    # covalents: list[int] # NOTE: not sure why this is here, connections seems to contain all covalents
+    covalents: list[int]
 
 
 ####################################################################################################
@@ -862,14 +862,12 @@ def parse_mmcif(  # noqa: C901, PLR0915, PLR0912
 
     # Load structure object
     structure = gemmi.make_structure_from_block(block)
-    # NOTE: This becomes necessary on objects where the _entity.type is not initialized and I paste it in
-    structure.setup_entities()
 
     # Clean up the structure
     structure.merge_chain_parts()
     structure.remove_waters()
     structure.remove_hydrogens()
-    structure.remove_alternative_conformations()  # TODO: will need to address this later
+    structure.remove_alternative_conformations()
     structure.remove_empty_chains()
 
     # Expand assembly 1
@@ -969,6 +967,7 @@ def parse_mmcif(  # noqa: C901, PLR0915, PLR0912
                         entity=entity.name,
                         residues=residues,
                         type=const.chain_type_ids["NONPOLYMER"],
+                        sequence=None
                     )
                 )
 
@@ -1122,7 +1121,7 @@ def parse_mmcif(  # noqa: C901, PLR0915, PLR0912
         mask=mask,
     )
 
-    return ParsedStructure(data=data, info=info)
+    return ParsedStructure(data=data, info=info, covalents=[])
 
 
 def residue_to_atom_selector(
