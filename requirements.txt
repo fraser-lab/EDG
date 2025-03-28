@@ -2,7 +2,7 @@
 biopython
 # boltz (I use editable install for my modifications)
 einops
-gemmi==0.6.7 # TODO: currently 0.6.7 works, new python bindings break the later versions for parse_mmcif
+gemmi==0.6.7 # currently 0.6.7 works, new python bindings break the later versions for parse_mmcif
 matplotlib
 mrcfile
 numpy
