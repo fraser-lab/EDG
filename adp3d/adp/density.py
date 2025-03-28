@@ -352,17 +352,17 @@ class DifferentiableTransformer(torch.nn.Module):
         grid_to_cartesian = lattice_to_cartesian * self.xmap.voxelspacing.cpu().numpy()
         self.register_buffer(
             "lattice_to_cartesian",
-            torch.tensor(lattice_to_cartesian).to(dtype=self.dtype),
+            torch.tensor(lattice_to_cartesian).to(dtype=self.dtype, device=self.device),
         )
 
         self.register_buffer(
             "cartesian_to_lattice",
-            torch.tensor(cartesian_to_lattice).to(dtype=self.dtype),
+            torch.tensor(cartesian_to_lattice).to(dtype=self.dtype, device=self.device),
         )
 
         self.register_buffer(
             "grid_to_cartesian",
-            torch.tensor(grid_to_cartesian).to(dtype=self.dtype),
+            torch.tensor(grid_to_cartesian).to(dtype=self.dtype, device=self.device),
         )
 
     def forward(

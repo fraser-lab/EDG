@@ -358,7 +358,7 @@ class DensityGuidedDiffusion:
             step_lr = (
                 learning_rate if isinstance(learning_rate, float) else learning_rate[i]
             )
-
+            # TODO: Implement with carving of map, or at least the subtraction of map outside given region
             with torch.set_grad_enabled(True):  # Explicit gradient context
                 masked_coords = step_coords.clone()[:, pad_mask, :]
                 coords_to_grad = masked_coords.detach().clone()
@@ -376,7 +376,7 @@ class DensityGuidedDiffusion:
 
                 # Create gradient update tensor of original shape
                 full_grad = torch.zeros_like(step_coords.squeeze())
-                full_grad[pad_mask, :] = coords_to_grad.grad
+                full_grad[:, pad_mask, :] = coords_to_grad.grad
 
                 # only do gradient on partially diffused atoms
                 if diffusion_kwargs["selector"] is not None:
