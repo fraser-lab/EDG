@@ -3,6 +3,9 @@ from collections import defaultdict
 import itertools as itl
 from math import inf
 import logging
+from copy import deepcopy
+from .rotamers import ROTAMERS
+import re
 
 
 logger = logging.getLogger(__name__)
@@ -39,6 +42,26 @@ class PDBFile:
         cls.scale = []  # store header info
         cls.cryst_info = []  # store header info
         cls.resolution = None
+        cls.missing_atoms = defaultdict(list)
+
+        atom_fields = {
+            "record": "ATOM",
+            "atomid": None,
+            "name": None,
+            "altloc": "",
+            "resn": None,
+            "chain": None,
+            "resi": None,
+            "icode": "",
+            "x": float("nan"),
+            "y": float("nan"),
+            "z": float("nan"),
+            "q": 0.0,  # Zero occupancy for missing atoms
+            "b": float("nan"),
+            "e": "",
+            "charge": 0,
+            # "model": 1,
+        }
 
         if fname.endswith(".gz"):
             fopen = gzip.open
@@ -77,7 +100,54 @@ class PDBFile:
                     cls.cryst_info.append(line)
                 elif line.startswith("SCALE"):
                     cls.scale.append(line)
+                elif re.match(r"^REMARK\s465\s+(?:[A-Z]{3}|\d+)\s+[A-Z]\s+\d+", line):
+                    try:
+                        values = Remark465Record.parse_line(line)
+                        atom_info = deepcopy(
+                            atom_fields
+                        )  # Copy the default atom fields
+                        names = ROTAMERS[values["resn"]]["atoms"]
+                        n_atoms = len(names)
+                        atom_info.update(
+                            {field: value for field, value in values.items() if field in atom_fields}
+                        )
+                        for attr, value in atom_info.items():
+                            for i in range(n_atoms):
+                                if attr == "name":
+                                    value = names[i]
+                                elif attr == "e":
+                                    value = names[i][0]
+                                elif attr == "record":
+                                    value = "ATOM"
+                                cls.missing_atoms[attr].append(value)
+                    except:
+                        logger.error("PDBFile.read: could not parse REMARK 465 data.")
 
+                elif re.match(
+                    r"^REMARK\s470\s+(?:\d|)[A-Z]{3}\s[A-Z]\s\d+\s+(.*)",
+                    line,
+                ):
+                    try:
+                        values = Remark470Record.parse_line(line)
+                        names = values["atoms"].split()
+                        atom_info.update(
+                            {field: value for field, value in values.items() if field in atom_fields}
+                        )
+                        for attr, value in atom_info.items():
+                            for name in names:
+                                if attr == "name":
+                                    value = name
+                                elif attr == "e":
+                                    value = name[0]
+                                elif attr == "record":
+                                    value = "ATOM"
+                                cls.missing_atoms[attr].append(value)
+                    except:
+                        logger.error("PDBFile.read: could not parse REMARK 470 data.")
+        max_atomid = max(cls.coor["atomid"])
+        # NOTE: Slight difference here than with mmciffile, as residues are grabbed before atoms
+        cls.missing_atoms["atomid"] = list(range(max_atomid + 1, 
+                                                max_atomid + 1 + len(cls.missing_atoms["atomid"])))
         return cls
 
     @staticmethod
@@ -483,6 +553,31 @@ class Remark2NonDiffractionRecord(RecordParser):
     fields = ("record", "remarkid", "NOTAPPLICABLE")
     columns = ((0, 6), (9, 10), (11, 38))
     dtypes = (str, str, str)
+
+
+class Remark465Record(RecordParser):
+    """Parser for REMARK 465 records (missing residues)."""
+
+    fields = ("record", "remarkid", "model", "resn", "chain", "resi", "icode")
+    columns = ((0, 6), (7, 10), (13, 14), (15, 18), (19, 20), (21, 26), (26, 27))
+    dtypes = (str, int, str, str, str, int, str)
+
+
+class Remark470Record(RecordParser):
+    """Parser for REMARK 470 records (missing atoms)."""
+
+    fields = ("record", "remarkid", "model", "resn", "chain", "resi", "icode", "atoms")
+    columns = (
+        (0, 6),
+        (7, 10),
+        (13, 14),
+        (15, 18),
+        (19, 20),
+        (20, 25),
+        (25, 26),
+        (27, 79),
+    )
+    dtypes = (str, int, str, str, str, int, str, str)
 
 
 class Cryst1Record(RecordParser):
