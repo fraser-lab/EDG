@@ -698,7 +698,28 @@ class Structure(_BaseStructure):
 
         return structure.reorder()
 
+    def complete_residues(self):
+        """Complete residues with missing atoms.
 
+        Returns
+        -------
+        Structure
+            Structure with missing atoms completed
+        """
+        structure = self.copy()
+        if not np.all(structure.active):
+            if not np.any(structure.active):
+                print(f"No active atoms in {structure}")
+                return structure
+            else:
+                for residue in structure.residues:
+                    if not np.all(residue.active[:4]):
+                        print(f"Skipping missing residue {residue.resn[0]} {residue.resi[0]} with missing backbone atoms")
+                        continue
+                    if not np.all(residue.active):
+                        print(f"Completing residue {residue.resn[0]} {residue.resi[0]}")
+                        residue.complete_residue()
+        return structure
 
     @property
     def n_residue_conformers(self):
