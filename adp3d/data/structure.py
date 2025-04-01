@@ -10,7 +10,6 @@ from .modules.rotamers import ROTAMERS
 from .modules.math import Rz
 from ..utils.normalize_to_precision import normalize_to_precision
 
-
 class Structure(_BaseStructure):
     """Class with access to underlying PDB hierarchy."""
 
@@ -22,7 +21,7 @@ class Structure(_BaseStructure):
                 )
         super().__init__(data, **kwargs)
         self._chains = []
-        self.resolution = kwargs.get('resolution', None)
+        self.resolution = kwargs.get("resolution", None)
 
     @classmethod
     def fromfile(cls, fname, use_auth=False):
@@ -493,7 +492,7 @@ class Structure(_BaseStructure):
                                 )
                                 removed_conformers.append(conf_b.altloc[0])
         return multiconformer
-    
+
     def remove_alternative_conformations(self):
         """Remove alternative conformations from the structure"""
         structure = copy.deepcopy(self)
@@ -504,7 +503,9 @@ class Structure(_BaseStructure):
                 chainid = residue.chain[0]
                 if len(altlocs) > 1:
                     try:
-                        altlocs.remove("") # FIXME: I think this will remove "missing atoms" that I care about
+                        altlocs.remove(
+                            ""
+                        )  # FIXME: I think this will remove "missing atoms" that I care about
                     except ValueError:
                         pass
                     for altloc in altlocs[1:]:
@@ -518,7 +519,7 @@ class Structure(_BaseStructure):
 
     def remove_hydrogens(self):
         """Remove hydrogen atoms from the structure.
-        
+
         Returns
         -------
         Structure
@@ -529,23 +530,51 @@ class Structure(_BaseStructure):
 
     def keep_protein(self):
         """Keep only protein atoms.
-        
+
         Returns
         -------
         Structure
             New structure containing only protein atoms
         """
         protein_resn = [
-            'ALA', 'ARG', 'ASN', 'ASP', 'CYS', 'GLN', 'GLU', 'GLY', 'HIS', 'ILE',
-            'LEU', 'LYS', 'MET', 'PHE', 'PRO', 'SER', 'THR', 'TRP', 'TYR', 'VAL',
-            'MSE', 'CSD', 'CSO', 'HYP', 'SEC', 'BMT', 'AIB', 'MLY', 'SEP', 'TPO', 'PTR'
+            "ALA",
+            "ARG",
+            "ASN",
+            "ASP",
+            "CYS",
+            "GLN",
+            "GLU",
+            "GLY",
+            "HIS",
+            "ILE",
+            "LEU",
+            "LYS",
+            "MET",
+            "PHE",
+            "PRO",
+            "SER",
+            "THR",
+            "TRP",
+            "TYR",
+            "VAL",
+            "MSE",
+            "CSD",
+            "CSO",
+            "HYP",
+            "SEC",
+            "BMT",
+            "AIB",
+            "MLY",
+            "SEP",
+            "TPO",
+            "PTR",
         ]
         selection = self.select("resn", protein_resn)
         return self.extract(selection)
 
     def keep_polymer(self):
         """Keep only polymer chains (protein or nucleic acid).
-        
+
         Returns
         -------
         Structure
@@ -553,18 +582,59 @@ class Structure(_BaseStructure):
         """
         polymer_resn = [
             # Protein residues
-            'ALA', 'ARG', 'ASN', 'ASP', 'CYS', 'GLN', 'GLU', 'GLY', 'HIS', 'ILE',
-            'LEU', 'LYS', 'MET', 'PHE', 'PRO', 'SER', 'THR', 'TRP', 'TYR', 'VAL',
-            'MSE', 'CSD', 'CSO', 'HYP', 'SEC', 'BMT', 'AIB', 'MLY', 'SEP', 'TPO', 'PTR',
+            "ALA",
+            "ARG",
+            "ASN",
+            "ASP",
+            "CYS",
+            "GLN",
+            "GLU",
+            "GLY",
+            "HIS",
+            "ILE",
+            "LEU",
+            "LYS",
+            "MET",
+            "PHE",
+            "PRO",
+            "SER",
+            "THR",
+            "TRP",
+            "TYR",
+            "VAL",
+            "MSE",
+            "CSD",
+            "CSO",
+            "HYP",
+            "SEC",
+            "BMT",
+            "AIB",
+            "MLY",
+            "SEP",
+            "TPO",
+            "PTR",
             # Nucleic acids
-            'A', 'C', 'G', 'U', 'T', 'DA', 'DC', 'DG', 'DT', 'DI', 'PSU', 'I', '5MC', 'OMC'
+            "A",
+            "C",
+            "G",
+            "U",
+            "T",
+            "DA",
+            "DC",
+            "DG",
+            "DT",
+            "DI",
+            "PSU",
+            "I",
+            "5MC",
+            "OMC",
         ]
         selection = self.select("resn", polymer_resn)
         return self.extract(selection)
 
     def remove_water(self):
         """Remove water molecules.
-        
+
         Returns
         -------
         Structure
@@ -575,18 +645,26 @@ class Structure(_BaseStructure):
 
     def remove_ligands(self):
         """Remove ligands (non-polymer molecules).
-        
+
         Returns
         -------
         Structure
             New structure with ligands removed
         """
-        selection = self.select("record", "HETATM", "!=") # NOTE: This will delete noncanonical amino acids
+        selection = self.select(
+            "record", "HETATM", "!="
+        )  # NOTE: This will delete noncanonical amino acids
         return self.extract(selection)
 
-    def clean_structure(self, keep_type='all', remove_h=True, remove_water_molecules=True, remove_all_ligands=True):
+    def clean_structure(
+        self,
+        keep_type="all",
+        remove_h=True,
+        remove_water_molecules=True,
+        remove_all_ligands=True,
+    ):
         """Clean structure by selectively removing atoms. Default removes water, hydrogen, and ligands.
-        
+
         Parameters
         ----------
         keep_type : str
@@ -597,28 +675,30 @@ class Structure(_BaseStructure):
             Remove water molecules
         remove_all_ligands : bool
             Remove all ligands (when keep_type is 'all') (will remove noncanonical AAs)
-        
+
         Returns
         -------
         Structure
             Cleaned structure
         """
         structure = self.copy()
-        
+
         if remove_h:
             structure = structure.remove_hydrogens()
-        
-        if keep_type == 'protein':
+
+        if keep_type == "protein":
             structure = structure.keep_protein()
-        elif keep_type == 'polymer':
+        elif keep_type == "polymer":
             structure = structure.keep_polymer()
-        elif keep_type == 'all':
+        elif keep_type == "all":
             if remove_water_molecules:
                 structure = structure.remove_water()
             if remove_all_ligands:
                 structure = structure.remove_ligands()
-        
+
         return structure.reorder()
+
+
 
     @property
     def n_residue_conformers(self):
