@@ -494,8 +494,7 @@ class DifferentiableTransformer(torch.nn.Module):
         )
 
         unique_elements = unique_combinations[:, 0].long()
-        # TODO: figure out a better way to have scattering params instead of this sparse tensor business
-        element_asf = self.scattering_params.to_dense()[
+        element_asf = self.scattering_params[
             unique_elements
         ]  # Shape: [n_unique, n_coeffs, 2]
         unique_bfactors = unique_combinations[:, 1]
@@ -699,7 +698,7 @@ def dilate_points_torch(
     )  # [batch_size, n_nearby, n_atoms]
 
     active_mask = (
-        active.view(batch_size * n_atoms).nonzero().squeeze(-1)
+        active.reshape(batch_size * n_atoms).nonzero().squeeze(-1)
     )  # [n_nearby * n_atoms].nonzero() -> [n_active_atoms]
     batch_idx = active_mask // n_atoms  # [n_active_atoms]
     atom_idx = active_mask % n_atoms  # [n_active_atoms]

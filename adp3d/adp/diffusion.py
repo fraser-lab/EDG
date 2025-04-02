@@ -303,8 +303,7 @@ class DiffusionStepper:
             .unsqueeze(0)
             .repeat(diffusion_samples, 1, 1)
         )
-        
-        print(shape[1] - atom_coords.shape[1]) # FIXME
+         
         atom_coords = pad_dim(atom_coords, 1, shape[1] - atom_coords.shape[1])
         init_coords = atom_coords.clone()
         eps = (

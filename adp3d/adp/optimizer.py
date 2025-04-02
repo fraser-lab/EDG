@@ -153,6 +153,7 @@ class DensityGuidedDiffusion:
                 )  # try 2FO-FC map if initial fails
 
         xmap = XMap_torch(xmap, device=self.device)
+        self.y = xmap.array.float()
 
         scattering_factors = (
             ELECTRON_SCATTERING_FACTORS if em else ATOM_STRUCTURE_FACTORS
@@ -197,8 +198,10 @@ class DensityGuidedDiffusion:
         }
 
         max_atomic_num = max(atomic_num_dict.values())
-        indices = []
-        values = []
+        # Use the max atomic number found in the structure for tensor size
+        n_coeffs = len(structure_factors["C"][0])
+        dense_size = torch.Size([max_atomic_num + 1, n_coeffs, 2])
+        scattering_dense_tensor = torch.zeros(dense_size, dtype=torch.float32)
 
         for elem in unique_elements:
             atomic_num = atomic_num_dict[elem]
@@ -215,22 +218,9 @@ class DensityGuidedDiffusion:
                 factor, dtype=torch.float32
             ).T  # (2, range) -> (range, 2)
 
-            for i in range(factor.shape[0]):  # range
-                for j in range(factor.shape[1]):  # 2
-                    indices.append([atomic_num, i, j])
-                    values.append(factor[i, j].item())
+            scattering_dense_tensor[atomic_num, :, :] = factor
 
-        sparse_indices = torch.tensor(indices, dtype=torch.long).t()
-        sparse_values = torch.tensor(values, dtype=torch.float32)
-
-        sparse_size = torch.Size(
-            [max_atomic_num + 1, len(structure_factors["C"][0]), 2]
-        )
-        scattering_sparse_tensor = torch.sparse_coo_tensor(
-            sparse_indices, sparse_values, sparse_size
-        )
-
-        self.scattering_params = scattering_sparse_tensor
+        self.scattering_params = scattering_dense_tensor
 
     def density_score(
         self,
@@ -344,7 +334,6 @@ class DensityGuidedDiffusion:
             self.stepper.initialize_diffusion(
                 num_samples=num_samples, sampling_steps=num_steps
             )
-
         step_coords = self.stepper.cached_diffusion_init["atom_coords"]
         pad_mask = (
             self.stepper.cached_representations["feats"]["atom_pad_mask"]
@@ -370,6 +359,8 @@ class DensityGuidedDiffusion:
                 masked_coords = step_coords.clone()[:, pad_mask, :]
                 coords_to_grad = masked_coords.detach().clone()
                 coords_to_grad = coords_to_grad.requires_grad_(True)
+                print(coords_to_grad.shape) # FIXME
+                print(coords_to_grad) # FIXME
 
                 density_score = self.density_score(
                     coords_to_grad, elements, b_factors, occupancies, active
@@ -382,7 +373,7 @@ class DensityGuidedDiffusion:
                     )
 
                 # Create gradient update tensor of original shape
-                full_grad = torch.zeros_like(step_coords.squeeze())
+                full_grad = torch.zeros_like(step_coords)
                 full_grad[:, pad_mask, :] = coords_to_grad.grad
 
                 # only do gradient on partially diffused atoms
@@ -393,7 +384,7 @@ class DensityGuidedDiffusion:
                     selector = pad_dim(
                         selector, 0, step_coords.shape[1] - selector.shape[0]
                     )
-                    full_grad[~selector, :] = 0
+                    full_grad[: ~selector, :] = 0
 
             pbar.set_postfix(
                 {
