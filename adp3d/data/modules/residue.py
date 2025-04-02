@@ -677,26 +677,66 @@ class _RotamerResidue(_BaseResidue):
             if np.any(np.isnan(self._coor[idx])):
                 logger.info(f"Updating {name} with NaN coordinates to valid coordinates: {coor}")
             
+            # Update coordinates and active status
             coor_array = getattr(self, "_coor").copy()
             coor_array[idx] = np.array(coor)
             active_array = getattr(self, "_active").copy()
             active_array[idx] = True
             setattr(self, "_coor", coor_array)
             setattr(self, "_active", active_array)
-            
-            # Update coordinates in all parent levels
+
+            # Calculate and update B-factor
+            current_b_factors = getattr(self, "_b")
+            valid_b_factors = current_b_factors[~np.isnan(current_b_factors)]
+            mean_b = np.mean(valid_b_factors) if valid_b_factors.size > 0 else 40.0
+            b_array = getattr(self, "_b").copy()
+            b_array[idx] = mean_b
+            setattr(self, "_b", b_array)
+
+            # Calculate and update Occupancy
+            current_q = getattr(self, "_q")
+            valid_q = current_q[~(current_q == 0)]
+            if valid_q.size > 0 and np.all(valid_q == 1.0):
+                 target_q = 1.0
+            elif valid_q.size > 0:
+                target_q = np.mean(valid_q) 
+            else:
+                 target_q = 1.0
+            q_array = getattr(self, "_q").copy()
+            q_array[idx] = target_q
+            setattr(self, "_q", q_array)
+
+            # Update coordinates, active, b, and q in all parent levels
             current = self
             while current.parent is not None:
                 current.parent.data["coor"][idx] = np.array(coor)
                 current.parent.data["active"][idx] = True
+                current.parent.data["b"][idx] = mean_b
+                current.parent.data["q"][idx] = target_q
                 current = current.parent
             
-            logger.info(f"Updated {name} coordinates to {coor}")
+            logger.info(f"Updated {name} coordinates to {coor}, B-factor to {mean_b:.2f}, Occupancy to {target_q:.2f}")
             return
 
+        # Adding a new atom
         index = self._selection[-1]
         if index < len(self.data["record"]):
             index = len(self.data["record"]) - 1
+            
+        # Pre-calculate mean B-factor and target Q for the new atom
+        current_b_factors = getattr(self, "_b")
+        valid_b_factors = current_b_factors[~np.isnan(current_b_factors)]
+        mean_b_new = np.mean(valid_b_factors) if valid_b_factors.size > 0 else 40.0
+
+        current_q = getattr(self, "_q")
+        valid_q = current_q[~np.isnan(current_q)]
+        if valid_q.size > 0 and np.all(valid_q == 1.0):
+             target_q_new = 1.0
+        elif valid_q.size > 0:
+            target_q_new = np.mean(valid_q) 
+        else:
+             target_q_new = 1.0
+             
         for attr in self.data:
             if attr == "e":
                 setattr(self, "_" + attr, np.append(getattr(self, "_" + attr), element))
@@ -714,13 +754,18 @@ class _RotamerResidue(_BaseResidue):
                         getattr(self, "_" + attr), np.expand_dims(coor, axis=0), axis=0
                     ),
                 )
-            else:
+            elif attr == "b":  
+                setattr(self, "_" + attr, np.append(getattr(self, "_" + attr), mean_b_new))
+            elif attr == "q":
+                setattr(self, "_" + attr, np.append(getattr(self, "_" + attr), target_q_new))
+            elif attr == "active": # Ensure new atoms are active
+                 setattr(self, "_" + attr, np.append(getattr(self, "_" + attr), True))
+            else: # Append the last value for other attributes (resn, chain, etc.)
                 setattr(
                     self,
                     "_" + attr,
                     np.append(getattr(self, "_" + attr), getattr(self, attr)[-1]),
                 )
-                # Ensure the array and the value being appended are of integer type
         selection = np.append(
             self.__dict__["_selection"].astype(int), int(index + 1)
         )  # ensuring this is not a float

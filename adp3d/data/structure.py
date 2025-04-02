@@ -512,8 +512,10 @@ class Structure(_BaseStructure):
                         sel_str = f"resi {resi} and chain {chainid} and altloc {altloc}"
                         sel_str = f"not ({sel_str})"
                         structure = structure.extract(sel_str)
-        structure.q = 1.0
-        structure.altloc = ""
+
+        non_zero_occ_idx = np.where(structure.data['q'] > 0)[0]
+        structure.data['q'][non_zero_occ_idx] = 1.0
+        structure.data['altloc'][:] = ""
 
         return structure
 
