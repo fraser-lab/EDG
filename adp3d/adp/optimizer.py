@@ -133,12 +133,7 @@ class DensityGuidedDiffusion:
         self.em = em
 
         st = Structure.fromfile(structure)
-        # remove hydrogens
-        st = st.extract(st.select("e", "H", comparison="!="))
-        st = st.reorder()
         self.structure = st
-
-        # coords, _, _ = structure_to_density_input(self.structure)
 
         extension = os.path.splitext(y)[1]
         if extension not in (".ccp4", ".mrc", ".map", ".mtz"):
@@ -184,7 +179,19 @@ class DensityGuidedDiffusion:
 
     def _setup_scattering_params(self, structure_factors: dict):
         """Set up scattering parameters for density calculation."""
-        unique_elements = sorted(set(self.structure.e))
+        unique_elements = set(self.structure.e)
+        unique_elements = sorted(
+            set(
+                [
+                    (
+                        elem.upper()
+                        if len(elem) == 1
+                        else elem[0].upper() + elem[1:].lower()
+                    )
+                    for elem in unique_elements
+                ]
+            )
+        )
         atomic_num_dict = {
             elem: ATOMIC_NUM_TO_ELEMENT.index(elem) for elem in unique_elements
         }

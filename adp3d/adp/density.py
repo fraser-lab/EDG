@@ -1,5 +1,5 @@
 import torch
-from typing import Dict, Optional, Tuple, List, Union
+from typing import Optional, Tuple, Union
 from copy import deepcopy
 from dataclasses import dataclass
 import torch.nn.functional as F
@@ -8,7 +8,7 @@ from numpy.typing import NDArray
 import warnings
 from einops import rearrange
 
-from adp3d.qfit.volume import XMap, EMMap, GridParameters, Resolution
+from adp3d.qfit.volume import XMap, GridParameters, Resolution
 from adp3d.qfit.unitcell import UnitCell
 from adp3d.qfit.spacegroups import GetSpaceGroup
 from adp3d.utils.quadrature import GaussLegendreQuadrature

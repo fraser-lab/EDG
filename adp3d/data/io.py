@@ -171,7 +171,11 @@ def structure_to_density_input(
         )
     elif isinstance(structure, Structure):
         mask_not_present = torch.from_numpy(structure.active).bool()
-        elements = [ATOMIC_NUM_TO_ELEMENT.index(e) for e in structure.e]
+        elements = [ATOMIC_NUM_TO_ELEMENT.index((
+                        e.upper()
+                        if len(e) == 1
+                        else e[0].upper() + e[1:].lower()
+                    )) for e in structure.e]
         coords = torch.from_numpy(structure.coor).float()
         elements = torch.tensor(elements).long()
         b_factors = torch.from_numpy(structure.b).float()
