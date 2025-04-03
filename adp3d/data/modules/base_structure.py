@@ -48,11 +48,6 @@ class _BaseStructure:
             setattr(self, hattr, array)
             prop = self._structure_property(hattr)
             setattr(self.__class__, attr, prop)
-        self._x, self._y, self._z = self._coor.T
-        for attr in "xyz":
-            hattr = "_" + attr
-            prop = self._structure_property(hattr)
-            setattr(self.__class__, attr, prop)
 
         for key, value in kwargs.items():
             if key == "link_data":
@@ -208,3 +203,45 @@ class _BaseStructure:
     def translate(self, translation):
         """Translate atoms"""
         self.coor += translation
+
+    @property
+    def x(self):
+        if self._selection is None:
+            return self._coor[:, 0].copy()
+        else:
+            return self._coor[self._selection, 0]
+
+    @x.setter
+    def x(self, value):
+        if self._selection is None:
+            self._coor[:, 0] = value
+        else:
+            self._coor[self._selection, 0] = value
+
+    @property
+    def y(self):
+        if self._selection is None:
+            return self._coor[:, 1].copy()
+        else:
+            return self._coor[self._selection, 1]
+
+    @y.setter
+    def y(self, value):
+        if self._selection is None:
+            self._coor[:, 1] = value
+        else:
+            self._coor[self._selection, 1] = value
+
+    @property
+    def z(self):
+        if self._selection is None:
+            return self._coor[:, 2].copy()
+        else:
+            return self._coor[self._selection, 2]
+
+    @z.setter
+    def z(self, value):
+        if self._selection is None:
+            self._coor[:, 2] = value
+        else:
+            self._coor[self._selection, 2] = value

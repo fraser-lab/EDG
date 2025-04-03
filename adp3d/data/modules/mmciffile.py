@@ -663,8 +663,8 @@ class mmCIFFile(list):
         ----------
         fname : str
             Filename to write to
-        structure : Structure
-            A structure object to convert to mmCIF
+        structure : Union[Structure, List[Structure]]
+            A single structure object or a list/iterable of structure objects (ensemble) to convert to mmCIF.
         use_auth : bool, optional
             Use auth_ identifiers instead of label_ identifiers. Default False.
         """
@@ -672,6 +672,17 @@ class mmCIFFile(list):
         data_block = mmCIFData(os.path.basename(fname).split(".")[0])
         cif_file.append(data_block)
         auth_or_label = "auth" if use_auth else "label"
+
+        # Ensure we have a list of structures
+        if not isinstance(structure, (list, tuple)):
+            structures = [structure]
+        else:
+            structures = structure
+        
+        if not structures:
+            raise ValueError("No structures provided to write.")
+
+        first_structure = structures[0] # Use first structure for common metadata
 
         # Create atom_site table
         atom_site = data_block.new_table("atom_site")
@@ -700,34 +711,53 @@ class mmCIFFile(list):
             ]
         )
 
-        # Add coordinates data
-        for i in range(structure.natoms):
-            row = atom_site.new_row()
-            row["group_PDB"] = structure.record[i]
-            row["id"] = str(structure.atomid[i])
-            row["type_symbol"] = structure.e[i]
-            row[f"{auth_or_label}_atom_id"] = structure.name[i]
-            row[f"{auth_or_label}_alt_id"] = (
-                structure.altloc[i] if structure.altloc[i] else "."
-            )
-            row[f"{auth_or_label}_comp_id"] = structure.resn[i]
-            row[f"{auth_or_label}_asym_id"] = structure.chain[i]
-            row[f"{auth_or_label}_entity_id"] = "1"  # Default entity ID
-            row[f"{auth_or_label}_seq_id"] = str(structure.resi[i])
-            row["pdbx_PDB_ins_code"] = structure.icode[i] if structure.icode[i] else "?"
-            row["Cartn_x"] = f"{structure.x[i]:.3f}"
-            row["Cartn_y"] = f"{structure.y[i]:.3f}"
-            row["Cartn_z"] = f"{structure.z[i]:.3f}"
-            row["occupancy"] = f"{structure.q[i]:.2f}"
-            row["B_iso_or_equiv"] = f"{structure.b[i]:.2f}"
-            row["auth_seq_id"] = str(structure.resi[i])
-            row["auth_comp_id"] = structure.resn[i]
-            row["auth_asym_id"] = structure.chain[i]
-            row["auth_atom_id"] = structure.name[i]
-            row["pdbx_PDB_model_num"] = "1"
+        # Add coordinates data for all models
+        model_num = 1
+        atom_id_counter = 1 # Ensure unique atom IDs across models. mmCIF standard uses _atom_site.id which should be unique within the file.
+        for model_num, current_structure in enumerate(structures):
+            record = current_structure.record
+            atomid = current_structure.data.get("atomid", list(range(1, current_structure.natoms + 1)))
+            name = current_structure.name
+            altloc = current_structure.altloc
+            resn = current_structure.resn
+            chain = current_structure.chain
+            resi = current_structure.resi
+            icode = current_structure.icode
+            coor = current_structure.coor
+            q = current_structure.q
+            b = current_structure.b
+            e = current_structure.e
 
-        # Add cell parameters if available
-        if hasattr(structure, "unit_cell"):
+            for i in range(current_structure.natoms):
+                row = atom_site.new_row()
+                row["group_PDB"] = record[i]
+                row["id"] = str(atom_id_counter) # Use counter ID
+                row["type_symbol"] = e[i]
+                row[f"{auth_or_label}_atom_id"] = name[i]
+                row[f"{auth_or_label}_alt_id"] = (
+                    altloc[i] if altloc[i] else "."
+                )
+                row[f"{auth_or_label}_comp_id"] = resn[i]
+                row[f"{auth_or_label}_asym_id"] = chain[i]
+                row[f"{auth_or_label}_entity_id"] = "1"  # Default entity ID
+                row[f"{auth_or_label}_seq_id"] = str(resi[i])
+                row["pdbx_PDB_ins_code"] = icode[i] if icode[i] else "?"
+                row["Cartn_x"] = f"{coor[i, 0]:.3f}"
+                row["Cartn_y"] = f"{coor[i, 1]:.3f}"
+                row["Cartn_z"] = f"{coor[i, 2]:.3f}"
+                row["occupancy"] = f"{q[i]:.2f}"
+                row["B_iso_or_equiv"] = f"{b[i]:.2f}"
+                # Store original auth fields if label is used
+                row["auth_seq_id"] = str(resi[i])
+                row["auth_comp_id"] = resn[i]
+                row["auth_asym_id"] = chain[i]
+                row["auth_atom_id"] = name[i]
+                row["pdbx_PDB_model_num"] = str(model_num)
+                atom_id_counter += 1
+            model_num += 1
+
+        # Add cell parameters if available (from the first structure)
+        if hasattr(first_structure, "unit_cell"):
             cell = data_block.new_table("cell")
             cell.set_columns(
                 [
@@ -740,25 +770,26 @@ class mmCIFFile(list):
                 ]
             )
             row = cell.new_row()
-            row["length_a"] = f"{structure.unit_cell.a:.3f}"
-            row["length_b"] = f"{structure.unit_cell.b:.3f}"
-            row["length_c"] = f"{structure.unit_cell.c:.3f}"
-            row["angle_alpha"] = f"{structure.unit_cell.alpha:.2f}"
-            row["angle_beta"] = f"{structure.unit_cell.beta:.2f}"
-            row["angle_gamma"] = f"{structure.unit_cell.gamma:.2f}"
+            row["length_a"] = f"{first_structure.unit_cell.a:.3f}"
+            row["length_b"] = f"{first_structure.unit_cell.b:.3f}"
+            row["length_c"] = f"{first_structure.unit_cell.c:.3f}"
+            row["angle_alpha"] = f"{first_structure.unit_cell.alpha:.2f}"
+            row["angle_beta"] = f"{first_structure.unit_cell.beta:.2f}"
+            row["angle_gamma"] = f"{first_structure.unit_cell.gamma:.2f}"
 
             symmetry = data_block.new_table("symmetry")
             symmetry.set_columns(["space_group_name_H-M"])
             row = symmetry.new_row()
-            row["space_group_name_H-M"] = structure.unit_cell.space_group
+            row["space_group_name_H-M"] = first_structure.unit_cell.space_group
 
-        # Add LINK records if available
+        # Add LINK records if available (from the first structure)
+        # Assumption: Links are consistent across the ensemble or defined by the first model.
         if (
-            hasattr(structure, "link_data")
-            and structure.link_data
-            and len(structure.link_data.get("record", [])) > 0
-            and any(structure.link_data["name1"])
-            and any(structure.link_data["name2"])
+            hasattr(first_structure, "link_data")
+            and first_structure.link_data
+            and len(first_structure.link_data.get("record", [])) > 0
+            and any(first_structure.link_data["name1"])
+            and any(first_structure.link_data["name2"])
         ):
             struct_conn = data_block.new_table("struct_conn")
             struct_conn.set_columns(
@@ -783,38 +814,38 @@ class mmCIFFile(list):
                 ]
             )
 
-            for i in range(len(structure.link_data["record"])):
+            for i in range(len(first_structure.link_data["record"])):
                 row = struct_conn.new_row()
                 row["id"] = f"link{i+1}"
-                row["conn_type_id"] = structure.link_data["record"][i]
+                row["conn_type_id"] = first_structure.link_data["record"][i]
                 row[f"ptnr1_{auth_or_label}_atom_id"] = (
-                    structure.link_data["name1"][i] or "?"
+                    first_structure.link_data["name1"][i] or "?"
                 )
                 row[f"pdbx_ptnr1_{auth_or_label}_alt_id"] = (
-                    structure.link_data["altloc1"][i] or "."
+                    first_structure.link_data["altloc1"][i] or "."
                 )
-                row[f"ptnr1_{auth_or_label}_comp_id"] = structure.link_data["resn1"][i]
-                row[f"ptnr1_{auth_or_label}_asym_id"] = structure.link_data["chain1"][i]
+                row[f"ptnr1_{auth_or_label}_comp_id"] = first_structure.link_data["resn1"][i]
+                row[f"ptnr1_{auth_or_label}_asym_id"] = first_structure.link_data["chain1"][i]
                 row[f"ptnr1_{auth_or_label}_seq_id"] = str(
-                    structure.link_data["resi1"][i]
+                    first_structure.link_data["resi1"][i]
                 )
-                row["pdbx_ptnr1_PDB_ins_code"] = structure.link_data["icode1"][i] or "?"
+                row["pdbx_ptnr1_PDB_ins_code"] = first_structure.link_data["icode1"][i] or "?"
                 row[f"ptnr2_{auth_or_label}_atom_id"] = (
-                    structure.link_data["name2"][i] or "?"
+                    first_structure.link_data["name2"][i] or "?"
                 )
                 row["pdbx_ptnr2_label_alt_id"] = (
-                    structure.link_data["altloc2"][i] or "."
+                    first_structure.link_data["altloc2"][i] or "."
                 )
-                row[f"ptnr2_{auth_or_label}_comp_id"] = structure.link_data["resn2"][i]
-                row[f"ptnr2_{auth_or_label}_asym_id"] = structure.link_data["chain2"][i]
+                row[f"ptnr2_{auth_or_label}_comp_id"] = first_structure.link_data["resn2"][i]
+                row[f"ptnr2_{auth_or_label}_asym_id"] = first_structure.link_data["chain2"][i]
                 row[f"ptnr2_{auth_or_label}_seq_id"] = str(
-                    structure.link_data["resi2"][i]
+                    first_structure.link_data["resi2"][i]
                 )
-                row["pdbx_ptnr2_PDB_ins_code"] = structure.link_data["icode2"][i] or "?"
-                row["pdbx_ptnr1_symmetry"] = structure.link_data["sym1"][i] or "1_555"
-                row["pdbx_ptnr2_symmetry"] = structure.link_data["sym2"][i] or "1_555"
-                if structure.link_data["length"][i]:
-                    row["pdbx_dist_value"] = f"{structure.link_data['length'][i]:.2f}"
+                row["pdbx_ptnr2_PDB_ins_code"] = first_structure.link_data["icode2"][i] or "?"
+                row["pdbx_ptnr1_symmetry"] = first_structure.link_data["sym1"][i] or "1_555"
+                row["pdbx_ptnr2_symmetry"] = first_structure.link_data["sym2"][i] or "1_555"
+                if first_structure.link_data["length"][i]:
+                    row["pdbx_dist_value"] = f"{first_structure.link_data['length'][i]:.2f}"
                 else:
                     row["pdbx_dist_value"] = "?"
 

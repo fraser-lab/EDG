@@ -3,12 +3,13 @@ import copy
 import itertools
 import os
 
-from .modules.base_structure import _BaseStructure, PDBFile, mmCIFFile
+from .modules.base_structure import _BaseStructure, PDBFile
 from .modules.ligand import _Ligand
 from .modules.residue import _Residue, _RotamerResidue, residue_type
 from .modules.rotamers import ROTAMERS
 from .modules.math import Rz
 from ..utils.normalize_to_precision import normalize_to_precision
+from .modules.mmciffile import mmCIFFile
 
 class Structure(_BaseStructure):
     """Class with access to underlying PDB hierarchy."""
@@ -1239,3 +1240,205 @@ def calc_rmsd(coor_a, coor_b):
             Distance between two structures.
     """
     return np.sqrt(np.mean((coor_a - coor_b) ** 2))
+
+
+class Ensemble:
+    """Represents a collection of Structure objects."""
+
+    def __init__(self, structures: list[Structure]):
+        """Initialize the Ensemble with a list of structures.
+
+        Args:
+            structures (list[Structure]): A list of Structure objects.
+        """
+        if not all(isinstance(s, Structure) for s in structures):
+            raise TypeError("All items in the list must be Structure objects.")
+        self._structures = list(structures)
+
+    def __len__(self):
+        """Return the number of structures in the ensemble."""
+        return len(self._structures)
+
+    def __getitem__(self, index):
+        """Get a structure from the ensemble by index."""
+        return self._structures[index]
+
+    def append(self, structure: Structure):
+        """Add a structure to the ensemble."""
+        if not isinstance(structure, Structure):
+            raise TypeError("Can only append Structure objects.")
+        self._structures.append(structure)
+
+    def tofile(self, fname: str, use_auth: bool = False):
+        """Write the ensemble to an mmCIF file.
+
+        Parameters
+        ----------
+        fname : str
+            Filename to write to.
+        use_auth : bool, optional
+            Use auth_ identifiers instead of label_ identifiers. Default False.
+        """
+        if not self._structures:
+            raise ValueError("Cannot write an empty ensemble.")
+
+        # mmCIFFile.write handles writing multiple models
+        mmCIFFile.write(fname, self._structures, use_auth=use_auth)
+
+    def __repr__(self):
+        return f"Ensemble: {len(self._structures)} structures."
+
+    def calc_pairwise_rmsd(self) -> np.ndarray:
+        """Calculate RMSD between all pairs of structures in the ensemble.
+
+        Returns
+        -------
+        np.ndarray
+            Matrix of pairwise RMSDs, shape (n_structures, n_structures)
+        """
+        n_structures = len(self._structures)
+        rmsd_matrix = np.zeros((n_structures, n_structures))
+        
+        for i in range(n_structures):
+            for j in range(i+1, n_structures):
+                rmsd = calc_rmsd(self._structures[i].coor, self._structures[j].coor)
+                rmsd_matrix[i,j] = rmsd
+                rmsd_matrix[j,i] = rmsd
+                
+        return rmsd_matrix
+
+    def align_to_reference(self, reference: Structure):
+        """Align all structures in the ensemble to a reference structure in place.
+
+        Uses the Kabsch algorithm.
+
+        Parameters
+        ----------
+        reference : Structure
+            Reference structure to align to. The coordinates of the structures
+            in the ensemble will be modified.
+        """
+        if not self._structures:
+            return # Nothing to align
+
+        ref_coords = reference.coor
+        if ref_coords is None or ref_coords.size == 0:
+            raise ValueError("Reference structure has no coordinates.")
+
+        # Calculate centroid of the reference structure
+        ref_centroid = np.mean(ref_coords, axis=0)
+        ref_centered = ref_coords - ref_centroid
+
+        for structure in self._structures:
+            mobile_coords = structure.coor
+            if mobile_coords is None or mobile_coords.size == 0:
+                # Or raise an error, or skip? Skipping for now.
+                print(f"Warning: Skipping structure {structure} due to missing coordinates.")
+                continue
+
+            if mobile_coords.shape != ref_coords.shape:
+                raise ValueError(
+                    f"Structure {structure} has a different shape "
+                    f"({mobile_coords.shape}) than the reference "
+                    f"({ref_coords.shape}). Cannot align."
+                )
+
+            # Calculate centroid of the mobile structure
+            mobile_centroid = np.mean(mobile_coords, axis=0)
+            mobile_centered = mobile_coords - mobile_centroid
+
+            # Compute covariance matrix
+            # H = P^T * Q where P = mobile_centered, Q = ref_centered
+            H = mobile_centered.T @ ref_centered
+
+            # Perform SVD
+            try:
+                U, S, Vt = np.linalg.svd(H)
+            except np.linalg.LinAlgError:
+                 print(f"Warning: SVD computation failed for structure {structure}. Skipping alignment.")
+                 continue
+
+
+            # Calculate rotation matrix
+            R = Vt.T @ U.T
+
+            # Check for reflection and correct if necessary
+            if np.linalg.det(R) < 0:
+                # Multiply the column of Vt corresponding to the smallest singular value by -1
+                Vt[-1, :] *= -1
+                R = Vt.T @ U.T
+
+            # Apply rotation and translation
+            # Rotated coords = R * mobile_centered^T -> transpose back -> add ref_centroid
+            # Or: mobile_centered @ R.T + ref_centroid
+            aligned_coords = mobile_centered @ R.T + ref_centroid
+
+            # Update structure coordinates in place
+            structure.coor = aligned_coords
+
+    def filter_by_rmsd(self, threshold: float, reference: Structure) -> 'Ensemble':
+        """Filter structures based on RMSD to reference structure.
+
+        Parameters
+        ----------
+        threshold : float
+            RMSD threshold in Angstroms
+        reference : Structure, optional
+            Reference structure to compare against. If None, uses average structure.
+
+        Returns
+        -------
+        Ensemble
+            New ensemble containing only structures within RMSD threshold
+        """ 
+        filtered_structures = []
+        for structure in self._structures:
+            rmsd = calc_rmsd(structure.coor, reference.coor)
+            if rmsd <= threshold:
+                filtered_structures.append(structure)
+                
+        return Ensemble(filtered_structures)
+
+    def combine(self, other: 'Ensemble') -> 'Ensemble':
+        """Combine this ensemble with another ensemble.
+
+        Parameters
+        ----------
+        other : Ensemble
+            Another ensemble to combine with
+
+        Returns
+        -------
+        Ensemble
+            New ensemble containing all structures from both ensembles
+        """
+        combined_structures = self._structures + other._structures
+        return Ensemble(combined_structures)
+
+    def get_unique_chains(self) -> set:
+        """Get unique chain IDs across the ensemble.
+
+        Returns
+        -------
+        set
+            Set of unique chain IDs
+        """
+        chain_ids = set()
+        for structure in self._structures:
+            chain_ids.update(chain.id for chain in structure.chains)
+        return chain_ids
+
+    def normalize_occupancies(self):
+        """Normalize occupancies across the ensemble.
+        
+        Sets the occupancy of each structure to 1/N where N is the number of structures
+        in the ensemble. This ensures that the sum of occupancies across all ensemble
+        members equals 1.0 for each residue.
+        """
+        if not self._structures:
+            raise ValueError("Cannot normalize occupancies of empty ensemble")
+            
+        occupancy = 1.0 / len(self._structures)
+        
+        for structure in self._structures:
+            structure.q[:] = occupancy
