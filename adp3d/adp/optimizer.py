@@ -30,6 +30,7 @@ from adp3d.adp.density import (
     normalize,
     to_f_density,
 )
+from adp3d.data.structure import Ensemble
 from adp3d.qfit.volume import XMap
 from adp3d.data.io import export_density_map, structure_to_density_input
 from adp3d.data.sf import (
@@ -298,8 +299,8 @@ class DensityGuidedDiffusion:
 
         Returns
         -------
-        Structure
-            Optimized structure
+        Tuple[Ensemble, List[float]]
+            Ensemble of optimized structures and their scores
         """
         os.makedirs(output_dir, exist_ok=True)
 
@@ -354,14 +355,12 @@ class DensityGuidedDiffusion:
             step_lr = (
                 learning_rate if isinstance(learning_rate, float) else learning_rate[i]
             )
-            # TODO: Implement with carving of map, or at least the subtraction of map outside given region
             with torch.set_grad_enabled(True):  # Explicit gradient context
                 masked_coords = step_coords.clone()[:, pad_mask, :]
                 coords_to_grad = masked_coords.detach().clone()
                 coords_to_grad = coords_to_grad.requires_grad_(True)
-                print(coords_to_grad.shape) # FIXME
-                print(coords_to_grad) # FIXME
 
+                # TODO: only compute density and gradient for partially diffused atoms in segment (requires map subtraction)
                 density_score = self.density_score(
                     coords_to_grad, elements, b_factors, occupancies, active
                 )
@@ -372,19 +371,16 @@ class DensityGuidedDiffusion:
                         "Gradient computation failed - tensor is not a leaf"
                     )
 
-                # Create gradient update tensor of original shape
                 full_grad = torch.zeros_like(step_coords)
-                full_grad[:, pad_mask, :] = coords_to_grad.grad
 
-                # only do gradient on partially diffused atoms
+                # only use gradient on partially diffused atoms in segment
                 if diffusion_kwargs["selector"] is not None:
                     selector = torch.from_numpy(diffusion_kwargs["selector"]).to(
                         self.device
                     )
-                    selector = pad_dim(
-                        selector, 0, step_coords.shape[1] - selector.shape[0]
-                    )
-                    full_grad[: ~selector, :] = 0
+                    full_grad[:, selector, :] = coords_to_grad.grad[:, selector, :]
+                else:
+                    full_grad[:, pad_mask, :] = coords_to_grad.grad
 
             pbar.set_postfix(
                 {
@@ -409,28 +405,37 @@ class DensityGuidedDiffusion:
             # step_coords = step_coords - step_lr * full_grad.unsqueeze(
             #     0
             # )
+            coords_tensor = self.stepper.diffusion_trajectory[
+                f"step_{self.stepper.current_step - 1}"
+            ]["coords"]
+            ensemble_size = coords_tensor.shape[0]
+            step_structures = []
+            for j in range(ensemble_size):
+                structure = copy.deepcopy(
+                    self.structure
+                )
+                structure.coor = coords_tensor[j].cpu().numpy()
+                # TODO: Update q and b factors if they are also being optimized or change
+                step_structures.append(structure)
+
+            step_ensemble = Ensemble(step_structures)
+            step_ensemble.tofile(f"{output_dir}/step_{i}_ensemble.cif")
+
+        final_coords_tensor = self.stepper.diffusion_trajectory[
+            f"step_{self.stepper.current_step - 1}"
+        ]["coords"]
+        ensemble_size = final_coords_tensor.shape[0]
+        final_structures = []
+
+        for j in range(ensemble_size):
             structure = copy.deepcopy(
                 self.structure
-            )  # q and b will need to be updated in the future
-            structure.coor = (
-                self.stepper.diffusion_trajectory[
-                    f"step_{self.stepper.current_step - 1}"
-                ]["coords"]
-                .cpu()
-                .numpy()
             )
-            structure.tofile(f"{output_dir}/step_{i}.cif")
+            structure.coor = final_coords_tensor[j].cpu().numpy()
+            # TODO: Update q and b factors if necessary for the final state
+            final_structures.append(structure)
 
-        structure = copy.deepcopy(
-            self.structure
-        )  # q and b will need to be updated in the future
-        structure.coor = (
-            self.stepper.diffusion_trajectory[f"step_{self.stepper.current_step - 1}"][
-                "coords"
-            ]
-            .cpu()
-            .numpy()
-        )
-        structure.tofile(f"{output_dir}/final.cif")
+        final_ensemble = Ensemble(final_structures)
+        final_ensemble.tofile(f"{output_dir}/final_ensemble.cif")
 
-        return structure, scores
+        return final_structures, scores

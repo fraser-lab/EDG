@@ -314,7 +314,6 @@ class DiffusionStepper:
 
         if selector is not None:
             selector = torch.from_numpy(selector).to(self.device)
-            selector = pad_dim(selector, 0, shape[1] - selector.shape[0])
             atom_coords[:, selector, :] += eps[:, selector, :]
         else:
             atom_coords += eps
@@ -531,22 +530,31 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
         return_denoised: bool = False,
         augmentation: bool = True,
         align_to_input: bool = True,
+        selection: Optional[NDArray[np.bool_]] = None,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
-        """Execute a single diffusion denoising step.
+        """Execute a single diffusion denoising step with density guidance.
 
         Parameters
         ----------
         atom_coords : torch.Tensor
-            Current atomic coordinates of shape (batch, num_atoms, 3)
+            Current atomic coordinates of shape (batch, num_atoms, 3).
+        density_grad : torch.Tensor
+            Gradient of the density field w.r.t. atom coordinates, shape (batch, num_atoms, 3).
+        guidance_scale : float, optional
+            Scale factor for applying the density gradient guidance, by default 0.1.
         return_denoised : bool, optional
-            Whether to return the fully denoised coordinate prediction, by default False
+            Whether to return the fully denoised coordinate prediction alongside the next step coordinates, by default False.
         augmentation : bool, optional
-            Whether to apply augmentation, by default True
+            Whether to apply random centering augmentation, by default True.
+        align_to_input : bool, optional
+            Whether to align the output coordinates to the initial input coordinates (if provided during initialization), by default True.
+        selection : Optional[NDArray[np.bool_]], optional
+            Boolean mask indicating which atoms to apply diffusion to. If None, applies to all atoms. By default None.
 
         Returns
         -------
         torch.Tensor or Tuple[torch.Tensor, torch.Tensor]
-            Denoised atomic coordinates after a single step in the trajectory, and optionally the fully denoised coordinate prediction.
+            Coordinates after a single guided diffusion step. If `return_denoised` is True, returns a tuple containing the next step coordinates and the fully denoised coordinate prediction for the current step.
         """
         # Get cached representations
         s = self.cached_representations["s"]
@@ -582,7 +590,12 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
                 augmentation=True,
             )
 
-        atom_coords_noisy = atom_coords + eps
+        atom_coords_noisy = atom_coords.clone()
+        if selection is not None:
+            selection = torch.from_numpy(selection).to(self.device)
+            atom_coords_noisy[:, selection, :] = atom_coords[:, selection, :] + eps[:, selection, :]
+        else:
+            atom_coords_noisy += eps
 
         with torch.no_grad():
             atom_coords_denoised, _ = (
@@ -601,12 +614,13 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
                 )
             )
 
-        atom_coords_noisy = weighted_rigid_align(
-            atom_coords_noisy.float(),
-            atom_coords_denoised.float(),
-            atom_mask.float(),
-            atom_mask.float(),
-        )
+        if augmentation: # TODO: think about whether this makes sense, or whether it should be applied always (look at the original implementation)
+            atom_coords_noisy = weighted_rigid_align(
+                atom_coords_noisy.float(),
+                atom_coords_denoised.float(),
+                atom_mask.float(),
+                atom_mask.float(),
+            )
 
         atom_coords_noisy = atom_coords_noisy.to(atom_coords_denoised)
 
