@@ -11,6 +11,7 @@ Updated: 19 Dec 2024
 from pathlib import Path
 import os
 import copy
+from functools import partial
 from typing import Optional, Union, List
 import warnings
 
@@ -231,6 +232,7 @@ class DensityGuidedDiffusion:
         occupancies: torch.Tensor,
         active: torch.Tensor,
         norm: int = 1,
+        substructure_conditioning_kwargs: dict = None,
     ) -> torch.Tensor:
         """Calculate density score for current coordinates.
 
@@ -238,6 +240,7 @@ class DensityGuidedDiffusion:
         ----------
         coords : torch.Tensor
             Current atomic coordinates, shape [batch, atoms, 3]
+            NOTE: This should be just the atoms, not padded.
         elements : torch.Tensor
             Element atomic numbers for each atom, shape [batch, atoms]
         b_factors : torch.Tensor
@@ -248,19 +251,44 @@ class DensityGuidedDiffusion:
             Mask for active atoms, shape [batch, atoms]
         norm : int, optional
             Which norm to use for the score, by default 1
+        substructure_conditioning_kwargs : dict, optional
+            Keyword arguments for substructure conditioning, by default None
+            Values should be:
+                - selection : NDArray[np.bool_]
+                    Indices of atoms to leave out of conditioning
+                - coords : torch.Tensor
+                    Coordinates of atoms to condition on, shape [batch, atoms, 3]
+                - scale : float
+                    Scale factor for the conditioning
 
         Returns
         -------
         torch.Tensor
             Density correlation score
         """
+        if substructure_conditioning_kwargs is not None:
+            conditioning_coords = substructure_conditioning_kwargs["coords"]
+            selection = substructure_conditioning_kwargs["selection"]
+            scale = substructure_conditioning_kwargs["scale"]
+            conditioning_coords = conditioning_coords[:, ~selection, :]
+
+            # compute the difference between the conditioning coordinates and the current coords
+            substructure_score = (
+                scale
+                / (coords.shape[0])
+                * torch.linalg.norm(coords[:, ~selection, :] - conditioning_coords)
+            )
+
         model_map = self.density_calculator(
             coords, elements, b_factors, occupancies, active
         ).sum(
             0
         )  # TODO: dont use normalization, use e-/A^3
-        return torch.linalg.norm(
-            torch.flatten(model_map) - torch.flatten(self.y), ord=norm
+        return (
+            -torch.linalg.norm(
+                torch.flatten(self.y) - torch.flatten(model_map), ord=norm
+            )
+            - substructure_score
         )
         # # SiLU (swish) to penalize the model going out into solvent, but not penalize being not in exactly the density as much
         # return torch.linalg.norm(torch.nn.SiLU(torch.flatten(self.y) - torch.flatten(model_map)))
@@ -273,6 +301,7 @@ class DensityGuidedDiffusion:
         learning_rate: Union[List, float] = 1e-1,
         partial_diffusion: bool = False,
         diffusion_kwargs: dict = None,
+        substructure_conditioning_kwargs: dict = None,
     ) -> Structure:
         """Run density-guided optimization.
 
@@ -294,9 +323,15 @@ class DensityGuidedDiffusion:
                     Number of steps for noise addition, 25-30% of num_steps works well
                 - structure : Structure
                     Input structure for partial diffusion
-                - selector : List[int]
+                - selection : NDArray[np.int]
                     Indices of segments for selective diffusion
-
+        substructure_conditioning_kwargs : dict, optional
+            Keyword arguments for substructure conditioning, by default None
+            Values should be:
+                - selection : NDArray[np.int]
+                    Indices of atoms to leave out of conditioning
+                - scale : float
+                    Scale factor for the conditioning
         Returns
         -------
         Tuple[Ensemble, List[float]]
@@ -322,6 +357,7 @@ class DensityGuidedDiffusion:
                 f"Resolution of input structure is {resolution}. Using 2.0 A instead."
             )
 
+        coords = coords.to(self.device).float()
         elements = elements.to(self.device).long()
         b_factors = b_factors.to(self.device).float()
         occupancies = occupancies.to(self.device).float()
@@ -333,14 +369,30 @@ class DensityGuidedDiffusion:
             )
         else:
             self.stepper.initialize_diffusion(
-                num_samples=num_samples, sampling_steps=num_steps
+                num_samples=num_samples, sampling_steps=num_steps, init_coords=coords
             )
         step_coords = self.stepper.cached_diffusion_init["atom_coords"]
-        pad_mask = (
-            self.stepper.cached_representations["feats"]["atom_pad_mask"]
-            .squeeze()
-            .bool()
-        )
+
+        if substructure_conditioning_kwargs is not None:
+            substructure_conditioning_kwargs["coords"] = coords
+            density_loss = partial(
+                self.density_score,
+                elements=elements,
+                b_factors=b_factors,
+                occupancies=occupancies,
+                active=active,
+                norm=1,
+                substructure_conditioning_kwargs=substructure_conditioning_kwargs,
+            )
+        else:
+            density_loss = partial(
+                self.density_score,
+                elements=elements,
+                b_factors=b_factors,
+                occupancies=occupancies,
+                active=active,
+                norm=1,
+            )
 
         # v_density = torch.zeros_like(step_coords)
         scores = []
@@ -355,47 +407,27 @@ class DensityGuidedDiffusion:
             step_lr = (
                 learning_rate if isinstance(learning_rate, float) else learning_rate[i]
             )
-            with torch.set_grad_enabled(True):  # Explicit gradient context
-                masked_coords = step_coords.clone()[:, pad_mask, :]
-                coords_to_grad = masked_coords.detach().clone()
-                coords_to_grad = coords_to_grad.requires_grad_(True)
 
-                # TODO: only compute density and gradient for partially diffused atoms in segment (requires map subtraction)
-                density_score = self.density_score(
-                    coords_to_grad, elements, b_factors, occupancies, active
-                )
-                density_score.backward()
-
-                if coords_to_grad.grad is None:
-                    raise ValueError(
-                        "Gradient computation failed - tensor is not a leaf"
-                    )
-
-                full_grad = torch.zeros_like(step_coords)
-
-                # only use gradient on partially diffused atoms in segment
-                if diffusion_kwargs["selector"] is not None:
-                    selector = torch.from_numpy(diffusion_kwargs["selector"]).to(
-                        self.device
-                    )
-                    full_grad[:, selector, :] = coords_to_grad.grad[:, selector, :]
-                else:
-                    full_grad[:, pad_mask, :] = coords_to_grad.grad
-
-            pbar.set_postfix(
-                {
-                    "score": f"{density_score.item():.4f}",
-                }
-            )
-            scores.append(density_score.item())
-
-            step_coords = self.stepper.step(
+            # density guided step using self.density_score
+            step_coords, loss = self.stepper.step(
                 step_coords,
-                full_grad,
+                density_loss=density_loss,
                 guidance_scale=step_lr,
                 augmentation=True,
-                align_to_input=True,
+                selection=(
+                    substructure_conditioning_kwargs["selection"]
+                    if substructure_conditioning_kwargs is not None
+                    else None
+                ),
             )
+
+            # update the progress bar with negative log likelihood
+            pbar.set_postfix(
+                {
+                    "score": f"{loss:.4f}",
+                }
+            )
+            scores.append(loss)
 
             # Gradient descent with momentum # TODO: try others?
             # v_density = 0.9 * v_density + step_lr * full_grad.unsqueeze(0)
@@ -411,9 +443,7 @@ class DensityGuidedDiffusion:
             ensemble_size = coords_tensor.shape[0]
             step_structures = []
             for j in range(ensemble_size):
-                structure = copy.deepcopy(
-                    self.structure
-                )
+                structure = copy.deepcopy(self.structure)
                 structure.coor = coords_tensor[j].cpu().numpy()
                 # TODO: Update q and b factors if they are also being optimized or change
                 step_structures.append(structure)
@@ -428,9 +458,7 @@ class DensityGuidedDiffusion:
         final_structures = []
 
         for j in range(ensemble_size):
-            structure = copy.deepcopy(
-                self.structure
-            )
+            structure = copy.deepcopy(self.structure)
             structure.coor = final_coords_tensor[j].cpu().numpy()
             # TODO: Update q and b factors if necessary for the final state
             final_structures.append(structure)

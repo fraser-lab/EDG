@@ -67,7 +67,7 @@ def export_density_map(
 
 def write_mmcif(
     coords: torch.Tensor,
-    structure: Union[Structure, BoltzStructure], # TODO: FIXME Structure API not being used properly??
+    structure: Union[Structure, BoltzStructure], 
     output_path: Path,
     elements: torch.Tensor = None,
     return_structure: bool = False,
@@ -149,6 +149,7 @@ def structure_to_density_input(
     ----------
     structure : Union[Structure, BoltzStructure]
         qFit or Boltz-1 Structure object describing the structure.
+        
     Returns
     -------
     Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, float]
