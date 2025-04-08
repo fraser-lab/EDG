@@ -270,13 +270,15 @@ class DensityGuidedDiffusion:
             conditioning_coords = substructure_conditioning_kwargs["coords"]
             selection = substructure_conditioning_kwargs["selection"]
             scale = substructure_conditioning_kwargs["scale"]
-            conditioning_coords = conditioning_coords[:, ~selection, :]
+            inverse_selector = torch.ones(conditioning_coords.shape[1], device=self.device).bool()
+            inverse_selector[selection] = False
+            conditioning_coords = conditioning_coords[:, inverse_selector, :]
 
             # compute the difference between the conditioning coordinates and the current coords
             substructure_score = (
                 scale
                 / (coords.shape[0])
-                * torch.linalg.norm(coords[:, ~selection, :] - conditioning_coords)
+                * torch.linalg.norm(coords[:, inverse_selector, :] - conditioning_coords)
             )
 
         model_map = self.density_calculator(

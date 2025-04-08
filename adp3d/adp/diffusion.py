@@ -549,8 +549,8 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
             Whether to return the fully denoised coordinate prediction alongside the next step coordinates, by default False.
         augmentation : bool, optional
             Whether to apply random centering augmentation, by default True.
-        selection : Optional[NDArray[np.bool_]], optional
-            Boolean mask indicating which atoms to apply diffusion to. If None, applies to all atoms. By default None.
+        selection : Optional[NDArray[int]], optional
+            Indices of atoms to apply diffusion to. If None, applies to all atoms. By default None.
 
         Returns
         -------
@@ -625,11 +625,13 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
         # NOTE: This is from the Maddipatla paper, but I would probably do something different?
         if selection is not None:
             selection = torch.from_numpy(selection).to(self.device)
-            atom_coords_denoised[:, ~selection, :] = self.cached_diffusion_init[
+            inverse_selector = torch.ones(atom_coords_denoised.shape[1], device=self.device).bool()
+            inverse_selector[selection] = False
+            atom_coords_denoised[:, inverse_selector, :] = self.cached_diffusion_init[
                 "init_coords"
-            ][:, ~selection, :]
+            ][:, inverse_selector, :]
 
-        if augmentation: # FIXME: Test here vs before selection
+        if augmentation:
             atom_coords_noisy = weighted_rigid_align(
                 atom_coords_noisy.float(),
                 atom_coords_denoised.float(),
@@ -638,7 +640,7 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
             )
 
         with torch.set_grad_enabled(True):  # Explicit gradient context
-            masked_coords = atom_coords_noisy[:, pad_mask, :]
+            masked_coords = atom_coords_denoised[:, pad_mask, :]
             coords_to_grad = masked_coords.detach().clone()
             coords_to_grad = coords_to_grad.requires_grad_(True)
 
@@ -649,7 +651,7 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
             if coords_to_grad.grad is None:
                 raise ValueError("Gradient computation failed - tensor is not a leaf")
 
-            full_grad = torch.zeros_like(atom_coords_noisy)
+            full_grad = torch.zeros_like(atom_coords_denoised)
 
             # only use gradient on partially diffused atoms in segment
             # if selection is not None:
@@ -660,7 +662,7 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
 
         atom_coords_noisy = atom_coords_noisy.to(atom_coords_denoised)
 
-        denoised_over_sigma = (atom_coords_noisy - atom_coords_denoised) / t_hat
+        denoised_over_sigma = (atom_coords_noisy - atom_coords_denoised) / t_hat # NOTE: try atom coords?
 
         scaled_guidance_grad = (
             torch.linalg.norm(denoised_over_sigma)
