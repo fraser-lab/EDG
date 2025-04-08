@@ -33,7 +33,7 @@ from adp3d.adp.density import (
 )
 from adp3d.data.structure import Ensemble
 from adp3d.qfit.volume import XMap
-from adp3d.data.io import export_density_map, structure_to_density_input
+from adp3d.data.io import structure_to_density_input
 from adp3d.data.sf import (
     ATOM_STRUCTURE_FACTORS,
     ELECTRON_SCATTERING_FACTORS,
@@ -444,14 +444,30 @@ class DensityGuidedDiffusion:
             ]["coords"]
             ensemble_size = coords_tensor.shape[0]
             step_structures = []
-            for j in range(ensemble_size):
-                structure = copy.deepcopy(self.structure)
-                structure.coor = coords_tensor[j].cpu().numpy()
-                # TODO: Update q and b factors if they are also being optimized or change
-                step_structures.append(structure)
 
-            step_ensemble = Ensemble(step_structures)
-            step_ensemble.tofile(f"{output_dir}/step_{i}_ensemble.cif")
+            # save calculated model and map every 10 steps
+            if i % 10 == 0:
+                denoised_coords_ensemble = self.stepper.diffusion_trajectory[f"step_{i}"]["denoised"]
+                with torch.no_grad():
+                    model_map_ensemble = self.density_calculator(
+                        denoised_coords_ensemble,
+                        elements,
+                        b_factors,
+                        occupancies,
+                        active
+                    )
+                summed_map_array = model_map_ensemble.sum(0) 
+                # Use the existing XMap object to save the calculated density
+                self.density_calculator.xmap.tofile(f"{output_dir}/step_{i}_map.ccp4", density=summed_map_array)
+
+                for j in range(ensemble_size):
+                    structure = copy.deepcopy(self.structure)
+                    structure.coor = coords_tensor[j].cpu().numpy()
+                    # TODO: Update q and b factors if they are also being optimized or change
+                    step_structures.append(structure)
+
+                step_ensemble = Ensemble(step_structures)
+                step_ensemble.tofile(f"{output_dir}/step_{i}_ensemble.cif")
 
         final_coords_tensor = self.stepper.diffusion_trajectory[
             f"step_{self.stepper.current_step - 1}"
