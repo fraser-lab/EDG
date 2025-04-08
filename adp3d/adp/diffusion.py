@@ -624,7 +624,7 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
         # replace the unselected (not in segment) atoms in denoised with the initial structure coords
         # NOTE: This is from the Maddipatla paper, but I would probably do something different?
         if selection is not None:
-            selection = torch.from_numpy(selection).to(self.device)
+            selection = torch.from_numpy(selection).to(self.device) # TODO: set this up in a more efficient way
             inverse_selector = torch.ones(atom_coords_denoised.shape[1], device=self.device).bool()
             inverse_selector[selection] = False
             atom_coords_denoised[:, inverse_selector, :] = self.cached_diffusion_init[
@@ -640,7 +640,7 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
             )
 
         with torch.set_grad_enabled(True):  # Explicit gradient context
-            masked_coords = atom_coords_denoised[:, pad_mask, :]
+            masked_coords = atom_coords_noisy[:, pad_mask, :]
             coords_to_grad = masked_coords.detach().clone()
             coords_to_grad = coords_to_grad.requires_grad_(True)
 
@@ -651,7 +651,7 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
             if coords_to_grad.grad is None:
                 raise ValueError("Gradient computation failed - tensor is not a leaf")
 
-            full_grad = torch.zeros_like(atom_coords_denoised)
+            full_grad = torch.zeros_like(atom_coords_noisy)
 
             # only use gradient on partially diffused atoms in segment
             # if selection is not None:
