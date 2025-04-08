@@ -371,7 +371,7 @@ class DifferentiableTransformer(torch.nn.Module):
         elements: torch.Tensor,
         b_factors: torch.Tensor,
         occupancies: torch.Tensor,
-        active: torch.Tensor,
+        active: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """Forward pass computing electron density with symmetry.
 
@@ -386,8 +386,8 @@ class DifferentiableTransformer(torch.nn.Module):
             B-factors of shape (batch_size, n_atoms).
         occupancies : torch.Tensor
             Occupancies of shape (batch_size, n_atoms).
-        active : torch.Tensor
-            Boolean mask of active atoms of shape (batch_size, n_atoms).
+        active : Optional[torch.Tensor], optional
+            Boolean mask of active atoms of shape (batch_size, n_atoms). Defaults to all True if None.
 
         Returns
         -------
@@ -399,6 +399,7 @@ class DifferentiableTransformer(torch.nn.Module):
             == elements.shape[0]
             == b_factors.shape[0]
             == occupancies.shape[0]
+            == (active.shape[0] if active is not None else coordinates.shape[0])
         ):
             raise ValueError("Batch sizes must match for all inputs")
 
@@ -412,14 +413,8 @@ class DifferentiableTransformer(torch.nn.Module):
             else active.to(dtype=torch.bool, device=self.device)
         )
 
-        batch_size = coordinates.shape[0]
-
         radial_densities = self._compute_radial_densities(elements, b_factors).to(
             self.dtype
-        )  # integrator seems to be promoting to float64?
-
-        density = torch.zeros(
-            (batch_size,) + self.grid_shape, device=self.device, dtype=coordinates.dtype
         )
 
         grid_coordinates = self._compute_grid_coordinates(coordinates).to(
@@ -431,32 +426,21 @@ class DifferentiableTransformer(torch.nn.Module):
             device=self.device,
         )
 
-        for i in range(len(self.xmap.R_matrices)):
-            R = self.xmap.R_matrices[i]
-            t = self.xmap.t_vectors[i]
+        base_density = dilate_points_torch(
+            grid_coordinates,
+            active,
+            occupancies,
+            lmax,
+            radial_densities,
+            self.density_params.rstep,
+            self.density_params.rmax,
+            self.grid_to_cartesian,
+            self.grid_shape,
+        )
 
-            grid_coordinates_rot = torch.matmul(grid_coordinates, R.T)
-            grid_coordinates_rot = grid_coordinates_rot + t.view(
-                1, 1, 3
-            ) * torch.tensor(
-                self.grid_shape[::-1], device=self.device, dtype=coordinates.dtype
-            ).view(
-                1, 1, 3
-            )
+        final_density = self.xmap.apply_symmetry(base_density)
 
-            density += dilate_points_torch(
-                grid_coordinates_rot,
-                active,
-                occupancies,
-                lmax,
-                radial_densities,
-                self.density_params.rstep,
-                self.density_params.rmax,
-                self.grid_to_cartesian,
-                self.grid_shape,
-            )
-
-        return density
+        return final_density
 
     def _compute_radial_densities(
         self, elements: torch.Tensor, b_factors: torch.Tensor
