@@ -662,7 +662,7 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
 
         atom_coords_noisy = atom_coords_noisy.to(atom_coords_denoised)
 
-        denoised_over_sigma = (atom_coords_noisy - atom_coords_denoised) / t_hat # NOTE: try atom coords?
+        denoised_over_sigma = (atom_coords_noisy - atom_coords_denoised) / t_hat
 
         scaled_guidance_grad = (
             torch.linalg.norm(denoised_over_sigma)

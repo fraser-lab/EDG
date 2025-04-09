@@ -30,6 +30,7 @@ from adp3d.adp.density import (
     XMap_torch,
     normalize,
     to_f_density,
+    scale_map,
 )
 from adp3d.data.structure import Ensemble
 from adp3d.qfit.volume import XMap
@@ -133,6 +134,8 @@ class DensityGuidedDiffusion:
             self.device = device
 
         self.em = em
+        self.output_path = Path(output_path)
+        os.makedirs(self.output_path, exist_ok=True)
 
         st = Structure.fromfile(structure)
         self.structure = st
@@ -169,6 +172,29 @@ class DensityGuidedDiffusion:
             em=self.em,
             device=self.device,
         )
+
+        # Scale experimental map
+        coords, elements, b_factors, occupancies, active, _ = (
+            structure_to_density_input(self.structure)
+        )
+        coords = coords.to(self.device).float().unsqueeze(0) # Add batch dim
+        elements = elements.to(self.device).long().unsqueeze(0)
+        b_factors = b_factors.to(self.device).float().unsqueeze(0)
+        occupancies = occupancies.to(self.device).float().unsqueeze(0)
+        active = active.to(self.device).bool().unsqueeze(0)
+
+        # Calculate initial model map
+        with torch.no_grad():
+            initial_model_map = self.density_calculator(
+                coords, elements, b_factors, occupancies, active
+            ).squeeze(0)
+            mask = self.density_calculator.create_mask(coords.squeeze(0), 5.0)
+            
+        self.y = scale_map(self.y, initial_model_map, mask)
+
+        scaled_map_path = self.output_path / "scaled_experimental_map.ccp4"
+        self.density_calculator.xmap.tofile(str(scaled_map_path), density=self.y)
+        print(f"Saved scaled experimental map to {scaled_map_path}")
 
         diffusion_args = BoltzDiffusionParams(step_scale=step_scale)
         self.stepper = DensityGuidedDiffusionStepper(
@@ -440,17 +466,16 @@ class DensityGuidedDiffusion:
             #     0
             # )
             coords_tensor = self.stepper.diffusion_trajectory[
-                f"step_{self.stepper.current_step - 1}"
+                f"step_{i}"
             ]["coords"]
             ensemble_size = coords_tensor.shape[0]
             step_structures = []
 
-            # save calculated model and map every 10 steps
+            # FIXME: debugging, save calculated model and map every 10 steps
             if i % 10 == 0:
-                denoised_coords_ensemble = self.stepper.diffusion_trajectory[f"step_{i}"]["denoised"]
                 with torch.no_grad():
                     model_map_ensemble = self.density_calculator(
-                        denoised_coords_ensemble,
+                        coords_tensor,
                         elements,
                         b_factors,
                         occupancies,
@@ -470,10 +495,22 @@ class DensityGuidedDiffusion:
                 step_ensemble.tofile(f"{output_dir}/step_{i}_ensemble.cif")
 
         final_coords_tensor = self.stepper.diffusion_trajectory[
-            f"step_{self.stepper.current_step - 1}"
+            f"step_{i}"
         ]["coords"]
         ensemble_size = final_coords_tensor.shape[0]
         final_structures = []
+
+        with torch.no_grad():
+            model_map_ensemble = self.density_calculator(
+                final_coords_tensor,
+                elements,
+                b_factors,
+                occupancies,
+                active
+            )
+        summed_map_array = model_map_ensemble.sum(0) 
+        # Use the existing XMap object to save the calculated density
+        self.density_calculator.xmap.tofile(f"{output_dir}/final_map.ccp4", density=summed_map_array)
 
         for j in range(ensemble_size):
             structure = copy.deepcopy(self.structure)

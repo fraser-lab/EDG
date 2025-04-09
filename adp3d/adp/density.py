@@ -232,44 +232,48 @@ class XMap_torch:
                 *[torch.arange(s, device=device) for s in grid_shape], indexing="ij"
             ),
             dim=-1,
-        ).float()
+        ).float() # [z, y, x, 3]
 
-        base_coords = base_coords + self.offset
         base_coords = base_coords.reshape(1, -1, 3)  # [1, z*y*x, 3]
         grid_shape_tensor = torch.tensor(grid_shape, device=device)
+        grid_shape_tensor_xyz = torch.tensor(grid_shape[::-1], device=device, dtype=self.t_vectors.dtype) # [nx, ny, nz]
 
-        # R_matrices: [n_ops, 3, 3], base_coords: [1, z*y*x, 3]
-        # Result: [n_ops, z*y*x, 3]
-        rotated_coords = torch.einsum("nij,bkj->nki", self.R_matrices, base_coords)
+        base_coords_xyz = base_coords[..., [2, 1, 0]] # [1, z*y*x, 3] -> (x,y,z order)
 
-        translated_coords = rotated_coords + self.t_vectors.unsqueeze(
+        # Apply rotation to (x, y, z) coordinates
+        rotated_coords_xyz = torch.matmul(base_coords_xyz, self.R_matrices.transpose(-1,-2)) # [1, z*y*x, 3] @ [n_ops, 3, 3] -> [n_ops, z*y*x, 3] (x,y,z order)
+
+
+        # Apply translation scaled by (nx, ny, nz)
+        translated_coords_xyz = rotated_coords_xyz + self.t_vectors.unsqueeze(
             1
-        ) * grid_shape_tensor.unsqueeze(0).unsqueeze(0)
+        ) * grid_shape_tensor_xyz.view(1,1,3) # [n_ops, z*y*x, 3] (x,y,z order)
 
-        translated_coords = translated_coords % grid_shape_tensor.unsqueeze(
-            0
-        ).unsqueeze(0)
+        translated_coords_zyx = translated_coords_xyz[..., [2, 1, 0]] # [n_ops, z*y*x, 3] (z,y,x order)
+        translated_coords_zyx = translated_coords_zyx % grid_shape_tensor.view(1, 1, 3) # Apply modulo in z,y,x order
 
-        transformed_coords = translated_coords.reshape(n_ops, *grid_shape, 3)
 
+        transformed_coords = translated_coords_zyx.reshape(n_ops, *grid_shape, 3) # [n_ops, z, y, x, 3] (z,y,x order)
+
+        # Normalize coordinates to [-1, 1] for grid_sample
         normalized_coords = (
             transformed_coords
-            / (grid_shape_tensor.unsqueeze(0).unsqueeze(0).unsqueeze(0) - 1)
+            / grid_shape_tensor.view(1, 1, 1, 1, 3) # Use z,y,x shape for normalization
         ) * 2 - 1
 
         transposed_density = density.unsqueeze(0)  # [1, batch_size, z, y, x]
-
-        expanded_density = transposed_density.expand(n_ops, batch_size, *grid_shape)
+        expanded_density = transposed_density.expand(n_ops, batch_size, *grid_shape) # [n_ops, batch_size, z, y, x]
+        normalized_coords_xyz = normalized_coords[..., [2, 1, 0]] # [n_ops, z, y, x, 3] (x,y,z order for sampling)
 
         transformed_density = F.grid_sample(
-            expanded_density,  # [n_ops, batch_size, *grid_shape]
-            normalized_coords,  # [n_ops, z, y, x, 3]
+            expanded_density,  # Input: [n_ops, batch_size, z, y, x] (N, C, D, H, W)
+            normalized_coords_xyz,  # Grid: [n_ops, z, y, x, 3] (N, D, H, W, 3) expected order (x,y,z)
             mode="bilinear",
-            align_corners=True,
+            align_corners=False,
             padding_mode="border",
-        )  # Result: [n_ops, batch_size, *grid_shape]
+        )  # Result: [n_ops, batch_size, z, y, x]
 
-        summed_density = transformed_density.sum(dim=0)  # [batch_size, *grid_shape]
+        summed_density = transformed_density.sum(dim=0)  # [batch_size, z, y, x]
 
         return summed_density
 
@@ -309,6 +313,8 @@ class DifferentiableTransformer(torch.nn.Module):
             Space group number, by default None (in which case it is expected from the XMap unit cell).
         device : torch.device, optional
             Device to use for computations, by default 'cpu'.
+        dtype : torch.dtype, optional
+            Data type for computations, by default None (float32).
         """
         super().__init__()
         self.device = device
@@ -334,7 +340,6 @@ class DifferentiableTransformer(torch.nn.Module):
             device=self.device,
             dtype=self.scattering_params.dtype,
         )
-
         self._setup_transforms()
 
     def _setup_transforms(self) -> None:
@@ -364,6 +369,8 @@ class DifferentiableTransformer(torch.nn.Module):
             "grid_to_cartesian",
             torch.tensor(grid_to_cartesian).to(dtype=self.dtype, device=self.device),
         )
+
+
 
     def forward(
         self,
@@ -441,6 +448,75 @@ class DifferentiableTransformer(torch.nn.Module):
         final_density = self.xmap.apply_symmetry(base_density)
 
         return final_density
+
+    def create_mask(
+        self,
+        coordinates: torch.Tensor,
+        radius: float
+    ) -> torch.Tensor:
+        """Create a boolean mask volume around atoms within a radius, considering symmetry.
+
+        Parameters
+        ----------
+        coordinates : torch.Tensor
+            Cartesian coordinates of atoms, shape (n_atoms, 3).
+            Assumes input coordinates are on the correct device.
+        radius : float
+            Radius in Ångstroms to carve around atoms.
+
+        Returns
+        -------
+        torch.Tensor
+            Boolean mask tensor of shape (grid_shape).
+        """
+        device = self.device
+        dtype = self.dtype
+        grid_shape = self.grid_shape
+        n_atoms = coordinates.shape[0]
+        radius2 = radius * radius
+
+        if n_atoms == 0:
+            return torch.zeros(grid_shape, device=device, dtype=torch.bool)
+
+        grid_coordinates = self._compute_grid_coordinates(coordinates.unsqueeze(0)).squeeze(0)
+
+        max_extent_voxel = torch.ceil(radius / torch.min(self.xmap.voxelspacing)).int().item()
+
+        nearby_grid_indices = torch.arange(-max_extent_voxel, max_extent_voxel + 1, device=device)
+        nearby_grid = torch.stack(
+            torch.meshgrid(nearby_grid_indices, nearby_grid_indices, nearby_grid_indices, indexing='ij'),
+            dim=-1
+        ).reshape(-1, 3).to(dtype) # Shape [n_nearby, 3] (z, y, x order)
+
+        mask_volume = torch.zeros(grid_shape, device=device, dtype=torch.bool)
+        grid_shape_tensor = torch.tensor(grid_shape, device=device)
+
+        coord_floored = torch.floor(grid_coordinates).long() # [n_atoms, 3]
+
+        # Shape: [n_atoms, n_nearby, 3]
+        grid_points_abs = (coord_floored.unsqueeze(1) + nearby_grid.unsqueeze(0)) % grid_shape_tensor.view(1, 1, 3)
+
+        # Shape: [n_atoms, n_nearby, 3]
+        delta_grid = grid_coordinates.unsqueeze(1) - grid_points_abs.to(dtype)
+
+        # Shape: [n_atoms, n_nearby, 3]
+        delta_cartesian = torch.matmul(delta_grid, self.grid_to_cartesian.T)
+        # Shape: [n_atoms, n_nearby]
+        distances2 = torch.sum(delta_cartesian * delta_cartesian, dim=-1)
+
+        within_radius_mask = distances2 <= radius2
+
+        points_to_mark = grid_points_abs[within_radius_mask].long()
+
+        if points_to_mark.numel() > 0:
+            mask_volume[points_to_mark[:, 0], points_to_mark[:, 1], points_to_mark[:, 2]] = True
+
+        # apply_symmetry expects batch dimension and float input
+        symmetric_mask_float = self.xmap.apply_symmetry(mask_volume.float().unsqueeze(0)).squeeze(0)
+
+        final_mask = symmetric_mask_float > 1e-6
+
+        return final_mask
 
     def _compute_radial_densities(
         self, elements: torch.Tensor, b_factors: torch.Tensor
@@ -852,6 +928,49 @@ def normalize(t: torch.Tensor) -> torch.Tensor:
     return torch.view_as_complex(
         torch.cat([real_part[..., None], imag_part[..., None]], -1)
     )
+
+
+def scale_map(
+    xmap_array: torch.Tensor, model_map_array: torch.Tensor, mask: torch.Tensor
+) -> torch.Tensor:
+    """Scale xmap_array to match model_map_array based on values within the mask.
+
+    Parameters
+    ----------
+    xmap_array : torch.Tensor
+        The experimental map array to be scaled.
+    model_map_array : torch.Tensor
+        The calculated model map array used as the reference for scaling.
+    mask : torch.Tensor
+        A boolean mask indicating the regions to use for calculating scaling factors.
+
+    Returns
+    -------
+    torch.Tensor
+        The scaled xmap_array.
+    """
+    if not mask.any():
+        warnings.warn("Mask for map scaling is empty. Using all map.")
+        mask = torch.ones_like(xmap_array).bool()
+
+    xmap_masked = xmap_array[mask]
+    model_masked = model_map_array[mask]
+
+    xmap_masked_mean = xmap_masked.mean()
+    model_masked_mean = model_masked.mean()
+
+    xmap_masked_centered = xmap_masked - xmap_masked_mean
+    model_masked_centered = model_masked - model_masked_mean
+
+    s2 = torch.dot(model_masked_centered, xmap_masked_centered)
+    s1 = torch.dot(xmap_masked_centered, xmap_masked_centered)
+
+    scaling_factor = s2 / s1
+    k = model_masked_mean - scaling_factor * xmap_masked_mean
+
+    scaled_xmap_array = scaling_factor * xmap_array + k
+
+    return scaled_xmap_array
 
 
 def to_f_density(map: torch.Tensor) -> torch.Tensor:
