@@ -398,6 +398,8 @@ class DiffusionStepper:
         return_denoised: bool = False,
         augmentation: bool = True,
         align_to_input: bool = True,
+        alignment_reverse_diffusion: bool = True,
+        alignment_weights: Optional[torch.Tensor] = None,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         """Execute a single diffusion denoising step.
 
@@ -411,6 +413,10 @@ class DiffusionStepper:
             Whether to apply augmentation, by default True
         align_to_input : bool, optional
             Whether to align the output coordinates to the initial input coordinates (if provided during initialization), by default True.
+        alignment_reverse_diffusion : bool, optional
+            Whether to align the noised coordinates to the denoised coordinates, by default True.
+        alignment_weights : Optional[torch.Tensor], optional
+            Weights for alignment of shape (batch, num_atoms). If None, uses the identity matrix. By default None.
 
         Returns
         -------
@@ -471,14 +477,18 @@ class DiffusionStepper:
             )
 
         # Alignment reverse diffusion
-        atom_coords_noisy = weighted_rigid_align(
-            atom_coords_noisy.float(),
-            atom_coords_denoised.float(),
-            atom_mask.float(),
-            atom_mask.float(),
-        )
-
-        atom_coords_noisy = atom_coords_noisy.to(atom_coords_denoised)
+        if alignment_reverse_diffusion:
+            alignment_weights_reverse = (
+                alignment_weights.float()
+                if alignment_weights is not None
+                else atom_mask.float()
+            )
+            atom_coords_noisy = weighted_rigid_align(
+                atom_coords_noisy.float(),
+                atom_coords_denoised.float(),
+                alignment_weights_reverse,
+                atom_mask.float(),
+            ).to(atom_coords_denoised)
 
         denoised_over_sigma = (atom_coords_noisy - atom_coords_denoised) / t_hat
         atom_coords_next: torch.Tensor = (
@@ -494,10 +504,15 @@ class DiffusionStepper:
                 raise ValueError(
                     "No initial input coordinates found in cached diffusion init. Please change from align_to_input if you are not using partial diffusion."
                 )
+            alignment_weights_input = (
+                alignment_weights.float()
+                if alignment_weights is not None
+                else atom_mask.float()
+            )
             atom_coords_next = weighted_rigid_align(
                 atom_coords_next.float(),
                 self.cached_diffusion_init["init_coords"].float(),
-                atom_mask.float(),
+                alignment_weights_input,
                 atom_mask.float(),
             ).to(atom_coords_next)
 
@@ -522,194 +537,3 @@ class DiffusionStepper:
         else:
             return atom_coords_next
 
-
-class DensityGuidedDiffusionStepper(DiffusionStepper):
-    """Controls fine-grained diffusion steps using the pretrained Boltz1 model and guidance via the diffusion update"""
-
-    def step(
-        self,
-        atom_coords: torch.Tensor,
-        density_loss: Callable,
-        guidance_scale: float = 0.1,
-        return_denoised: bool = False,
-        augmentation: bool = True,
-        selection: Optional[NDArray[np.bool_]] = None,
-    ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
-        """Execute a single diffusion denoising step with density guidance.
-
-        Parameters
-        ----------
-        atom_coords : torch.Tensor
-            Current atomic coordinates of shape (batch, num_atoms, 3).
-        density_score : Callable
-            Function that takes in the current atomic coordinates and returns the loss as a Tensor
-        guidance_scale : float, optional
-            Scale factor for applying the density gradient guidance, by default 0.1.
-        return_denoised : bool, optional
-            Whether to return the fully denoised coordinate prediction alongside the next step coordinates, by default False.
-        augmentation : bool, optional
-            Whether to apply random centering augmentation, by default True.
-        selection : Optional[NDArray[int]], optional
-            Indices of atoms to apply diffusion to. If None, applies to all atoms. By default None.
-
-        Returns
-        -------
-        torch.Tensor or Tuple[torch.Tensor, torch.Tensor, float]
-            Coordinates after a single guided diffusion step.
-            If `return_denoised` is True, returns a tuple containing the next step
-            coordinates and the fully denoised coordinate prediction for the current step.
-            The third element is the guidance loss.
-        """
-        # Get cached representations
-        s = self.cached_representations["s"]
-        z = self.cached_representations["z"]
-        s_inputs = self.cached_representations["s_inputs"]
-        relative_position_encoding = self.cached_representations[
-            "relative_position_encoding"
-        ]
-        feats = self.cached_representations["feats"]
-        multiplicity = self.cached_diffusion_init[
-            "diffusion_samples"
-        ]  # batch is regulated by dataloader, this lets you do ensemble prediction
-        pad_mask = feats["atom_pad_mask"].squeeze().bool()
-
-        # Get cached diffusion info
-        atom_mask: torch.Tensor = self.cached_diffusion_init["atom_mask"]
-        sigma_tm, sigma_t, gamma = self.cached_diffusion_init["sigmas_and_gammas"][
-            self.current_step
-        ]
-        sigma_tm, sigma_t, gamma = sigma_tm.item(), sigma_t.item(), gamma.item()
-
-        t_hat = sigma_tm * (1 + gamma)
-        eps = (
-            self.model.structure_module.noise_scale
-            * sqrt(t_hat**2 - sigma_tm**2)
-            * torch.randn(atom_coords.shape, device=self.device)
-        )
-
-        # NOTE: This might create some interesting pathologies, but in principle this augmentation should not be needed post-training
-        if augmentation:
-            atom_coords = center_random_augmentation(
-                atom_coords,
-                atom_mask,
-                augmentation=True,
-            )
-
-        # NOTE: only apply noise to the selected atoms, this is probably not good for staying on the diffusion manifold
-        # atom_coords_noisy = atom_coords.clone()
-        # if selection is not None:
-        #     selection = torch.from_numpy(selection).to(self.device)
-        #     atom_coords_noisy[:, selection, :] = atom_coords[:, selection, :] + eps[:, selection, :]
-        # else:
-        #     atom_coords_noisy += eps
-        atom_coords_noisy = atom_coords + eps
-
-        with torch.no_grad():
-            atom_coords_denoised, _ = (
-                self.model.structure_module.preconditioned_network_forward(
-                    atom_coords_noisy,
-                    t_hat,
-                    training=False,
-                    network_condition_kwargs=dict(
-                        s_trunk=s,
-                        z_trunk=z,
-                        s_inputs=s_inputs,
-                        feats=feats,
-                        relative_position_encoding=relative_position_encoding,
-                        multiplicity=multiplicity,
-                    ),
-                )
-            )
-
-        # replace the unselected (not in segment) atoms in denoised with the initial structure coords
-        # NOTE: This is from the Maddipatla paper, but I would probably do something different?
-        if selection is not None:
-            selection = torch.from_numpy(selection).to(self.device) # TODO: set this up in a more efficient way
-            inverse_selector = torch.ones(atom_coords_denoised.shape[1], device=self.device).bool()
-            inverse_selector[selection] = False
-            atom_coords_denoised[:, inverse_selector, :] = self.cached_diffusion_init[
-                "init_coords"
-            ][:, inverse_selector, :]
-
-        if augmentation:
-            atom_coords_noisy = weighted_rigid_align(
-                atom_coords_noisy.float(),
-                atom_coords_denoised.float(),
-                atom_mask.float(),
-                atom_mask.float(),
-            )
-
-        with torch.set_grad_enabled(True):  # Explicit gradient context
-            masked_coords = atom_coords_noisy[:, pad_mask, :]
-            coords_to_grad = masked_coords.detach().clone()
-            coords_to_grad = coords_to_grad.requires_grad_(True)
-
-            # TODO: only compute density and gradient for partially diffused atoms in segment (requires map subtraction)
-            loss = density_loss(coords_to_grad)
-            loss.backward()
-
-            if coords_to_grad.grad is None:
-                raise ValueError("Gradient computation failed - tensor is not a leaf")
-
-            full_grad = torch.zeros_like(atom_coords_noisy)
-
-            # only use gradient on partially diffused atoms in segment
-            # if selection is not None:
-            #     selector = torch.from_numpy(selection).to(self.device)
-            #     full_grad[:, selector, :] = coords_to_grad.grad[:, selector, :]
-            # else:
-            full_grad[:, pad_mask, :] = coords_to_grad.grad # use whole grad each time
-
-        atom_coords_noisy = atom_coords_noisy.to(atom_coords_denoised)
-
-        denoised_over_sigma = (atom_coords_noisy - atom_coords_denoised) / t_hat
-
-        scaled_guidance_grad = (
-            torch.linalg.norm(denoised_over_sigma)
-            / torch.linalg.norm(full_grad)
-            * full_grad
-        )
-
-        denoised_over_sigma = (
-            denoised_over_sigma + scaled_guidance_grad * guidance_scale
-        )
-
-        atom_coords_next: torch.Tensor = (
-            atom_coords_noisy
-            + self.model.structure_module.step_scale
-            * (sigma_t - t_hat)
-            * denoised_over_sigma
-        )
-
-        # Align to input instead of alignment reverse diffusion
-        # if align_to_input: # TODO: I don't think this is needed when replacing all but segment
-        #     if self.cached_diffusion_init["init_coords"] is None:
-        #         raise ValueError(
-        #             "No initial input coordinates found in cached diffusion init. Please change from align_to_input if you are not using partial diffusion."
-        #         )
-        #     atom_coords_next = weighted_rigid_align(
-        #         atom_coords_next.float(),
-        #         self.cached_diffusion_init["init_coords"].float(),
-        #         atom_mask.float(),
-        #         atom_mask.float(),
-        #     ).to(atom_coords_next)
-
-        unpad_coords_next = atom_coords_next[
-            :, pad_mask, :
-        ]  # unpad the coords to B, N_unpad, 3
-        unpad_coords_denoised = atom_coords_denoised[
-            :, pad_mask, :
-        ]  # unpad the coords to B, N_unpad, 3
-
-        # Store unpadded in trajectory (0 indexed)
-        self.diffusion_trajectory[f"step_{self.current_step}"] = {
-            "coords": unpad_coords_next.clone(),
-            "denoised": unpad_coords_denoised.clone(),  # the overall prediction from this current level (no noise mixture)
-        }
-
-        self.current_step += 1  # NOTE: current step to execute
-
-        if return_denoised:
-            return atom_coords_next, atom_coords_denoised, -loss.item()
-        else:
-            return atom_coords_next, -loss.item()

@@ -25,7 +25,7 @@ from boltz.model.model import Boltz1
 from boltz.data.feature.pad import pad_dim
 
 from adp3d.data import Structure
-from adp3d.adp.density import (
+from adp3d.adp.modules.density import (
     DifferentiableTransformer,
     XMap_torch,
     normalize,
@@ -40,7 +40,8 @@ from adp3d.data.sf import (
     ELECTRON_SCATTERING_FACTORS,
     ATOMIC_NUM_TO_ELEMENT,
 )
-from adp3d.adp.diffusion import DiffusionStepper, DensityGuidedDiffusionStepper
+from adp3d.adp.modules.diffusion import DiffusionStepper
+from adp3d.adp.modules.guided_diffusion import DensityGuidedDiffusionStepper
 from adp3d.utils.utility import try_gpu
 
 
@@ -442,6 +443,8 @@ class DensityGuidedDiffusion:
                 density_loss=density_loss,
                 guidance_scale=step_lr,
                 augmentation=True,
+                align_to_input=True,
+                alignment_reverse_diffusion=False, # FIXME: Breaks the computational graph
                 selection=(
                     substructure_conditioning_kwargs["selection"]
                     if substructure_conditioning_kwargs is not None
