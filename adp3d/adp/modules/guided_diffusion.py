@@ -177,19 +177,13 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
             * torch.randn(atom_coords.shape, device=self.device)
         )
 
-        # replace the unselected (not in segment) atoms in denoised with the initial structure coords for constraint
-        # NOTE: The Maddipatla paper does this after denoising, which I think is probably a mistake?
-        if selection is not None:
-            selection = torch.from_numpy(selection).to(
-                self.device
-            )  # TODO: set this up in a more efficient way
-            inverse_selector = torch.ones(
-                atom_coords.shape[1], device=self.device
-            ).bool()
-            inverse_selector[selection] = False
-            atom_coords[:, inverse_selector, :] = self.cached_diffusion_init[
-                "init_coords"
-            ][:, inverse_selector, :]
+        selection = torch.from_numpy(selection).to(
+            self.device
+        )
+        inverse_selector = torch.ones(
+            atom_coords.shape[1], device=self.device
+        ).bool()
+        inverse_selector[selection] = False
 
         # NOTE: This might create some interesting pathologies if off
         if augmentation:
@@ -199,9 +193,25 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
                 augmentation=True,
             )
 
+        atom_coords_noisy = atom_coords + eps
+
+        # replace the unselected (not in segment) atoms in denoised with the initial structure coords for constraint
+        # NOTE: The Maddipatla paper does this after denoising, which I think is probably a mistake?
+        # if selection is not None:
+        #     selection = torch.from_numpy(selection).to(
+        #         self.device
+        #     )
+        #     inverse_selector = torch.ones(
+        #         atom_coords_noisy.shape[1], device=self.device
+        #     ).bool()
+        #     inverse_selector[selection] = False
+        #     atom_coords_noisy[:, inverse_selector, :] = self.cached_diffusion_init[
+        #         "init_coords"
+        #     ][:, inverse_selector, :]
+
         # need to update noisy coords even though loss is on denoised coords,
         # therefore we need to track the gradient of the noisy coords
-        atom_coords_noisy = (atom_coords + eps).detach().requires_grad_(True)
+        atom_coords_noisy = atom_coords_noisy.detach().requires_grad_(True)
 
         atom_coords_denoised, _ = (
             self.model.structure_module.preconditioned_network_forward(
@@ -250,11 +260,20 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
 
         masked_coords = atom_coords_denoised_aligned[:, pad_mask, :]
 
-        # TODO: only compute density and gradient for partially diffused atoms in segment (requires map subtraction)
-        loss = density_loss(masked_coords)
-        loss.backward()
+        density_score, substructure_score = density_loss(masked_coords)
+        density_score.backward(retain_graph=True)
+        density_grad = atom_coords_noisy_aligned.grad.clone()
+        substructure_score.backward()
+        substructure_grad = atom_coords_noisy_aligned.grad.clone()
+        atom_coords_noisy_aligned.grad = None
 
-        grad_noisy = atom_coords_noisy_aligned.grad
+        # only apply gradient for atoms in selection
+        grad_noisy = torch.zeros_like(atom_coords_noisy_aligned)
+        if selection is not None:
+            grad_noisy[:, selection, :] = density_grad[:, selection, :]
+            grad_noisy[:, inverse_selector, :] = substructure_grad[:, inverse_selector, :]
+        else:
+            grad_noisy = density_grad + substructure_grad
 
         if grad_noisy is None:
             raise ValueError("Gradient computation w.r.t. noisy coordinates failed.")
@@ -313,6 +332,6 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
         self.current_step += 1  # NOTE: current step to execute
 
         if return_denoised:
-            return atom_coords_next.detach(), atom_coords_denoised.detach(), -loss.item()
+            return atom_coords_next.detach(), atom_coords_denoised.detach(), -(density_score + substructure_score).item()
         else:
-            return atom_coords_next.detach(), -loss.item()
+            return atom_coords_next.detach(), -(density_score + substructure_score).item()

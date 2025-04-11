@@ -12,7 +12,7 @@ from pathlib import Path
 import os
 import copy
 from functools import partial
-from typing import Optional, Union, List
+from typing import Optional, Tuple, Union, List
 import warnings
 
 import torch
@@ -207,6 +207,8 @@ class DensityGuidedDiffusion:
             model=model,
         )
 
+        self.initial_centroid: Optional[torch.Tensor] = None
+
     def _setup_scattering_params(self, structure_factors: dict):
         """Set up scattering parameters for density calculation."""
         unique_elements = set(self.structure.e)
@@ -258,10 +260,11 @@ class DensityGuidedDiffusion:
         b_factors: torch.Tensor,
         occupancies: torch.Tensor,
         active: torch.Tensor,
+        initial_centroid: torch.Tensor,
         norm: int = 1,
         substructure_conditioning_kwargs: dict = None,
-    ) -> torch.Tensor:
-        """Calculate density score for current coordinates.
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Calculate density score and optionally substructure score for current coordinates.
 
         Parameters
         ----------
@@ -276,6 +279,8 @@ class DensityGuidedDiffusion:
             Occupancies for each atom, shape [batch, atoms]
         active : torch.Tensor
             Mask for active atoms, shape [batch, atoms]
+        initial_centroid : torch.Tensor
+            Centroid of the original input coordinates, shape [batch, 1, 3]
         norm : int, optional
             Which norm to use for the score, by default 1
         substructure_conditioning_kwargs : dict, optional
@@ -290,35 +295,42 @@ class DensityGuidedDiffusion:
 
         Returns
         -------
-        torch.Tensor
-            Density correlation score
+        Tuple[torch.Tensor, torch.Tensor]
+            Density score and substructure score
         """
+        # Translate coordinates back to the original frame for density calculation
+        coords_translated = coords + initial_centroid
+
+        substructure_score = None
         if substructure_conditioning_kwargs is not None:
-            conditioning_coords = substructure_conditioning_kwargs["coords"]
+            # Translate conditioning coords as well
+            conditioning_coords = substructure_conditioning_kwargs["coords"] + initial_centroid
             selection = substructure_conditioning_kwargs["selection"]
             scale = substructure_conditioning_kwargs["scale"]
             inverse_selector = torch.ones(conditioning_coords.shape[1], device=self.device).bool()
             inverse_selector[selection] = False
-            conditioning_coords = conditioning_coords[:, inverse_selector, :]
+            # Use translated coordinates for comparison
+            conditioning_coords_subset = conditioning_coords[:, inverse_selector, :]
+            current_coords_subset = coords_translated[:, inverse_selector, :]
 
             # compute the difference between the conditioning coordinates and the current coords
-            substructure_score = (
+            substructure_score = - (
                 scale
                 / (coords.shape[0])
-                * torch.linalg.norm(coords[:, inverse_selector, :] - conditioning_coords)
+                * torch.linalg.norm(current_coords_subset - conditioning_coords_subset)
             )
 
         model_map = self.density_calculator(
-            coords, elements, b_factors, occupancies, active
+            coords_translated, elements, b_factors, occupancies, active
         ).sum(
             0
         )  # TODO: dont use normalization, use e-/A^3
-        return (
-            -torch.linalg.norm(
+
+        density_correlation_score = -torch.linalg.norm(
                 torch.flatten(self.y) - torch.flatten(model_map), ord=norm
             )
-            - substructure_score
-        )
+
+        return density_correlation_score, substructure_score
         # # SiLU (swish) to penalize the model going out into solvent, but not penalize being not in exactly the density as much
         # return torch.linalg.norm(torch.nn.SiLU(torch.flatten(self.y) - torch.flatten(model_map)))
 
@@ -392,34 +404,61 @@ class DensityGuidedDiffusion:
         occupancies = occupancies.to(self.device).float()
         active = active.to(self.device).bool()
 
+        # Calculate and store initial centroid, then center coordinates
+        self.initial_centroid = (coords * active.unsqueeze(-1)).sum(dim=1, keepdim=True) / active.sum(dim=1, keepdim=True).unsqueeze(-1)
+        coords_centered = coords - self.initial_centroid
+
         if partial_diffusion:
+            if "structure" in diffusion_kwargs:
+                warnings.warn("Partial diffusion with structure input not fully handled regarding centering. Ensure provided structure coords are centered if needed.")
+            
+            if 'init_coords' not in diffusion_kwargs:
+                 diffusion_kwargs['init_coords'] = coords_centered
+
             self.stepper.initialize_partial_diffusion(
                 num_samples=num_samples, sampling_steps=num_steps, **diffusion_kwargs
             )
         else:
             self.stepper.initialize_diffusion(
-                num_samples=num_samples, sampling_steps=num_steps, init_coords=coords
+                num_samples=num_samples, sampling_steps=num_steps, init_coords=coords_centered
             )
+
         step_coords = self.stepper.cached_diffusion_init["atom_coords"]
+
+        # TODO: implement Pseudo-B alignment weights from ROCKET
 
         if substructure_conditioning_kwargs is not None:
             substructure_conditioning_kwargs["coords"] = coords
+            selection = torch.from_numpy(substructure_conditioning_kwargs["selection"]).to(
+                self.device
+            )
+            inverse_selector = torch.ones(
+                step_coords.shape[1], device=self.device
+            ).bool()
+            inverse_selector[selection] = False
+            coords_centered_padded = pad_dim(coords_centered, 1, step_coords.shape[1] - coords_centered.shape[1])
+            # replace the unselected (not in segment) atoms in denoised with the initial structure coords for constraint
+            # NOTE: inverse_selector[:coords.shape[1]] is used to ensure the shape matches, as coords is not padded
+            # and padded 0s are added at the end of step_coords
+            step_coords[:, inverse_selector, :] = coords_centered_padded[:, inverse_selector, :]
             density_loss = partial(
                 self.density_score,
                 elements=elements,
                 b_factors=b_factors,
                 occupancies=occupancies,
                 active=active,
+                initial_centroid=self.initial_centroid,
                 norm=1,
                 substructure_conditioning_kwargs=substructure_conditioning_kwargs,
             )
         else:
-            density_loss = partial(
+            density_loss = partial( # TODO: this will break downstream as substructure_score will be None
                 self.density_score,
                 elements=elements,
                 b_factors=b_factors,
                 occupancies=occupancies,
                 active=active,
+                initial_centroid=self.initial_centroid,
                 norm=1,
             )
 
@@ -471,14 +510,17 @@ class DensityGuidedDiffusion:
             coords_tensor = self.stepper.diffusion_trajectory[
                 f"step_{i}"
             ]["coords"]
-            ensemble_size = coords_tensor.shape[0]
+            # Translate coords back before saving intermediate results
+            coords_tensor_translated = coords_tensor + self.initial_centroid
+
+            ensemble_size = coords_tensor_translated.shape[0]
             step_structures = []
 
             # FIXME: debugging, save calculated model and map every 10 steps
             if i % 10 == 0:
                 with torch.no_grad():
                     model_map_ensemble = self.density_calculator(
-                        coords_tensor,
+                        coords_tensor_translated,
                         elements,
                         b_factors,
                         occupancies,
@@ -490,7 +532,8 @@ class DensityGuidedDiffusion:
 
                 for j in range(ensemble_size):
                     structure = copy.deepcopy(self.structure)
-                    structure.coor = coords_tensor[j].cpu().numpy()
+                    
+                    structure.coor = coords_tensor_translated[j].cpu().numpy()
                     # TODO: Update q and b factors if they are also being optimized or change
                     step_structures.append(structure)
 
@@ -500,12 +543,14 @@ class DensityGuidedDiffusion:
         final_coords_tensor = self.stepper.diffusion_trajectory[
             f"step_{i}"
         ]["coords"]
-        ensemble_size = final_coords_tensor.shape[0]
+        # Translate final coords back before saving
+        final_coords_tensor_translated = final_coords_tensor + self.initial_centroid
+        ensemble_size = final_coords_tensor_translated.shape[0]
         final_structures = []
 
         with torch.no_grad():
             model_map_ensemble = self.density_calculator(
-                final_coords_tensor,
+                final_coords_tensor_translated,
                 elements,
                 b_factors,
                 occupancies,
@@ -517,7 +562,7 @@ class DensityGuidedDiffusion:
 
         for j in range(ensemble_size):
             structure = copy.deepcopy(self.structure)
-            structure.coor = final_coords_tensor[j].cpu().numpy()
+            structure.coor = final_coords_tensor_translated[j].cpu().numpy()
             # TODO: Update q and b factors if necessary for the final state
             final_structures.append(structure)
 
