@@ -7,7 +7,7 @@ import torch
 from adp3d import DensityGuidedDiffusion
 from pathlib import Path
 from adp3d.utils.utility import try_gpu
-from adp3d.adp.density import downsample_fft, to_density
+from adp3d.adp.modules.density import downsample_fft, to_density
 from adp3d.data.io import structure_to_density_input
 from einops import rearrange, repeat
 

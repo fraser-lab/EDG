@@ -299,17 +299,20 @@ class DiffusionStepper:
         sigmas_and_gammas = list(zip(sigmas[:-1], sigmas[1:], gammas[1:]))
 
         # atom position is noise at the beginning
-        atom_coords = (
-            torch.tensor(structure.coor, device=self.device)
-            .float()
-            .unsqueeze(0)
-            .repeat(diffusion_samples, 1, 1)
-        )
+        if isinstance(structure, Structure):
+            atom_coords = (
+                torch.tensor(structure.coor, device=self.device)
+                .float()
+                .unsqueeze(0)
+                .repeat(diffusion_samples, 1, 1)
+            )
+        elif isinstance(structure, torch.Tensor):
+            atom_coords = structure # NOTE: should be handled in optimizer
 
         atom_coords = pad_dim(atom_coords, 1, shape[1] - atom_coords.shape[1])
         init_coords = atom_coords.clone()
         eps = (
-            self.model.structure_module.noise_scale
+            self.model.structure_module.noise_scale # FIXME: Should this be used here?
             * sigmas[-noising_steps - 1]
             * torch.randn(shape, device=self.device)
         )

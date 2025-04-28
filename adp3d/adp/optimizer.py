@@ -198,7 +198,8 @@ class DensityGuidedDiffusion:
         print(f"Saved scaled experimental map to {scaled_map_path}")
 
         diffusion_args = BoltzDiffusionParams(step_scale=step_scale)
-        self.stepper = DensityGuidedDiffusionStepper(
+        # self.stepper = DensityGuidedDiffusionStepper( # FIXME: HERE
+        self.stepper = DiffusionStepper(
             checkpoint_path=ckpt_path,
             data_path=input_path,
             out_dir=output_path,
@@ -409,11 +410,8 @@ class DensityGuidedDiffusion:
         coords_centered = coords - self.initial_centroid
 
         if partial_diffusion:
-            if "structure" in diffusion_kwargs:
-                warnings.warn("Partial diffusion with structure input not fully handled regarding centering. Ensure provided structure coords are centered if needed.")
-            
-            if 'init_coords' not in diffusion_kwargs:
-                 diffusion_kwargs['init_coords'] = coords_centered
+            if 'structure' not in diffusion_kwargs:
+                diffusion_kwargs['structure'] = coords_centered
 
             self.stepper.initialize_partial_diffusion(
                 num_samples=num_samples, sampling_steps=num_steps, **diffusion_kwargs
@@ -429,18 +427,18 @@ class DensityGuidedDiffusion:
 
         if substructure_conditioning_kwargs is not None:
             substructure_conditioning_kwargs["coords"] = coords
-            selection = torch.from_numpy(substructure_conditioning_kwargs["selection"]).to(
-                self.device
-            )
-            inverse_selector = torch.ones(
-                step_coords.shape[1], device=self.device
-            ).bool()
-            inverse_selector[selection] = False
-            coords_centered_padded = pad_dim(coords_centered, 1, step_coords.shape[1] - coords_centered.shape[1])
+            # selection = torch.from_numpy(substructure_conditioning_kwargs["selection"]).to(
+                # self.device
+            # )
+            # inverse_selector = torch.ones(
+                # step_coords.shape[1], device=self.device
+            # ).bool()
+            # inverse_selector[selection] = False
+            # coords_centered_padded = pad_dim(coords_centered, 1, step_coords.shape[1] - coords_centered.shape[1])
             # replace the unselected (not in segment) atoms in denoised with the initial structure coords for constraint
             # NOTE: inverse_selector[:coords.shape[1]] is used to ensure the shape matches, as coords is not padded
             # and padded 0s are added at the end of step_coords
-            step_coords[:, inverse_selector, :] = coords_centered_padded[:, inverse_selector, :]
+            # step_coords[:, inverse_selector, :] = coords_centered_padded[:, inverse_selector, :]
             density_loss = partial(
                 self.density_score,
                 elements=elements,
@@ -452,7 +450,7 @@ class DensityGuidedDiffusion:
                 substructure_conditioning_kwargs=substructure_conditioning_kwargs,
             )
         else:
-            density_loss = partial( # TODO: this will break downstream as substructure_score will be None
+            density_loss = partial( # TODO: this will break downstream in DensityGuidedDiffusionStepper as substructure_score will be None
                 self.density_score,
                 elements=elements,
                 b_factors=b_factors,
@@ -477,27 +475,28 @@ class DensityGuidedDiffusion:
             )
 
             # density guided step using self.density_score
-            step_coords, loss = self.stepper.step(
+            # step_coords, loss = self.stepper.step( # FIXME: HERE
+            step_coords = self.stepper.step(
                 step_coords,
-                density_loss=density_loss,
-                guidance_scale=step_lr,
+                # density_loss=density_loss, # FIXME: HERE
+                # guidance_scale=step_lr, # FIXME: HERE
                 augmentation=True,
-                align_to_input=True,
+                align_to_input=False,
                 alignment_reverse_diffusion=False, # FIXME: Breaks the computational graph
-                selection=(
-                    substructure_conditioning_kwargs["selection"]
-                    if substructure_conditioning_kwargs is not None
-                    else None
-                ),
+                # selection=( # FIXME: HERE
+                #     substructure_conditioning_kwargs["selection"]
+                #     if substructure_conditioning_kwargs is not None
+                #     else None
+                # ),
             )
 
             # update the progress bar with negative log likelihood
-            pbar.set_postfix(
-                {
-                    "score": f"{loss:.4f}",
-                }
-            )
-            scores.append(loss)
+            # pbar.set_postfix( # FIXME: HERE
+            #     {
+            #         "score": f"{loss:.4f}",
+            #     }
+            # )
+            # scores.append(loss) # FIXME: HERE
 
             # Gradient descent with momentum # TODO: try others?
             # v_density = 0.9 * v_density + step_lr * full_grad.unsqueeze(0)
@@ -508,7 +507,7 @@ class DensityGuidedDiffusion:
             #     0
             # )
             coords_tensor = self.stepper.diffusion_trajectory[
-                f"step_{i}"
+                f"step_{self.stepper.current_step - 1}"
             ]["coords"]
             # Translate coords back before saving intermediate results
             coords_tensor_translated = coords_tensor + self.initial_centroid
@@ -528,7 +527,7 @@ class DensityGuidedDiffusion:
                     )
                 summed_map_array = model_map_ensemble.sum(0) 
                 # Use the existing XMap object to save the calculated density
-                self.density_calculator.xmap.tofile(f"{output_dir}/step_{i}_map.ccp4", density=summed_map_array)
+                self.density_calculator.xmap.tofile(f"{output_dir}/step_{self.stepper.current_step - 1}_map.ccp4", density=summed_map_array)
 
                 for j in range(ensemble_size):
                     structure = copy.deepcopy(self.structure)
@@ -538,10 +537,10 @@ class DensityGuidedDiffusion:
                     step_structures.append(structure)
 
                 step_ensemble = Ensemble(step_structures)
-                step_ensemble.tofile(f"{output_dir}/step_{i}_ensemble.cif")
+                step_ensemble.tofile(f"{output_dir}/step_{self.stepper.current_step - 1}_ensemble.cif")
 
         final_coords_tensor = self.stepper.diffusion_trajectory[
-            f"step_{i}"
+            f"step_{self.stepper.current_step - 1}"
         ]["coords"]
         # Translate final coords back before saving
         final_coords_tensor_translated = final_coords_tensor + self.initial_centroid

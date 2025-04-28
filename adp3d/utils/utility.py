@@ -36,7 +36,7 @@ def try_gpu():
                              names=['memory.used', 'memory.free'],
                              skiprows=1)
         print('GPU usage:\n{}'.format(gpu_df))
-        gpu_df['memory.free'] = gpu_df['memory.free'].map(lambda x: x.rstrip(' [MiB]'))
+        gpu_df['memory.free'] = gpu_df['memory.free'].map(lambda x: int(x.rstrip(' [MiB]')))
         if gpu_df.empty:
             print("No GPUs found.")
             return torch.device('cpu')
@@ -47,6 +47,6 @@ def try_gpu():
     
     except (subprocess.CalledProcessError, FileNotFoundError) as e:
         print(f"Failed to run nvidia-smi: {e}")
-        return None
+        return torch.device('cpu')
 
     

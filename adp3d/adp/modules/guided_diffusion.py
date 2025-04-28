@@ -196,7 +196,7 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
         atom_coords_noisy = atom_coords + eps
 
         # replace the unselected (not in segment) atoms in denoised with the initial structure coords for constraint
-        # NOTE: The Maddipatla paper does this after denoising, which I think is probably a mistake?
+        # NOTE: The Maddipatla paper does this after denoising
         # if selection is not None:
         #     selection = torch.from_numpy(selection).to(
         #         self.device
@@ -228,6 +228,13 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
                 ),
             )
         )
+
+        # replace the unselected (not in segment) atoms in denoised with the initial structure coords for constraint
+        # NOTE: The Maddipatla paper does this after denoising, which I think is probably a mistake?
+        if selection is not None:
+            atom_coords_denoised[:, inverse_selector, :] = self.cached_diffusion_init[
+                "init_coords"
+            ][:, inverse_selector, :]
 
         if align_to_input:
             alignment_weights = (
