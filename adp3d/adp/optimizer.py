@@ -78,7 +78,7 @@ class DensityGuidedDiffusion:
         structure: str,
         output_path: str,
         em: bool = False,
-        resolution: float = None,
+        resolution: Optional[float] = None,
         step_scale: float = 1.638,  # default step scale, ok results down to 0.8 with higher diversity
         ckpt_path: Path = Path("~/.boltz/boltz1_conf.pkl").expanduser(),
         model: Optional[Boltz1] = None,
@@ -153,13 +153,13 @@ class DensityGuidedDiffusion:
         else:
             try:
                 xmap = XMap.fromfile(y)
-            except:
+            except:  # noqa: E722
                 xmap = XMap.fromfile(
                     y, label=kwargs.get("label", "2FOFCWT,PH2FOFCWT")
                 )  # try 2FO-FC map if initial fails
 
         xmap = XMap_torch(xmap, device=self.device)
-        self.y = xmap.array.float()
+        self.y = xmap.array.float() # type: ignore
 
         scattering_factors = (
             ELECTRON_SCATTERING_FACTORS if em else ATOM_STRUCTURE_FACTORS
@@ -198,8 +198,7 @@ class DensityGuidedDiffusion:
         print(f"Saved scaled experimental map to {scaled_map_path}")
 
         diffusion_args = BoltzDiffusionParams(step_scale=step_scale)
-        # self.stepper = DensityGuidedDiffusionStepper( # FIXME: HERE
-        self.stepper = DiffusionStepper(
+        self.stepper = DensityGuidedDiffusionStepper(
             checkpoint_path=ckpt_path,
             data_path=input_path,
             out_dir=output_path,
@@ -212,7 +211,7 @@ class DensityGuidedDiffusion:
 
     def _setup_scattering_params(self, structure_factors: dict):
         """Set up scattering parameters for density calculation."""
-        unique_elements = set(self.structure.e)
+        unique_elements = set(self.structure.e) # type: ignore
         unique_elements = sorted(
             set(
                 [
@@ -263,7 +262,7 @@ class DensityGuidedDiffusion:
         active: torch.Tensor,
         initial_centroid: torch.Tensor,
         norm: int = 1,
-        substructure_conditioning_kwargs: dict = None,
+        substructure_conditioning_kwargs: Optional[dict] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Calculate density score and optionally substructure score for current coordinates.
 
@@ -300,9 +299,10 @@ class DensityGuidedDiffusion:
             Density score and substructure score
         """
         # Translate coordinates back to the original frame for density calculation
-        coords_translated = coords + initial_centroid
+        coords_translated = coords + initial_centroid # FIXME: Should be a better way to do this
 
-        substructure_score = None
+        # Initialize substructure_score as a zero tensor
+        substructure_score = torch.tensor(0.0, device=self.device)
         if substructure_conditioning_kwargs is not None:
             # Translate conditioning coords as well
             conditioning_coords = substructure_conditioning_kwargs["coords"] + initial_centroid
@@ -340,10 +340,10 @@ class DensityGuidedDiffusion:
         output_dir: str,
         num_steps: int = 200,
         num_samples: int = 1,
-        learning_rate: Union[List, float] = 1e-1,
+        learning_rate: Union[List[float], float] = 1e-1,
         partial_diffusion: bool = False,
-        diffusion_kwargs: dict = None,
-        substructure_conditioning_kwargs: dict = None,
+        diffusion_kwargs: Optional[dict] = None,
+        substructure_conditioning_kwargs: Optional[dict] = None,
     ) -> Structure:
         """Run density-guided optimization.
 
@@ -394,7 +394,7 @@ class DensityGuidedDiffusion:
 
         if resolution == 0.0 or resolution is None:
             if self.density_calculator.xmap.resolution is not None:
-                resolution = self.density_calculator.xmap.resolution.high
+                resolution = self.density_calculator.xmap.resolution.high # type: ignore
             warnings.warn(
                 f"Resolution of input structure is {resolution}. Using 2.0 A instead."
             )
@@ -410,6 +410,8 @@ class DensityGuidedDiffusion:
         coords_centered = coords - self.initial_centroid
 
         if partial_diffusion:
+            if diffusion_kwargs is None:
+                diffusion_kwargs = {}
             if 'structure' not in diffusion_kwargs:
                 diffusion_kwargs['structure'] = coords_centered
 
@@ -464,39 +466,41 @@ class DensityGuidedDiffusion:
         scores = []
 
         if partial_diffusion:
+            noising_steps = diffusion_kwargs.get("noising_steps", num_steps // 4) if diffusion_kwargs else num_steps // 4
             pbar = tqdm(
-                range(diffusion_kwargs["noising_steps"]), desc="Optimizing structure"
+                range(noising_steps), desc="Optimizing structure"
             )
         else:
             pbar = tqdm(range(num_steps), desc="Optimizing structure")
         for i in pbar:
-            step_lr = (
-                learning_rate if isinstance(learning_rate, float) else learning_rate[i]
-            )
+            if isinstance(learning_rate, float):
+                step_lr = learning_rate
+            else:
+                # Ensure i is within the bounds of the learning_rate list
+                step_lr = learning_rate[min(i, len(learning_rate)-1)] # type: ignore
 
             # density guided step using self.density_score
-            # step_coords, loss = self.stepper.step( # FIXME: HERE
-            step_coords = self.stepper.step(
-                step_coords,
-                # density_loss=density_loss, # FIXME: HERE
-                # guidance_scale=step_lr, # FIXME: HERE
-                augmentation=True,
+            step_coords, loss = self.stepper.step(
+                step_coords, # type: ignore
+                density_loss=density_loss,
+                guidance_scale=step_lr,
+                augmentation=False,
                 align_to_input=False,
                 alignment_reverse_diffusion=False, # FIXME: Breaks the computational graph
-                # selection=( # FIXME: HERE
-                #     substructure_conditioning_kwargs["selection"]
-                #     if substructure_conditioning_kwargs is not None
-                #     else None
-                # ),
+                selection=(
+                    substructure_conditioning_kwargs["selection"]
+                    if substructure_conditioning_kwargs is not None
+                    else None
+                ),
             )
 
             # update the progress bar with negative log likelihood
-            # pbar.set_postfix( # FIXME: HERE
-            #     {
-            #         "score": f"{loss:.4f}",
-            #     }
-            # )
-            # scores.append(loss) # FIXME: HERE
+            pbar.set_postfix(
+                {
+                    "score": f"{loss:.4f}",
+                }
+            )
+            scores.append(loss)
 
             # Gradient descent with momentum # TODO: try others?
             # v_density = 0.9 * v_density + step_lr * full_grad.unsqueeze(0)
@@ -508,7 +512,7 @@ class DensityGuidedDiffusion:
             # )
             coords_tensor = self.stepper.diffusion_trajectory[
                 f"step_{self.stepper.current_step - 1}"
-            ]["coords"]
+            ]["coords"] # type: ignore
             # Translate coords back before saving intermediate results
             coords_tensor_translated = coords_tensor + self.initial_centroid
 
@@ -541,7 +545,7 @@ class DensityGuidedDiffusion:
 
         final_coords_tensor = self.stepper.diffusion_trajectory[
             f"step_{self.stepper.current_step - 1}"
-        ]["coords"]
+        ]["coords"] # type: ignore
         # Translate final coords back before saving
         final_coords_tensor_translated = final_coords_tensor + self.initial_centroid
         ensemble_size = final_coords_tensor_translated.shape[0]
@@ -568,4 +572,4 @@ class DensityGuidedDiffusion:
         final_ensemble = Ensemble(final_structures)
         final_ensemble.tofile(f"{output_dir}/final_ensemble.cif")
 
-        return final_structures, scores
+        return final_structures, scores # type: ignore

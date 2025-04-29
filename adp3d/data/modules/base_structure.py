@@ -1,6 +1,7 @@
+# type: ignore
+
 import logging
 import os
-from collections import defaultdict
 from collections.abc import Iterable
 from operator import eq, gt, ge, le, lt
 
@@ -186,9 +187,9 @@ class _BaseStructure:
         return selection
 
     def tofile(self, fname, scale=None, cryst=None):
-        if scale != None:
+        if scale is not None:
             self.scale = scale
-        if scale != None:
+        if scale is not None:
             self.cryst_info = cryst
         extension = os.path.splitext(fname)[1]
         if extension == ".pdb":

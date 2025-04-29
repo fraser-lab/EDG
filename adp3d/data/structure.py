@@ -1,3 +1,5 @@
+# type: ignore
+
 import numpy as np
 import copy
 import itertools
@@ -1045,7 +1047,7 @@ class _Conformer(_BaseStructure):
         if not self._residues:
             self.build_residues()
         _ligands = [
-            l for l in self._residues if isinstance(l, _Ligand) and l.natoms > 3
+            l for l in self._residues if isinstance(l, _Ligand) and l.natoms > 3 # noqa: E741
         ]
         return _ligands
 
@@ -1200,10 +1202,11 @@ class _Segment(_BaseStructure):
         # Make an orthogonal axis system based on 3 atoms
         # TODO: Use .math.gram_schmidt_orthonormal_zx (or something similar)
         #       Note that here, the axes are 1→2, 2→1, 0=1×2.
-        origin = system_coor[0].copy()
+        system_coor = copy.deepcopy(residue.coor)
+        origin = system_coor[0].copy() 
         CA = residue.extract("name", "CA").coor[0]
         C = residue.extract("name", "C").coor[0]
-        O = residue.extract("name", "O").coor[0]
+        O = residue.extract("name", "O").coor[0] # noqa: E741
         system_coor = np.vstack((CA, C, O))
         system_coor -= origin
         zaxis = system_coor[1] / np.linalg.norm(system_coor[1])
@@ -1262,6 +1265,102 @@ class Ensemble:
     def __getitem__(self, index):
         """Get a structure from the ensemble by index."""
         return self._structures[index]
+
+    @property
+    def coor(self) -> np.ndarray:
+        """Stack coordinates from all structures in the ensemble.
+        
+        Returns
+        -------
+        np.ndarray
+            Array of shape (n_structures, n_atoms, 3) containing all coordinates
+            
+        Raises
+        ------
+        ValueError
+            If ensemble is empty or structures have different numbers of atoms
+        """
+        if not self._structures:
+            raise ValueError("Cannot stack coordinates from an empty ensemble")
+            
+        n_atoms_ref = self._structures[0].natoms
+        
+        if not all(s.natoms == n_atoms_ref for s in self._structures):
+            raise ValueError("All structures must have the same number of atoms to stack coordinates")
+        
+        return np.stack([s.coor for s in self._structures])
+
+    @property
+    def q(self) -> np.ndarray:
+        """Stack occupancy values from all structures in the ensemble.
+        
+        Returns
+        -------
+        np.ndarray
+            Array of shape (n_structures, n_atoms) containing all occupancy values
+            
+        Raises
+        ------
+        ValueError
+            If ensemble is empty or structures have different numbers of atoms
+        """
+        if not self._structures:
+            raise ValueError("Cannot stack occupancy values from an empty ensemble")
+            
+        n_atoms_ref = self._structures[0].natoms
+        
+        if not all(s.natoms == n_atoms_ref for s in self._structures):
+            raise ValueError("All structures must have the same number of atoms to stack occupancy values")
+        
+        return np.stack([s.q for s in self._structures])
+
+    @property
+    def b(self) -> np.ndarray:
+        """Stack B-factors from all structures in the ensemble.
+        
+        Returns
+        -------
+        np.ndarray
+            Array of shape (n_structures, n_atoms) containing all B-factors
+            
+        Raises
+        ------
+        ValueError
+            If ensemble is empty or structures have different numbers of atoms
+        """
+        if not self._structures:
+            raise ValueError("Cannot stack B-factors from an empty ensemble")
+            
+        n_atoms_ref = self._structures[0].natoms
+        
+        if not all(s.natoms == n_atoms_ref for s in self._structures):
+            raise ValueError("All structures must have the same number of atoms to stack B-factors")
+        
+        return np.stack([s.b for s in self._structures])
+
+    @property
+    def e(self) -> np.ndarray:
+        """Stack element symbols from all structures in the ensemble.
+        
+        Returns
+        -------
+        np.ndarray
+            Array of shape (n_structures, n_atoms) containing all element symbols
+            
+        Raises
+        ------
+        ValueError
+            If ensemble is empty or structures have different numbers of atoms
+        """
+        if not self._structures:
+            raise ValueError("Cannot stack element symbols from an empty ensemble")
+            
+        n_atoms_ref = self._structures[0].natoms
+        
+        if not all(s.natoms == n_atoms_ref for s in self._structures):
+            raise ValueError("All structures must have the same number of atoms to stack element symbols")
+        
+        return np.stack([s.e for s in self._structures])
 
     def append(self, structure: Structure):
         """Add a structure to the ensemble."""

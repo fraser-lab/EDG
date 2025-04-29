@@ -1,9 +1,8 @@
-from typing import Callable, Dict, Optional, Tuple, Union
+from typing import Dict, Optional, Tuple, Union
 import torch
 from math import sqrt
 
 from pathlib import Path
-from dataclasses import asdict
 from boltz.model.model import Boltz1
 from boltz.main import BoltzDiffusionParams
 from boltz.model.modules.utils import default, center_random_augmentation
@@ -102,7 +101,9 @@ class DiffusionStepper:
                 .eval()
             )
 
-        self.setup(data_path=data_path, out_dir=out_dir, use_msa_server=use_msa_server)
+        self.data_module = self.setup(
+            data_path=data_path, out_dir=out_dir, use_msa_server=use_msa_server
+        )
 
         self.cached_representations: Dict[str, torch.Tensor] = {}
         self.cached_diffusion_init = {}
@@ -158,7 +159,7 @@ class DiffusionStepper:
             num_workers=2,  # NOTE: default in Boltz1
         )
 
-        self.data_module = data_module
+        return data_module
 
     def prepare_feats_from_datamodule_batch(
         self,
@@ -307,12 +308,12 @@ class DiffusionStepper:
                 .repeat(diffusion_samples, 1, 1)
             )
         elif isinstance(structure, torch.Tensor):
-            atom_coords = structure # NOTE: should be handled in optimizer
+            atom_coords = structure  # NOTE: should be handled in optimizer
 
         atom_coords = pad_dim(atom_coords, 1, shape[1] - atom_coords.shape[1])
         init_coords = atom_coords.clone()
         eps = (
-            self.model.structure_module.noise_scale # FIXME: Should this be used here?
+            self.model.structure_module.noise_scale  # FIXME: Should this be used here?
             * sigmas[-noising_steps - 1]
             * torch.randn(shape, device=self.device)
         )
@@ -539,4 +540,3 @@ class DiffusionStepper:
             return atom_coords_next, atom_coords_denoised
         else:
             return atom_coords_next
-

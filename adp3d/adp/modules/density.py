@@ -232,38 +232,50 @@ class XMap_torch:
                 *[torch.arange(s, device=device) for s in grid_shape], indexing="ij"
             ),
             dim=-1,
-        ).float() # [z, y, x, 3]
+        ).float()  # [z, y, x, 3]
 
         base_coords = base_coords.reshape(1, -1, 3)  # [1, z*y*x, 3]
         grid_shape_tensor = torch.tensor(grid_shape, device=device)
-        grid_shape_tensor_xyz = torch.tensor(grid_shape[::-1], device=device, dtype=self.t_vectors.dtype) # [nx, ny, nz]
+        grid_shape_tensor_xyz = torch.tensor(
+            grid_shape[::-1], device=device, dtype=self.t_vectors.dtype
+        )  # [nx, ny, nz]
 
-        base_coords_xyz = base_coords[..., [2, 1, 0]] # [1, z*y*x, 3] -> (x,y,z order)
+        base_coords_xyz = base_coords[..., [2, 1, 0]]  # [1, z*y*x, 3] -> (x,y,z order)
 
         # Apply rotation to (x, y, z) coordinates
-        rotated_coords_xyz = torch.matmul(base_coords_xyz, self.R_matrices.transpose(-1,-2)) # [1, z*y*x, 3] @ [n_ops, 3, 3] -> [n_ops, z*y*x, 3] (x,y,z order)
-
+        rotated_coords_xyz = torch.matmul(
+            base_coords_xyz, self.R_matrices.transpose(-1, -2)
+        )  # [1, z*y*x, 3] @ [n_ops, 3, 3] -> [n_ops, z*y*x, 3] (x,y,z order)
 
         # Apply translation scaled by (nx, ny, nz)
         translated_coords_xyz = rotated_coords_xyz + self.t_vectors.unsqueeze(
             1
-        ) * grid_shape_tensor_xyz.view(1,1,3) # [n_ops, z*y*x, 3] (x,y,z order)
+        ) * grid_shape_tensor_xyz.view(1, 1, 3)  # [n_ops, z*y*x, 3] (x,y,z order)
 
-        translated_coords_zyx = translated_coords_xyz[..., [2, 1, 0]] # [n_ops, z*y*x, 3] (z,y,x order)
-        translated_coords_zyx = translated_coords_zyx % grid_shape_tensor.view(1, 1, 3) # Apply modulo in z,y,x order
+        translated_coords_zyx = translated_coords_xyz[
+            ..., [2, 1, 0]
+        ]  # [n_ops, z*y*x, 3] (z,y,x order)
+        translated_coords_zyx = translated_coords_zyx % grid_shape_tensor.view(
+            1, 1, 3
+        )  # Apply modulo in z,y,x order
 
-
-        transformed_coords = translated_coords_zyx.reshape(n_ops, *grid_shape, 3) # [n_ops, z, y, x, 3] (z,y,x order)
+        transformed_coords = translated_coords_zyx.reshape(
+            n_ops, *grid_shape, 3
+        )  # [n_ops, z, y, x, 3] (z,y,x order)
 
         # Normalize coordinates to [-1, 1] for grid_sample
         normalized_coords = (
             transformed_coords
-            / grid_shape_tensor.view(1, 1, 1, 1, 3) # Use z,y,x shape for normalization
+            / grid_shape_tensor.view(1, 1, 1, 1, 3)  # Use z,y,x shape for normalization
         ) * 2 - 1
 
         transposed_density = density.unsqueeze(0)  # [1, batch_size, z, y, x]
-        expanded_density = transposed_density.expand(n_ops, batch_size, *grid_shape) # [n_ops, batch_size, z, y, x]
-        normalized_coords_xyz = normalized_coords[..., [2, 1, 0]] # [n_ops, z, y, x, 3] (x,y,z order for sampling)
+        expanded_density = transposed_density.expand(
+            n_ops, batch_size, *grid_shape
+        )  # [n_ops, batch_size, z, y, x]
+        normalized_coords_xyz = normalized_coords[
+            ..., [2, 1, 0]
+        ]  # [n_ops, z, y, x, 3] (x,y,z order for sampling)
 
         transformed_density = F.grid_sample(
             expanded_density,  # Input: [n_ops, batch_size, z, y, x] (N, C, D, H, W)
@@ -344,9 +356,7 @@ class DifferentiableTransformer(torch.nn.Module):
 
     def _setup_transforms(self) -> None:
         """Initialize transformation matrices for coordinate conversions."""
-        self.dtype = (
-            torch.float32
-        )  # need to set this here or else doubles start popping up and ruining operations
+        self.dtype = torch.float32  # need to set this here or else doubles start popping up and ruining operations
 
         lattice_to_cartesian = (
             self.xmap.unit_cell.frac_to_orth / self.xmap.unit_cell.abc
@@ -369,8 +379,6 @@ class DifferentiableTransformer(torch.nn.Module):
             "grid_to_cartesian",
             torch.tensor(grid_to_cartesian).to(dtype=self.dtype, device=self.device),
         )
-
-
 
     def forward(
         self,
@@ -449,12 +457,13 @@ class DifferentiableTransformer(torch.nn.Module):
 
         return final_density
 
-    def create_mask(
-        self,
-        coordinates: torch.Tensor,
-        radius: float
-    ) -> torch.Tensor:
+    def create_mask(self, coordinates: torch.Tensor, radius: float) -> torch.Tensor:
         """Create a boolean mask volume around atoms within a radius, considering symmetry.
+
+        This version calculates the mask for the input coordinates first, placing
+        mask values correctly within the grid boundaries using modulo arithmetic
+        for atoms outside the base grid box. Then, it applies symmetry to this
+        base mask.
 
         Parameters
         ----------
@@ -471,52 +480,82 @@ class DifferentiableTransformer(torch.nn.Module):
         """
         device = self.device
         dtype = self.dtype
-        grid_shape = self.grid_shape
-        n_atoms = coordinates.shape[0]
+        grid_shape = self.grid_shape  # Shape: tuple (nz, ny, nx)
+        n_atoms = coordinates.shape[0]  # Shape: [n_atoms]
         radius2 = radius * radius
 
         if n_atoms == 0:
             return torch.zeros(grid_shape, device=device, dtype=torch.bool)
 
-        grid_coordinates = self._compute_grid_coordinates(coordinates.unsqueeze(0)).squeeze(0)
+        coordinates = coordinates.to(device=device, dtype=dtype)
 
-        max_extent_voxel = torch.ceil(radius / torch.min(self.xmap.voxelspacing)).int().item()
+        grid_coordinates = self._compute_grid_coordinates(coordinates).squeeze(
+            0
+        )  # Shape: [n_atoms, 3]
 
-        nearby_grid_indices = torch.arange(-max_extent_voxel, max_extent_voxel + 1, device=device)
-        nearby_grid = torch.stack(
-            torch.meshgrid(nearby_grid_indices, nearby_grid_indices, nearby_grid_indices, indexing='ij'),
-            dim=-1
-        ).reshape(-1, 3).to(dtype) # Shape [n_nearby, 3] (z, y, x order)
+        min_voxel_spacing = torch.min(self.xmap.voxelspacing.to(device))
+        max_extent_voxel = torch.ceil((radius + 1e-6) / min_voxel_spacing).int().item()
+
+        nearby_grid_indices = torch.arange(
+            -max_extent_voxel, max_extent_voxel + 1, device=device, dtype=torch.long
+        )
+        nearby_grid_offsets = torch.stack(
+            torch.meshgrid(
+                nearby_grid_indices,
+                nearby_grid_indices,
+                nearby_grid_indices,
+                indexing="ij",
+            ),
+            dim=-1,
+        ).reshape(-1, 3)  # Shape: [n_nearby, 3]
 
         mask_volume = torch.zeros(grid_shape, device=device, dtype=torch.bool)
-        grid_shape_tensor = torch.tensor(grid_shape, device=device)
+        grid_shape_tensor = torch.tensor(
+            grid_shape, device=device, dtype=torch.long
+        ).view(1, 1, 3)  # Shape: [1, 1, 3]
 
-        coord_floored = torch.floor(grid_coordinates).long() # [n_atoms, 3]
+        coord_floored = torch.floor(grid_coordinates).long()  # Shape: [n_atoms, 3]
+        grid_points_absolute = coord_floored.unsqueeze(
+            1
+        ) + nearby_grid_offsets.unsqueeze(0)  # Shape: [n_atoms, n_nearby, 3]
 
-        # Shape: [n_atoms, n_nearby, 3]
-        grid_points_abs = (coord_floored.unsqueeze(1) + nearby_grid.unsqueeze(0)) % grid_shape_tensor.view(1, 1, 3)
+        delta_grid = grid_coordinates.unsqueeze(1) - grid_points_absolute.to(
+            dtype
+        )  # Shape: [n_atoms, n_nearby, 3]
 
-        # Shape: [n_atoms, n_nearby, 3]
-        delta_grid = grid_coordinates.unsqueeze(1) - grid_points_abs.to(dtype)
+        delta_cartesian = (
+            delta_grid @ self.grid_to_cartesian.T
+        )  # Shape: [n_atoms, n_nearby, 3]
 
-        # Shape: [n_atoms, n_nearby, 3]
-        delta_cartesian = torch.matmul(delta_grid, self.grid_to_cartesian.T)
-        # Shape: [n_atoms, n_nearby]
-        distances2 = torch.sum(delta_cartesian * delta_cartesian, dim=-1)
+        distances2 = torch.sum(
+            delta_cartesian * delta_cartesian, dim=-1
+        )  # Shape: [n_atoms, n_nearby]
 
-        within_radius_mask = distances2 <= radius2
+        within_radius_mask = distances2 <= radius2  # Shape: [n_atoms, n_nearby]
 
-        points_to_mark = grid_points_abs[within_radius_mask].long()
+        points_to_mark_absolute = grid_points_absolute[
+            within_radius_mask
+        ]  # Shape: [n_valid_points, 3]
 
-        if points_to_mark.numel() > 0:
-            mask_volume[points_to_mark[:, 0], points_to_mark[:, 1], points_to_mark[:, 2]] = True
+        if points_to_mark_absolute.numel() > 0:
+            points_to_mark_wrapped = (
+                points_to_mark_absolute % grid_shape_tensor.squeeze(0).squeeze(0)
+            )  # Shape: [n_valid_points, 3]
 
-        # apply_symmetry expects batch dimension and float input
-        symmetric_mask_float = self.xmap.apply_symmetry(mask_volume.float().unsqueeze(0)).squeeze(0)
+            z_indices, y_indices, x_indices = (
+                points_to_mark_wrapped[:, 0],
+                points_to_mark_wrapped[:, 1],
+                points_to_mark_wrapped[:, 2],
+            )
+            mask_volume[z_indices, y_indices, x_indices] = True
+
+        symmetric_mask_float = self.xmap.apply_symmetry(
+            mask_volume.to(dtype=self.dtype).unsqueeze(0)  # Shape: [1, nz, ny, nx]
+        ).squeeze(0)  # Shape: [nz, ny, nx]
 
         final_mask = symmetric_mask_float > 1e-6
 
-        return final_mask
+        return final_mask.bool()
 
     def _compute_radial_densities(
         self, elements: torch.Tensor, b_factors: torch.Tensor
@@ -716,9 +755,7 @@ def dilate_points_torch(
             indexing="ij",
         ),
         dim=-1,
-    ).reshape(
-        -1, 3
-    )  # [n_nearby, 3]
+    ).reshape(-1, 3)  # [n_nearby, 3]
 
     # Compute the a, b, c distance from the grid voxels for each atom
     grid_difference = coordinates - torch.floor(coordinates)  # [batch_size, n_atoms, 3]
@@ -729,9 +766,7 @@ def dilate_points_torch(
     # Compute the distance from the grid for each atom to each nearby grid point in the offset
     delta_to_nearby = grid_difference.view(
         batch_size, 1, n_atoms, 3
-    ) - nearby_grid_abc.view(
-        1, -1, 1, 3
-    )  # [batch_size, n_nearby, n_atoms, 3]
+    ) - nearby_grid_abc.view(1, -1, 1, 3)  # [batch_size, n_nearby, n_atoms, 3]
     cartesian_delta_to_nearby = torch.matmul(
         delta_to_nearby, grid_to_cartesian.T
     )  # [batch_size, n_nearby, n_atoms, 3]
@@ -773,9 +808,7 @@ def dilate_points_torch(
     # modulo for periodic boundary
     grid_points = (
         coord_floored.view(-1, 1, 3) + nearby_grid_abc.view(1, -1, 3)
-    ) % torch.tensor(
-        grid_shape[::-1], device=device
-    )  # [n_active_atoms, n_nearby, 3]
+    ) % torch.tensor(grid_shape[::-1], device=device)  # [n_active_atoms, n_nearby, 3]
 
     atom_indices = torch.arange(n_active_atoms, device=device).repeat_interleave(
         n_nearby
@@ -931,7 +964,11 @@ def normalize(t: torch.Tensor) -> torch.Tensor:
 
 
 def scale_map(
-    xmap_array: torch.Tensor, model_map_array: torch.Tensor, mask: torch.Tensor
+    xmap_array: torch.Tensor,
+    model_map_array: torch.Tensor,
+    mask: torch.Tensor,
+    similarity_threshold: float = 0.05,
+    min_scaling_denominator: float = 1e-10,
 ) -> torch.Tensor:
     """Scale xmap_array to match model_map_array based on values within the mask.
 
@@ -943,6 +980,12 @@ def scale_map(
         The calculated model map array used as the reference for scaling.
     mask : torch.Tensor
         A boolean mask indicating the regions to use for calculating scaling factors.
+    similarity_threshold : float, optional
+        Threshold to determine if maps are already similar enough to skip aggressive scaling.
+        Default is 0.05 (5% difference).
+    min_scaling_denominator : float, optional
+        Minimum value for denominator in scaling calculation to ensure numerical stability.
+        Default is 1e-10.
 
     Returns
     -------
@@ -956,14 +999,37 @@ def scale_map(
     xmap_masked = xmap_array[mask]
     model_masked = model_map_array[mask]
 
+    # Check if maps are already similar
+    xmap_std = xmap_masked.std()
+    model_std = model_masked.std()
+
     xmap_masked_mean = xmap_masked.mean()
     model_masked_mean = model_masked.mean()
 
+    # Calculate normalized difference between maps
+    rel_mean_diff = torch.abs(xmap_masked_mean - model_masked_mean) / (
+        torch.max(torch.abs(model_masked_mean), torch.tensor(1e-8))
+    )
+    rel_std_diff = torch.abs(xmap_std - model_std) / (
+        torch.max(torch.abs(model_std), torch.tensor(1e-8))
+    )
+
+    # If maps are already very similar, apply gentle scaling
+    if rel_mean_diff < similarity_threshold and rel_std_diff < similarity_threshold:
+        # Apply minimal correction - just match means and standard deviations
+        scaling_factor = model_std / (xmap_std + 1e-10)
+        offset = model_masked_mean - scaling_factor * xmap_masked_mean
+        return scaling_factor * xmap_array + offset
+
+    # Standard scaling for maps with significant differences
     xmap_masked_centered = xmap_masked - xmap_masked_mean
     model_masked_centered = model_masked - model_masked_mean
 
     s2 = torch.dot(model_masked_centered, xmap_masked_centered)
     s1 = torch.dot(xmap_masked_centered, xmap_masked_centered)
+
+    # Ensure numerical stability
+    s1 = torch.max(s1, torch.tensor(min_scaling_denominator, device=s1.device))
 
     scaling_factor = s2 / s1
     k = model_masked_mean - scaling_factor * xmap_masked_mean
