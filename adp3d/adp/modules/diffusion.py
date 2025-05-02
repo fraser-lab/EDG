@@ -239,6 +239,67 @@ class DiffusionStepper:
                 "feats": feats,
             }
 
+    def initialize_diffusion(
+        self,
+        num_samples: Optional[int] = None,
+        sampling_steps: Optional[int] = None,
+        init_coords: Optional[torch.Tensor] = None,
+    ) -> None:
+        """Initialize the diffusion process.
+
+        Parameters
+        ----------
+        num_samples : Optional[int], optional
+            Number of samples to generate, by default the number from predict_args in initialization
+        sampling_steps : Optional[int], optional
+            Number of sampling steps, by default the number from predict_args in initialization
+        init_coords : Optional[torch.Tensor], optional
+            Initial coordinates for downstream guidance, by default None
+        """
+        self.current_step = 0
+        self.diffusion_trajectory = {}
+
+        batch = self.prepare_feats_from_datamodule_batch()
+        self.compute_representations(batch)
+
+        num_sampling_steps = default(
+            sampling_steps, self.model.structure_module.num_sampling_steps
+        )
+        diffusion_samples = default(
+            num_samples, self.model.predict_args["diffusion_samples"]
+        )
+        atom_mask = self.cached_representations["feats"]["atom_pad_mask"]
+        atom_mask = atom_mask.repeat_interleave(diffusion_samples, 0)
+
+        shape = (*atom_mask.shape, 3)
+
+        # get the schedule, which is returned as (sigma, gamma) tuple, and pair up with the next sigma and gamma
+        sigmas = self.model.structure_module.sample_schedule(num_sampling_steps)
+        gammas = torch.where(
+            sigmas > self.model.structure_module.gamma_min,
+            self.model.structure_module.gamma_0,
+            0.0,
+        )
+        sigmas_and_gammas = list(zip(sigmas[:-1], sigmas[1:], gammas[1:]))
+
+        # atom position is noise at the beginning
+        init_sigma = sigmas[0]
+        atom_coords = init_sigma * torch.randn(shape, device=self.device)
+
+        token_repr = None
+        token_a = None
+
+        self.cached_diffusion_init = {
+            "init_coords": pad_dim(init_coords, 1, shape[1] - init_coords.shape[1]),
+            "atom_coords": atom_coords,
+            "atom_mask": atom_mask,
+            "token_repr": token_repr,
+            "token_a": token_a,
+            "sigmas_and_gammas": sigmas_and_gammas,
+            "diffusion_samples": diffusion_samples,
+            "num_sampling_steps": num_sampling_steps,
+        }
+
     def initialize_partial_diffusion(
         self,
         structure: Union[Structure, torch.Tensor],
@@ -334,26 +395,36 @@ class DiffusionStepper:
             "num_sampling_steps": num_sampling_steps,
         }
 
-    def initialize_diffusion(
+    def initialize_substructure_conditioned_diffusion(
         self,
+        structure: Union[Structure, torch.Tensor],
+        selection: NDArray[np.int_],
         num_samples: Optional[int] = None,
         sampling_steps: Optional[int] = None,
-        init_coords: Optional[torch.Tensor] = None,
+        invert: bool = False,
     ) -> None:
-        """Initialize the diffusion process.
+        """Initialize diffusion with substructure conditioning.
+
+        This method allows for initializing the diffusion process with a specific substructure
+        selected by an indexing selection. Applies the principles from Chroma supplement section N.2
+        to generate conditional samples given a motif (except here the prior is isotropic Gaussian noise,
+        so it works out easier).
 
         Parameters
         ----------
+        structure : Union[Structure, torch.Tensor]
+            Initial structure or set of atomic coordinates.
+        selection : NDArray[np.int_]
+            Selector indices for atoms in structure.
         num_samples : Optional[int], optional
-            Number of samples to generate, by default the number from predict_args in initialization
+            Number of samples to generate, by default None.
         sampling_steps : Optional[int], optional
-            Number of sampling steps, by default the number from predict_args in initialization
-        init_coords : Optional[torch.Tensor], optional
-            Initial coordinates for downstream guidance, by default None
+            Total number of sampling steps in the diffusion process, by default None.
+        invert : bool, optional
+            Whether to invert the selection (e.g. if the selection provided is for the motif to be denoised).
         """
-
-        self.current_step = 0
         self.diffusion_trajectory = {}
+        self.current_step = 0
 
         batch = self.prepare_feats_from_datamodule_batch()
         self.compute_representations(batch)
@@ -364,6 +435,7 @@ class DiffusionStepper:
         diffusion_samples = default(
             num_samples, self.model.predict_args["diffusion_samples"]
         )
+
         atom_mask = self.cached_representations["feats"]["atom_pad_mask"]
         atom_mask = atom_mask.repeat_interleave(diffusion_samples, 0)
 
@@ -382,11 +454,34 @@ class DiffusionStepper:
         init_sigma = sigmas[0]
         atom_coords = init_sigma * torch.randn(shape, device=self.device)
 
+        if isinstance(structure, Structure):
+            init_coords = (
+                torch.tensor(structure.coor, device=self.device)
+                .float()
+                .unsqueeze(0)
+                .repeat(diffusion_samples, 1, 1)
+            )
+        elif isinstance(structure, torch.Tensor):
+            init_coords = structure  # NOTE: should be handled in optimizer
+
+        init_coords = pad_dim(init_coords, 1, shape[1] - init_coords.shape[1])
+
+        if invert:
+            inverse_selector = torch.ones(init_coords.shape[1], device=self.device).bool()
+            inverse_selector[selection] = False
+            selection = inverse_selector
+
+        # set the initial coordinates for the selected substructure
+        # NOTE: The selector here should be selecting the substructure, not the segment that should be diffused.
+        atom_coords[:, selection, :] = init_coords[
+            :, selection, :
+        ]
+
         token_repr = None
         token_a = None
 
         self.cached_diffusion_init = {
-            "init_coords": pad_dim(init_coords, 1, shape[1] - init_coords.shape[1]),
+            "init_coords": init_coords,
             "atom_coords": atom_coords,
             "atom_mask": atom_mask,
             "token_repr": token_repr,

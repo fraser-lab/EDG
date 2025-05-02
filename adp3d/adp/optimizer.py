@@ -15,6 +15,7 @@ from functools import partial
 from typing import Optional, Tuple, Union, List
 import warnings
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 from tqdm import tqdm
@@ -159,7 +160,7 @@ class DensityGuidedDiffusion:
                 )  # try 2FO-FC map if initial fails
 
         xmap = XMap_torch(xmap, device=self.device)
-        self.y = xmap.array.float() # type: ignore
+        self.y = xmap.array.float()
 
         scattering_factors = (
             ELECTRON_SCATTERING_FACTORS if em else ATOM_STRUCTURE_FACTORS
@@ -178,7 +179,7 @@ class DensityGuidedDiffusion:
         coords, elements, b_factors, occupancies, active, _ = (
             structure_to_density_input(self.structure)
         )
-        coords = coords.to(self.device).float().unsqueeze(0) # Add batch dim
+        coords = coords.to(self.device).float().unsqueeze(0)  # Add batch dim
         elements = elements.to(self.device).long().unsqueeze(0)
         b_factors = b_factors.to(self.device).float().unsqueeze(0)
         occupancies = occupancies.to(self.device).float().unsqueeze(0)
@@ -190,7 +191,7 @@ class DensityGuidedDiffusion:
                 coords, elements, b_factors, occupancies, active
             ).squeeze(0)
             mask = self.density_calculator.create_mask(coords.squeeze(0), 5.0)
-            
+
         self.y = scale_map(self.y, initial_model_map, mask)
 
         scaled_map_path = self.output_path / "scaled_experimental_map.ccp4"
@@ -211,7 +212,7 @@ class DensityGuidedDiffusion:
 
     def _setup_scattering_params(self, structure_factors: dict):
         """Set up scattering parameters for density calculation."""
-        unique_elements = set(self.structure.e) # type: ignore
+        unique_elements = set(self.structure.e)
         unique_elements = sorted(
             set(
                 [
@@ -299,23 +300,29 @@ class DensityGuidedDiffusion:
             Density score and substructure score
         """
         # Translate coordinates back to the original frame for density calculation
-        coords_translated = coords + initial_centroid # FIXME: Should be a better way to do this
+        coords_translated = (
+            coords + initial_centroid
+        )  # FIXME: Should be a better way to do this
 
         # Initialize substructure_score as a zero tensor
         substructure_score = torch.tensor(0.0, device=self.device)
         if substructure_conditioning_kwargs is not None:
             # Translate conditioning coords as well
-            conditioning_coords = substructure_conditioning_kwargs["coords"] + initial_centroid
+            conditioning_coords = (
+                substructure_conditioning_kwargs["coords"] + initial_centroid
+            )
             selection = substructure_conditioning_kwargs["selection"]
             scale = substructure_conditioning_kwargs["scale"]
-            inverse_selector = torch.ones(conditioning_coords.shape[1], device=self.device).bool()
+            inverse_selector = torch.ones(
+                conditioning_coords.shape[1], device=self.device
+            ).bool()
             inverse_selector[selection] = False
             # Use translated coordinates for comparison
             conditioning_coords_subset = conditioning_coords[:, inverse_selector, :]
             current_coords_subset = coords_translated[:, inverse_selector, :]
 
             # compute the difference between the conditioning coordinates and the current coords
-            substructure_score = - (
+            substructure_score = -(
                 scale
                 / (coords.shape[0])
                 * torch.linalg.norm(current_coords_subset - conditioning_coords_subset)
@@ -323,13 +330,11 @@ class DensityGuidedDiffusion:
 
         model_map = self.density_calculator(
             coords_translated, elements, b_factors, occupancies, active
-        ).sum(
-            0
-        )  # TODO: dont use normalization, use e-/A^3
+        ).sum(0)  # TODO: dont use normalization, use e-/A^3
 
         density_correlation_score = -torch.linalg.norm(
-                torch.flatten(self.y) - torch.flatten(model_map), ord=norm
-            )
+            torch.flatten(self.y) - torch.flatten(model_map), ord=norm
+        )
 
         return density_correlation_score, substructure_score
         # # SiLU (swish) to penalize the model going out into solvent, but not penalize being not in exactly the density as much
@@ -388,13 +393,14 @@ class DensityGuidedDiffusion:
         coords = repeat(coords, "a c -> n a c", n=num_samples)
         elements = repeat(elements, "e -> n e", n=num_samples)
         # FIXME: using uniform b-factors and occupancies for now
-        b_factors = repeat(b_factors, "b -> n b", n=num_samples) / num_samples
-        occupancies = repeat(occupancies, "q -> n q", n=num_samples) / num_samples
+        b_factors = repeat(b_factors, "b -> n b", n=num_samples) / num_samples # FIXME
+        # b_factors = torch.full(elements.size(), 4 / num_samples)
+        occupancies = repeat(occupancies, "q -> n q", n=num_samples) / num_samples # FIXME: / num_samples
         active = repeat(active, "a -> n a", n=num_samples)
 
         if resolution == 0.0 or resolution is None:
             if self.density_calculator.xmap.resolution is not None:
-                resolution = self.density_calculator.xmap.resolution.high # type: ignore
+                resolution = self.density_calculator.xmap.resolution.high
             warnings.warn(
                 f"Resolution of input structure is {resolution}. Using 2.0 A instead."
             )
@@ -406,21 +412,35 @@ class DensityGuidedDiffusion:
         active = active.to(self.device).bool()
 
         # Calculate and store initial centroid, then center coordinates
-        self.initial_centroid = (coords * active.unsqueeze(-1)).sum(dim=1, keepdim=True) / active.sum(dim=1, keepdim=True).unsqueeze(-1)
+        self.initial_centroid = (coords * active.unsqueeze(-1)).sum(
+            dim=1, keepdim=True
+        ) / active.sum(dim=1, keepdim=True).unsqueeze(-1)
         coords_centered = coords - self.initial_centroid
 
         if partial_diffusion:
             if diffusion_kwargs is None:
                 diffusion_kwargs = {}
-            if 'structure' not in diffusion_kwargs:
-                diffusion_kwargs['structure'] = coords_centered
+            if "structure" not in diffusion_kwargs:
+                diffusion_kwargs["structure"] = coords_centered
 
             self.stepper.initialize_partial_diffusion(
                 num_samples=num_samples, sampling_steps=num_steps, **diffusion_kwargs
             )
+        elif substructure_conditioning_kwargs is not None:
+            self.stepper.initialize_substructure_conditioned_diffusion(
+                num_samples=num_samples,
+                sampling_steps=num_steps,
+                structure=coords_centered,
+                selection=substructure_conditioning_kwargs.get(
+                    "selection", np.array([], dtype=int)
+                ),
+                invert=True,
+            )
         else:
             self.stepper.initialize_diffusion(
-                num_samples=num_samples, sampling_steps=num_steps, init_coords=coords_centered
+                num_samples=num_samples,
+                sampling_steps=num_steps,
+                init_coords=coords_centered,
             )
 
         step_coords = self.stepper.cached_diffusion_init["atom_coords"]
@@ -430,10 +450,10 @@ class DensityGuidedDiffusion:
         if substructure_conditioning_kwargs is not None:
             substructure_conditioning_kwargs["coords"] = coords
             # selection = torch.from_numpy(substructure_conditioning_kwargs["selection"]).to(
-                # self.device
+            # self.device
             # )
             # inverse_selector = torch.ones(
-                # step_coords.shape[1], device=self.device
+            # step_coords.shape[1], device=self.device
             # ).bool()
             # inverse_selector[selection] = False
             # coords_centered_padded = pad_dim(coords_centered, 1, step_coords.shape[1] - coords_centered.shape[1])
@@ -452,7 +472,7 @@ class DensityGuidedDiffusion:
                 substructure_conditioning_kwargs=substructure_conditioning_kwargs,
             )
         else:
-            density_loss = partial( # TODO: this will break downstream in DensityGuidedDiffusionStepper as substructure_score will be None
+            density_loss = partial(  # TODO: this will break downstream in DensityGuidedDiffusionStepper as substructure_score will be None
                 self.density_score,
                 elements=elements,
                 b_factors=b_factors,
@@ -466,10 +486,12 @@ class DensityGuidedDiffusion:
         scores = []
 
         if partial_diffusion:
-            noising_steps = diffusion_kwargs.get("noising_steps", num_steps // 4) if diffusion_kwargs else num_steps // 4
-            pbar = tqdm(
-                range(noising_steps), desc="Optimizing structure"
+            noising_steps = (
+                diffusion_kwargs.get("noising_steps", num_steps // 4)
+                if diffusion_kwargs
+                else num_steps // 4
             )
+            pbar = tqdm(range(noising_steps), desc="Optimizing structure")
         else:
             pbar = tqdm(range(num_steps), desc="Optimizing structure")
         for i in pbar:
@@ -477,16 +499,17 @@ class DensityGuidedDiffusion:
                 step_lr = learning_rate
             else:
                 # Ensure i is within the bounds of the learning_rate list
-                step_lr = learning_rate[min(i, len(learning_rate)-1)] # type: ignore
+                step_lr = learning_rate[min(i, len(learning_rate) - 1)]
 
             # density guided step using self.density_score
-            step_coords, loss = self.stepper.step(
-                step_coords, # type: ignore
+            step_coords, loss = self.stepper.dmap_step(
+                step_coords,
                 density_loss=density_loss,
-                guidance_scale=step_lr,
+                zeta=1000, # FIXME: hardcoded for now
+                dmap_steps=3,
                 augmentation=False,
-                align_to_input=False,
-                alignment_reverse_diffusion=False, # FIXME: Breaks the computational graph
+                align_to_input=True,
+                alignment_reverse_diffusion=False,  # FIXME: Breaks the computational graph
                 selection=(
                     substructure_conditioning_kwargs["selection"]
                     if substructure_conditioning_kwargs is not None
@@ -512,7 +535,7 @@ class DensityGuidedDiffusion:
             # )
             coords_tensor = self.stepper.diffusion_trajectory[
                 f"step_{self.stepper.current_step - 1}"
-            ]["coords"] # type: ignore
+            ]["coords"]
             # Translate coords back before saving intermediate results
             coords_tensor_translated = coords_tensor + self.initial_centroid
 
@@ -527,25 +550,31 @@ class DensityGuidedDiffusion:
                         elements,
                         b_factors,
                         occupancies,
-                        active
+                        active,
                     )
-                summed_map_array = model_map_ensemble.sum(0) 
-                # Use the existing XMap object to save the calculated density
-                self.density_calculator.xmap.tofile(f"{output_dir}/step_{self.stepper.current_step - 1}_map.ccp4", density=summed_map_array)
+                    summed_map_array = model_map_ensemble.sum(0)
+                    # Use the existing XMap object to save the calculated density
+                    self.density_calculator.xmap.tofile(
+                        f"{output_dir}/step_{self.stepper.current_step - 1}_map.ccp4",
+                        density=summed_map_array,
+                    )
+                    torch.cuda.empty_cache()
 
                 for j in range(ensemble_size):
                     structure = copy.deepcopy(self.structure)
-                    
+
                     structure.coor = coords_tensor_translated[j].cpu().numpy()
                     # TODO: Update q and b factors if they are also being optimized or change
                     step_structures.append(structure)
 
                 step_ensemble = Ensemble(step_structures)
-                step_ensemble.tofile(f"{output_dir}/step_{self.stepper.current_step - 1}_ensemble.cif")
+                step_ensemble.tofile(
+                    f"{output_dir}/step_{self.stepper.current_step - 1}_ensemble.cif"
+                )
 
         final_coords_tensor = self.stepper.diffusion_trajectory[
             f"step_{self.stepper.current_step - 1}"
-        ]["coords"] # type: ignore
+        ]["coords"]
         # Translate final coords back before saving
         final_coords_tensor_translated = final_coords_tensor + self.initial_centroid
         ensemble_size = final_coords_tensor_translated.shape[0]
@@ -553,15 +582,13 @@ class DensityGuidedDiffusion:
 
         with torch.no_grad():
             model_map_ensemble = self.density_calculator(
-                final_coords_tensor_translated,
-                elements,
-                b_factors,
-                occupancies,
-                active
+                final_coords_tensor_translated, elements, b_factors, occupancies, active
             )
-        summed_map_array = model_map_ensemble.sum(0) 
+        summed_map_array = model_map_ensemble.sum(0)
         # Use the existing XMap object to save the calculated density
-        self.density_calculator.xmap.tofile(f"{output_dir}/final_map.ccp4", density=summed_map_array)
+        self.density_calculator.xmap.tofile(
+            f"{output_dir}/final_map.ccp4", density=summed_map_array
+        )
 
         for j in range(ensemble_size):
             structure = copy.deepcopy(self.structure)
@@ -572,4 +599,4 @@ class DensityGuidedDiffusion:
         final_ensemble = Ensemble(final_structures)
         final_ensemble.tofile(f"{output_dir}/final_ensemble.cif")
 
-        return final_structures, scores # type: ignore
+        return final_structures, scores
