@@ -12,7 +12,7 @@ import numpy as np
 from typing import Union, Tuple
 from adp3d.utils.utility import DotDict
 from boltz.data.types import Structure as BoltzStructure
-from .structure import Structure
+from .structure import Structure, Ensemble
 from pathlib import Path
 from dataclasses import replace
 from boltz.data.write.mmcif import to_mmcif
@@ -67,7 +67,7 @@ def export_density_map(
 
 def write_mmcif(
     coords: torch.Tensor,
-    structure: Union[Structure, BoltzStructure], 
+    structure: Union[Structure, BoltzStructure],
     output_path: Path,
     elements: torch.Tensor = None,
     return_structure: bool = False,
@@ -93,7 +93,9 @@ def write_mmcif(
     """
     base_path = Path(output_path)
     batch_size = coords.shape[0] if coords.ndim == 3 else 1
-    elements_batch_size = elements.shape[0] if elements is not None and elements.ndim == 2 else 1
+    elements_batch_size = (
+        elements.shape[0] if elements is not None and elements.ndim == 2 else 1
+    )
 
     if elements is not None and batch_size != elements_batch_size:
         raise ValueError(
@@ -129,7 +131,11 @@ def write_mmcif(
         mmcif_str = to_mmcif(new_structure)
 
         # Construct the output file path by appending _{i} before the extension
-        new_output_path = base_path.with_name(f"{base_path.stem}_{i}{base_path.suffix}") if batch_size > 1 else base_path
+        new_output_path = (
+            base_path.with_name(f"{base_path.stem}_{i}{base_path.suffix}")
+            if batch_size > 1
+            else base_path
+        )
 
         # Make sure the directory exists
         new_output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -140,6 +146,7 @@ def write_mmcif(
     if return_structure:
         return new_structure
 
+
 def structure_to_density_input(
     structure: Union[Structure, BoltzStructure],
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, float]:
@@ -149,7 +156,7 @@ def structure_to_density_input(
     ----------
     structure : Union[Structure, BoltzStructure]
         qFit or Boltz-1 Structure object describing the structure.
-        
+
     Returns
     -------
     Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, float]
@@ -172,11 +179,12 @@ def structure_to_density_input(
         )
     elif isinstance(structure, Structure):
         mask_not_present = torch.from_numpy(structure.active).bool()
-        elements = [ATOMIC_NUM_TO_ELEMENT.index((
-                        e.upper()
-                        if len(e) == 1
-                        else e[0].upper() + e[1:].lower()
-                    )) for e in structure.e]
+        elements = [
+            ATOMIC_NUM_TO_ELEMENT.index(
+                (e.upper() if len(e) == 1 else e[0].upper() + e[1:].lower())
+            )
+            for e in structure.e
+        ]
         coords = torch.from_numpy(structure.coor).float()
         elements = torch.tensor(elements).long()
         b_factors = torch.from_numpy(structure.b).float()
@@ -191,3 +199,59 @@ def structure_to_density_input(
         )
     else:
         raise ValueError("structure must be a Boltz-1 or qFit Structure object.")
+
+
+class StructureSaver:
+    """A class to save a qFit Structure or Ensemble object with changed coordinates to a file."""
+
+    def __init__(self, structure: Union[Structure, Ensemble]):
+        """
+        Initialize the StructureSaver.
+
+        Parameters
+        ----------
+        structure : Union[Structure, BoltzStructure]
+            The structure to save.
+        """
+        self.structure = structure
+
+    def save(self, coor: Union[np.ndarray, torch.Tensor], output_path: str) -> None:
+        """Save the structure to the specified output path."""
+        if isinstance(coor, torch.Tensor):
+            coor = (
+                coor.detach().cpu().numpy() if coor.is_cuda else coor.detach().numpy()
+            )
+
+        if coor.shape != self.structure.coor.shape:
+            try:
+                coor = coor.reshape(self.structure.coor.shape)
+            except ValueError:
+                try: # slice to only the first n atoms if coor is padded
+                    if coor.ndim == 3:
+                        coor = coor[:, : self.structure.coor.shape[1], :]
+                    elif coor.ndim == 2:
+                        coor = coor[: self.structure.coor.shape[0], :]
+                except: # noqa: E722
+                    # If the shape still does not match, raise an error
+                    raise ValueError(
+                        f"Coordinates shape {coor.shape} does not match structure coordinates shape {self.structure.coor.shape}."
+                    )
+                
+
+        if isinstance(self.structure, Ensemble):
+            if coor.ndim == 3:
+                self.structure.coor = coor
+            else:
+                raise ValueError(
+                    f"Ensemble coordinates must be 3D tensor, got {coor.ndim}D tensor."
+                )
+
+        elif isinstance(self.structure, Structure):
+            if coor.ndim == 2:
+                self.structure.coor = coor
+            else:
+                raise ValueError(
+                    f"Structure coordinates must be 2D tensor, got {coor.ndim}D tensor."
+                )
+            
+        self.structure.tofile(output_path)

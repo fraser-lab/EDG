@@ -300,8 +300,8 @@ class DensityGuidedDiffusion:
             Density score and substructure score
         """
         # Translate coordinates back to the original frame for density calculation
-        coords_translated = (
-            coords + initial_centroid
+        coords_translated = coords + initial_centroid.repeat(
+            coords.shape[0] // initial_centroid.shape[0], 1, 1
         )  # FIXME: Should be a better way to do this
 
         # Initialize substructure_score as a zero tensor
@@ -310,7 +310,9 @@ class DensityGuidedDiffusion:
             # Translate conditioning coords as well
             conditioning_coords = (
                 substructure_conditioning_kwargs["coords"] + initial_centroid
-            )
+            ).repeat(
+                coords.shape[0] // initial_centroid.shape[0], 1, 1
+            )  # FIXME: Figure out a way to improve this more generally
             selection = substructure_conditioning_kwargs["selection"]
             scale = substructure_conditioning_kwargs["scale"]
             inverse_selector = torch.ones(
@@ -326,10 +328,15 @@ class DensityGuidedDiffusion:
                 scale
                 / (coords.shape[0])
                 * torch.linalg.norm(current_coords_subset - conditioning_coords_subset)
+                ** 2
             )
 
-        model_map = self.density_calculator(
-            coords_translated, elements, b_factors, occupancies, active
+        model_map = self.density_calculator(  # FIXME: testing here
+            coords_translated[: initial_centroid.shape[0], :, :],
+            elements,
+            b_factors,
+            occupancies,
+            active,
         ).sum(0)  # TODO: dont use normalization, use e-/A^3
 
         density_correlation_score = -torch.linalg.norm(
@@ -340,13 +347,14 @@ class DensityGuidedDiffusion:
         # # SiLU (swish) to penalize the model going out into solvent, but not penalize being not in exactly the density as much
         # return torch.linalg.norm(torch.nn.SiLU(torch.flatten(self.y) - torch.flatten(model_map)))
 
-    def optimize(  # TODO: compare score based guidance to DPS and DMAP
+    def optimize(
         self,
         output_dir: str,
         num_steps: int = 200,
         num_samples: int = 1,
         learning_rate: Union[List[float], float] = 1e-1,
         partial_diffusion: bool = False,
+        steering: bool = False,
         diffusion_kwargs: Optional[dict] = None,
         substructure_conditioning_kwargs: Optional[dict] = None,
     ) -> Structure:
@@ -359,7 +367,8 @@ class DensityGuidedDiffusion:
         num_steps : int, optional
             Number of optimization steps, by default 200
         num_sample  : int, optional
-            Size of ensemble to generate, by default 1
+            Size of ensemble to generate, by default 1. 
+            NOTE: If steering, this will be ignored and the number of particles in FK steering will be used.
         learning_rate : Union[List, float], optional
             Learning rate for density optimization, by default 1e-1
         partial_diffusion : bool, optional
@@ -390,12 +399,18 @@ class DensityGuidedDiffusion:
         coords, elements, b_factors, occupancies, active, resolution = (
             structure_to_density_input(self.structure)
         )
+
+        if steering: # make sure particles are all updated by density
+            num_samples = self.stepper.model.steering_args["num_particles"]
+
         coords = repeat(coords, "a c -> n a c", n=num_samples)
         elements = repeat(elements, "e -> n e", n=num_samples)
         # FIXME: using uniform b-factors and occupancies for now
-        b_factors = repeat(b_factors, "b -> n b", n=num_samples) / num_samples # FIXME
+        b_factors = repeat(b_factors, "b -> n b", n=num_samples) / num_samples  # FIXME
         # b_factors = torch.full(elements.size(), 4 / num_samples)
-        occupancies = repeat(occupancies, "q -> n q", n=num_samples) / num_samples # FIXME: / num_samples
+        occupancies = (
+            repeat(occupancies, "q -> n q", n=num_samples) / num_samples
+        )  # FIXME: / num_samples
         active = repeat(active, "a -> n a", n=num_samples)
 
         if resolution == 0.0 or resolution is None:
@@ -505,15 +520,16 @@ class DensityGuidedDiffusion:
             step_coords, loss = self.stepper.dmap_step(
                 step_coords,
                 density_loss=density_loss,
-                zeta=1000, # FIXME: hardcoded for now
+                zeta=step_lr,
                 dmap_steps=3,
+                # guidance_scale=step_lr,
                 augmentation=False,
                 align_to_input=True,
                 alignment_reverse_diffusion=False,  # FIXME: Breaks the computational graph
                 selection=(
                     substructure_conditioning_kwargs["selection"]
                     if substructure_conditioning_kwargs is not None
-                    else None
+                    else np.array([], dtype=int)
                 ),
             )
 
@@ -537,16 +553,17 @@ class DensityGuidedDiffusion:
                 f"step_{self.stepper.current_step - 1}"
             ]["coords"]
             # Translate coords back before saving intermediate results
-            coords_tensor_translated = coords_tensor + self.initial_centroid
+            coords_tensor_translated = coords_tensor + self.initial_centroid.repeat(
+                coords_tensor.shape[0] // self.initial_centroid.shape[0], 1, 1
+            )
 
-            ensemble_size = coords_tensor_translated.shape[0]
             step_structures = []
 
             # FIXME: debugging, save calculated model and map every 10 steps
             if i % 10 == 0:
                 with torch.no_grad():
                     model_map_ensemble = self.density_calculator(
-                        coords_tensor_translated,
+                        coords_tensor_translated[:num_samples, :, :],  # FIXME
                         elements,
                         b_factors,
                         occupancies,
@@ -560,7 +577,7 @@ class DensityGuidedDiffusion:
                     )
                     torch.cuda.empty_cache()
 
-                for j in range(ensemble_size):
+                for j in range(num_samples):
                     structure = copy.deepcopy(self.structure)
 
                     structure.coor = coords_tensor_translated[j].cpu().numpy()
@@ -577,12 +594,15 @@ class DensityGuidedDiffusion:
         ]["coords"]
         # Translate final coords back before saving
         final_coords_tensor_translated = final_coords_tensor + self.initial_centroid
-        ensemble_size = final_coords_tensor_translated.shape[0]
         final_structures = []
 
         with torch.no_grad():
             model_map_ensemble = self.density_calculator(
-                final_coords_tensor_translated, elements, b_factors, occupancies, active
+                final_coords_tensor_translated[:num_samples, :, :],  # FIXME
+                elements,
+                b_factors,
+                occupancies,
+                active,
             )
         summed_map_array = model_map_ensemble.sum(0)
         # Use the existing XMap object to save the calculated density
@@ -590,7 +610,7 @@ class DensityGuidedDiffusion:
             f"{output_dir}/final_map.ccp4", density=summed_map_array
         )
 
-        for j in range(ensemble_size):
+        for j in range(num_samples):
             structure = copy.deepcopy(self.structure)
             structure.coor = final_coords_tensor_translated[j].cpu().numpy()
             # TODO: Update q and b factors if necessary for the final state

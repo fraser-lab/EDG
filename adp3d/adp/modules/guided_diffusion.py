@@ -1,4 +1,4 @@
- # type: ignore
+# type: ignore
 
 from typing import Callable, Dict, Optional, Tuple, Union
 import torch
@@ -7,7 +7,11 @@ import torch.nn.functional as F
 
 from math import sqrt
 
-from boltz.model.modules.utils import center_random_augmentation
+from boltz.model.modules.utils import (
+    center_random_augmentation,
+    compute_random_augmentation,
+)
+from boltz.model.potentials.potentials import get_potentials
 import numpy as np
 from numpy.typing import NDArray
 
@@ -137,7 +141,7 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
         align_to_input : bool, optional
             Whether to align the denoised coordinates to the initial input coordinates (if provided during initialization), by default True.
         alignment_reverse_diffusion : bool, optional
-            Whether to align the noised coordinates to the denoised coordinates, by default False. 
+            Whether to align the noised coordinates to the denoised coordinates, by default False.
             (This is the Kabsch alignment used in the Boltz-1 paper, they say not critical with the full model)
         selection : Optional[NDArray[int]], optional
             Indices of atoms to apply diffusion to. If None, applies to all atoms. By default None.
@@ -179,12 +183,8 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
             * torch.randn(atom_coords.shape, device=self.device)
         )
 
-        selection = torch.from_numpy(selection).to(
-            self.device
-        )
-        inverse_selector = torch.ones(
-            atom_coords.shape[1], device=self.device
-        ).bool()
+        selection = torch.from_numpy(selection).to(self.device)
+        inverse_selector = torch.ones(atom_coords.shape[1], device=self.device).bool()
         inverse_selector[selection] = False
 
         # NOTE: This might create some interesting pathologies if off
@@ -196,7 +196,7 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
             )
 
         atom_coords_noisy = atom_coords + eps
-        
+
         # if selection is not None:
         #     selection = torch.from_numpy(selection).to(
         #         self.device
@@ -238,7 +238,7 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
 
         #     # selection is going to be noisier, want to align to scaffold
         #     alignment_weights[:, selection] = 0.0
-            
+
         #     # align denoised coordinates to match the initial structure
         #     atom_coords_denoised_aligned = weighted_rigid_align(
         #         atom_coords_denoised.float(),
@@ -267,20 +267,10 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
         masked_coords = atom_coords_denoised[:, pad_mask, :]
 
         density_score, substructure_score = density_loss(masked_coords)
-        density_score.backward(retain_graph=True)
-        density_grad = atom_coords_noisy_aligned.grad.clone()
-        substructure_score.backward()
-        substructure_grad = atom_coords_noisy_aligned.grad.clone()
-        atom_coords_noisy_aligned.grad = None
+        total_loss = density_score + substructure_score
+        total_loss.backward()
+        grad_noisy = atom_coords_noisy.grad.clone()
 
-        # only apply gradient for atoms in selection
-        grad_noisy = torch.zeros_like(atom_coords_noisy_aligned)
-        if selection is not None:
-            grad_noisy[:, selection, :] = density_grad[:, selection, :]
-            grad_noisy[:, inverse_selector, :] = substructure_grad[:, inverse_selector, :]
-        else:
-            grad_noisy = density_grad + substructure_grad
-        
         atom_coords_noisy_aligned = atom_coords_noisy_aligned.to(
             # atom_coords_denoised_aligned
             atom_coords_denoised
@@ -321,7 +311,7 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
                 if alignment_weights is not None
                 else atom_mask.float()
             )
-            alignment_weights[:, selection] = 0.
+            alignment_weights[:, selection] = 0.0
 
             atom_coords_next = weighted_rigid_align(
                 atom_coords_next.float(),
@@ -330,10 +320,10 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
                 atom_mask.float(),
             ).to(atom_coords_next)
 
-        # Clamp atom_coords_next to the motif
-        atom_coords_next[:, inverse_selector, :] = self.cached_diffusion_init[
-            "init_coords"
-        ][:, inverse_selector, :]
+        # # Clamp atom_coords_next to the motif
+        # atom_coords_next[:, inverse_selector, :] = self.cached_diffusion_init[
+        #     "init_coords"
+        # ][:, inverse_selector, :]
 
         unpad_coords_next = atom_coords_next[
             :, pad_mask, :
@@ -351,11 +341,18 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
         self.current_step += 1  # NOTE: current step to execute
 
         if return_denoised:
-            return atom_coords_next.detach(), atom_coords_denoised.detach(), -(density_score + substructure_score).item()
+            return (
+                atom_coords_next.detach(),
+                atom_coords_denoised.detach(),
+                -(density_score + substructure_score).item(),
+            )
         else:
-            return atom_coords_next.detach(), -(density_score + substructure_score).item()
+            return atom_coords_next.detach(), -(
+                density_score + substructure_score
+            ).item()
 
-    def dmap_step(self,
+    def dmap_step(
+        self,
         atom_coords: torch.Tensor,
         density_loss: Callable,
         zeta: float = 0.1,
@@ -373,10 +370,10 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
         ----------
         atom_coords : torch.Tensor
             Current atomic coordinates of shape (batch, num_atoms, 3).
-        density_score : Callable
+        density_loss : Callable
             Function that takes in the current atomic coordinates and returns the loss as a Tensor
-        guidance_scale : float, optional
-            Scale factor for applying the density gradient guidance, by default 0.1.
+        zeta: float, optional
+            Scale factor for applying the density gradient guidance in DMAP, by default 0.1.
         return_denoised : bool, optional
             Whether to return the fully denoised coordinate prediction alongside the next step coordinates, by default False.
         augmentation : bool, optional
@@ -384,7 +381,7 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
         align_to_input : bool, optional
             Whether to align the denoised coordinates to the initial input coordinates (if provided during initialization), by default True.
         alignment_reverse_diffusion : bool, optional
-            Whether to align the noised coordinates to the denoised coordinates, by default False. 
+            Whether to align the noised coordinates to the denoised coordinates, by default False.
             (This is the Kabsch alignment used in the Boltz-1 paper, they say not critical with the full model)
         selection : Optional[NDArray[int]], optional
             Indices of atoms to apply diffusion to. If None, applies to all atoms. By default None.
@@ -413,11 +410,23 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
         pad_mask = feats["atom_pad_mask"].squeeze().bool()
 
         # Get cached diffusion info
+        num_sampling_steps = self.cached_diffusion_init["num_sampling_steps"]
         atom_mask: torch.Tensor = self.cached_diffusion_init["atom_mask"]
         sigma_tm, sigma_t, gamma = self.cached_diffusion_init["sigmas_and_gammas"][
             self.current_step
         ]
         sigma_tm, sigma_t, gamma = sigma_tm.item(), sigma_t.item(), gamma.item()
+
+        # get steering info
+        if self.model.steering_args["fk_steering"]:
+            energy_traj: torch.Tensor = self.cached_diffusion_init["steering_vars"]["energy_traj"]
+            potentials: list = self.cached_diffusion_init["steering_vars"]["potentials"]
+            scaled_guidance_update: torch.Tensor = self.cached_diffusion_init["steering_vars"][
+                "scaled_guidance_update"
+            ]
+            resample_weights: torch.Tensor = self.cached_diffusion_init["steering_vars"][
+                "resample_weights"
+            ]
 
         network_condition_kwargs = dict(
             s_trunk=s,
@@ -428,70 +437,191 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
             multiplicity=multiplicity,
         )
 
+        steering_t = 1.0 - (self.current_step / num_sampling_steps)
         t_hat = sigma_tm * (1 + gamma)
-        eps = (
-            self.model.structure_module.noise_scale
-            * sqrt(t_hat**2 - sigma_tm**2)
-            * torch.randn(atom_coords.shape, device=self.device)
+        noise_var = self.model.structure_module.noise_scale**2 * (
+            t_hat**2 - sigma_tm**2
         )
+        eps = sqrt(noise_var) * torch.randn(atom_coords.shape, device=self.device)
 
-        selection = torch.from_numpy(selection).to(
-            self.device
-        )
-        inverse_selector = torch.ones(
-            atom_coords.shape[1], device=self.device
-        ).bool()
+        selection = torch.from_numpy(selection).to(self.device)
+        inverse_selector = torch.ones(atom_coords.shape[1], device=self.device).bool()
         inverse_selector[selection] = False
 
         # NOTE: This might create some interesting pathologies if off
         if augmentation:
-            atom_coords = center_random_augmentation(
-                atom_coords,
-                atom_mask,
-                augmentation=True,
+            random_R, random_tr = compute_random_augmentation(
+                multiplicity, device=atom_coords.device, dtype=atom_coords.dtype
+            )
+            atom_coords = atom_coords - atom_coords.mean(dim=-2, keepdims=True)
+            atom_coords = (
+                torch.einsum("bmd,bds->bms", atom_coords, random_R) + random_tr
             )
 
-        atom_coords_noisy = atom_coords + eps
+            if (
+                self.model.steering_args["guidance_update"]
+                and scaled_guidance_update is not None
+            ):
+                scaled_guidance_update = torch.einsum(
+                    "bmd,bds->bms", scaled_guidance_update, random_R
+                )
 
-        atom_coords_denoised, _ = (
-            self.model.structure_module.preconditioned_network_forward(
-                atom_coords_noisy,
-                t_hat,
-                training=False,
-                network_condition_kwargs=network_condition_kwargs,
+        with torch.no_grad():
+            atom_coords_noisy = atom_coords + eps
+
+            atom_coords_denoised, _ = (
+                self.model.structure_module.preconditioned_network_forward(
+                    atom_coords_noisy,
+                    t_hat,
+                    training=False,
+                    network_condition_kwargs=network_condition_kwargs,
+                )
             )
-        )
-        
-        atom_coords_noisy = atom_coords_noisy.to(
-            # atom_coords_denoised_aligned
-            atom_coords_denoised
-        )
 
-        denoised_over_sigma = (
-            # atom_coords_noisy_aligned - atom_coords_denoised_aligned
-            atom_coords_noisy - atom_coords_denoised
-        ) / t_hat
+            if self.model.steering_args["fk_steering"] and (
+                (
+                    self.current_step
+                    % self.model.steering_args["fk_resampling_interval"]
+                    == 0
+                    and noise_var > 0
+                )
+                or self.current_step == num_sampling_steps - 1
+            ):
+                # Compute energy of x_0 prediction
+                energy = torch.zeros(multiplicity, device=self.device)
+                for potential in potentials:
+                    parameters = potential.compute_parameters(steering_t)
+                    if parameters["resampling_weight"] > 0:
+                        component_energy = potential.compute(
+                            atom_coords_denoised,
+                            network_condition_kwargs["feats"],
+                            parameters,
+                        )
+                        energy += parameters["resampling_weight"] * component_energy
+                energy_traj = torch.cat((energy_traj, energy.unsqueeze(1)), dim=1)
 
-        # E[Xt-1 | Xt] = ut-1 (posterior mean of Xt-1 given Xt)
-        atom_coords_next: torch.Tensor = (
-            atom_coords_noisy
-            + self.model.structure_module.step_scale
-            * (sigma_t - t_hat)
-            * denoised_over_sigma
-        )
+                # Compute log G values
+                if self.current_step == 0:
+                    log_G = -1 * energy
+                else:
+                    log_G = energy_traj[:, -2] - energy_traj[:, -1]
 
+                # Compute ll difference between guided and unguided transition distribution
+                if self.model.steering_args["guidance_update"] and noise_var > 0:
+                    ll_difference = (eps**2 - (eps + scaled_guidance_update) ** 2).sum(
+                        dim=(-1, -2)
+                    ) / (2 * noise_var)
+                else:
+                    ll_difference = torch.zeros_like(energy)
 
-        t_hat_next = sigma_t * (1 + gamma)
-        eps = (
+                # Compute resampling weights
+                resample_weights = F.softmax(
+                    (
+                        ll_difference + self.model.steering_args["fk_lambda"] * log_G
+                    ).reshape(-1, self.model.steering_args["num_particles"]),
+                    dim=1,
+                )
+
+            # Compute guidance update to x_0 prediction
+            if (
+                self.model.steering_args["guidance_update"]
+                and self.current_step < num_sampling_steps - 1
+            ):
+                guidance_update = torch.zeros_like(atom_coords_denoised)
+                for guidance_step in range(self.model.steering_args["num_gd_steps"]):
+                    energy_gradient = torch.zeros_like(atom_coords_denoised)
+                    for potential in potentials:
+                        parameters = potential.compute_parameters(steering_t)
+                        if (
+                            parameters["guidance_weight"] > 0
+                            and (guidance_step) % parameters["guidance_interval"] == 0
+                        ):
+                            energy_gradient += parameters[
+                                "guidance_weight"
+                            ] * potential.compute_gradient(
+                                atom_coords_denoised + guidance_update,
+                                network_condition_kwargs["feats"],
+                                parameters,
+                            )
+                    guidance_update -= energy_gradient
+                atom_coords_denoised += guidance_update
+                scaled_guidance_update = (
+                    guidance_update
+                    * -1
+                    * self.model.structure_module.step_scale
+                    * (sigma_t - t_hat)
+                    / t_hat
+                )
+
+            if self.model.steering_args["fk_steering"] and (
+                (
+                    self.current_step
+                    % self.model.steering_args["fk_resampling_interval"]
+                    == 0
+                    and noise_var > 0
+                )
+                or self.current_step == num_sampling_steps - 1
+            ):
+                resample_indices = (
+                    torch.multinomial(
+                        resample_weights,
+                        resample_weights.shape[1], # Changed from Boltz, since I want ensemble at the end.
+                        replacement=True,
+                    )
+                    + resample_weights.shape[1]
+                    * torch.arange(
+                        resample_weights.shape[0], device=resample_weights.device
+                    ).unsqueeze(-1)
+                ).flatten()
+
+                atom_coords = atom_coords[resample_indices]
+                atom_coords_noisy = atom_coords_noisy[resample_indices]
+                atom_mask = atom_mask[resample_indices]
+                if atom_coords_denoised is not None:
+                    atom_coords_denoised = atom_coords_denoised[resample_indices]
+                energy_traj = energy_traj[resample_indices]
+                if self.model.steering_args["guidance_update"]:
+                    scaled_guidance_update = scaled_guidance_update[resample_indices]
+
+            # cache FK steering variables
+            steering_vars = {
+                "energy_traj": energy_traj,
+                "resample_weights": resample_weights,
+                "scaled_guidance_update": scaled_guidance_update,
+            }
+            self.cached_diffusion_init["steering_vars"].update(steering_vars)
+
+            atom_coords_noisy = atom_coords_noisy.to(
+                # atom_coords_denoised_aligned
+                atom_coords_denoised
+            )
+
+            denoised_over_sigma = (
+                # atom_coords_noisy_aligned - atom_coords_denoised_aligned
+                atom_coords_noisy - atom_coords_denoised
+            ) / t_hat
+
+            # E[Xt-1 | Xt] = ut-1 (posterior mean of Xt-1 given Xt)
+            atom_coords_next: torch.Tensor = (
+                atom_coords_noisy
+                + self.model.structure_module.step_scale
+                * (sigma_t - t_hat)
+                * denoised_over_sigma
+            )
+
+            t_hat_next = sigma_t * (1 + gamma)
+            eps = (
                 self.model.structure_module.noise_scale
                 * sqrt(t_hat_next**2 - sigma_t**2)
                 * torch.randn(atom_coords_next.shape, device=self.device)
             )
-        # Xt-1 = ut-1 + eps
-        atom_coords_next_noisy = atom_coords_next + eps
+            # Xt-1 = ut-1 + eps
+            atom_coords_next_noisy = atom_coords_next + eps
 
         for _ in range(dmap_steps):
-            atom_coords_next_noisy = atom_coords_next_noisy.detach().requires_grad_(True)
+            atom_coords_next_noisy = atom_coords_next_noisy.detach().requires_grad_(
+                True
+            )
 
             # E[X0 | Xt-1]
             atom_coords_next_denoised, _ = (
@@ -516,11 +646,22 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
             #     grad_noisy[:, inverse_selector, :] = substructure_grad[:, inverse_selector, :]
             # else:
             #     grad_noisy = density_grad + substructure_grad
+            grad_noisy_scaled = (
+                torch.linalg.norm(denoised_over_sigma)
+                / torch.linalg.norm(grad_noisy)
+                * grad_noisy
+            )
 
-            atom_coords_next_star = atom_coords_next_noisy + zeta * grad_noisy # + because score is already negated
+            atom_coords_next_star = (
+                atom_coords_next_noisy + zeta * grad_noisy_scaled
+            )  # + because score is already negated
             diff_star = atom_coords_next_star - atom_coords_next
-            diff_star = diff_star / torch.linalg.norm(diff_star) * sqrt(atom_coords_next.shape[1] * 3) * sqrt(t_hat_next**2 - sigma_t**2) * self.model.structure_module.noise_scale
+            # diff_star = diff_star / torch.linalg.norm(diff_star) * sqrt(atom_coords_next.shape[1] * 3) * sqrt(t_hat_next**2 - sigma_t**2) * self.model.structure_module.noise_scale # FIXME: testing unscaling
             atom_coords_next_noisy = atom_coords_next + diff_star
+
+        atom_coords_next = (
+            atom_coords_next_noisy.detach()
+        )  # need to set DMAP updated coords
 
         # Align to input for next step rather than denoised coords
         if align_to_input:
@@ -535,7 +676,7 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
                 if alignment_weights is not None
                 else atom_mask.float()
             )
-            alignment_weights[:, selection] = 0.
+            alignment_weights[:, selection] = 0.0
 
             atom_coords_next = weighted_rigid_align(
                 atom_coords_next.float(),
@@ -544,7 +685,7 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
                 atom_mask.float(),
             ).to(atom_coords_next)
 
-        # Clamp atom_coords_next to the motif
+        # Clamp atom_coords_next to the motif # FIXME
         atom_coords_next[:, inverse_selector, :] = self.cached_diffusion_init[
             "init_coords"
         ][:, inverse_selector, :]
@@ -565,6 +706,10 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
         self.current_step += 1  # NOTE: current step to execute
 
         if return_denoised:
-            return atom_coords_next.detach(), atom_coords_denoised.detach(), -(density_score + substructure_score).item()
+            return (
+                atom_coords_next.detach(),
+                atom_coords_denoised.detach(),
+                -(total_loss).item(),
+            )
         else:
-            return atom_coords_next.detach(), -(density_score + substructure_score).item()
+            return atom_coords_next.detach(), -(total_loss).item()

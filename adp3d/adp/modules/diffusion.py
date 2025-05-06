@@ -4,7 +4,8 @@ from math import sqrt
 
 from pathlib import Path
 from boltz.model.model import Boltz1
-from boltz.main import BoltzDiffusionParams
+from boltz.main import BoltzDiffusionParams, BoltzSteeringParams
+from boltz.model.potentials.potentials import get_potentials
 from boltz.model.modules.utils import default, center_random_augmentation
 from boltz.model.loss.diffusion import weighted_rigid_align
 from dataclasses import asdict, dataclass
@@ -51,6 +52,7 @@ class DiffusionStepper:
         use_msa_server: bool = True,
         predict_args: PredictArgs = PredictArgs(),
         diffusion_args: BoltzDiffusionParams = BoltzDiffusionParams(),
+        steering_args: BoltzSteeringParams = BoltzSteeringParams(),
         device: Optional[torch.device] = None,
     ) -> None:
         """Load Boltz-1 pretrained model weights and components from checkpoint.
@@ -96,6 +98,7 @@ class DiffusionStepper:
                     map_location="cpu",
                     diffusion_process_args=asdict(diffusion_args),
                     ema=False,
+                    steering_args=asdict(steering_args),
                 )
                 .to(self.device)
                 .eval()
@@ -269,8 +272,29 @@ class DiffusionStepper:
             num_samples, self.model.predict_args["diffusion_samples"]
         )
         atom_mask = self.cached_representations["feats"]["atom_pad_mask"]
-        atom_mask = atom_mask.repeat_interleave(diffusion_samples, 0)
 
+        steering_vars = {}
+
+        if self.model.steering_args["fk_steering"]:
+            potentials = get_potentials()
+            diffusion_samples = self.model.steering_args["num_particles"]
+            energy_traj = torch.empty((diffusion_samples, 0), device=self.device)
+            resample_weights = torch.ones(
+                diffusion_samples, device=self.device
+            ).reshape(-1, self.model.steering_args["num_particles"])
+            steering_vars["energy_traj"] = energy_traj
+            steering_vars["resample_weights"] = resample_weights
+            steering_vars["potentials"] = potentials
+
+        if self.model.steering_args["guidance_update"]:
+            scaled_guidance_update = torch.zeros(
+                (diffusion_samples, *atom_mask.shape[1:], 3),
+                dtype=torch.float32,
+                device=self.device,
+            )
+            steering_vars["scaled_guidance_update"] = scaled_guidance_update
+
+        atom_mask = atom_mask.repeat_interleave(diffusion_samples, 0)
         shape = (*atom_mask.shape, 3)
 
         # get the schedule, which is returned as (sigma, gamma) tuple, and pair up with the next sigma and gamma
@@ -298,6 +322,7 @@ class DiffusionStepper:
             "sigmas_and_gammas": sigmas_and_gammas,
             "diffusion_samples": diffusion_samples,
             "num_sampling_steps": num_sampling_steps,
+            "steering_vars": steering_vars,
         }
 
     def initialize_partial_diffusion(
@@ -347,6 +372,29 @@ class DiffusionStepper:
         self.current_step = num_sampling_steps - noising_steps
 
         atom_mask = self.cached_representations["feats"]["atom_pad_mask"]
+
+        # Setup steering variables dictionary
+        steering_vars = {}
+
+        if self.model.steering_args["fk_steering"]:
+            potentials = get_potentials()
+            diffusion_samples = self.model.steering_args["num_particles"]
+            energy_traj = torch.empty((diffusion_samples, 0), device=self.device)
+            resample_weights = torch.ones(
+                diffusion_samples, device=self.device
+            ).reshape(-1, self.model.steering_args["num_particles"])
+            steering_vars["energy_traj"] = energy_traj
+            steering_vars["resample_weights"] = resample_weights
+            steering_vars["potentials"] = potentials
+
+        if self.model.steering_args["guidance_update"]:
+            scaled_guidance_update = torch.zeros(
+                (diffusion_samples, *atom_mask.shape[1:], 3),
+                dtype=torch.float32,
+                device=self.device,
+            )
+            steering_vars["scaled_guidance_update"] = scaled_guidance_update
+
         atom_mask = atom_mask.repeat_interleave(diffusion_samples, 0)
 
         shape = (*atom_mask.shape, 3)
@@ -374,7 +422,7 @@ class DiffusionStepper:
         atom_coords = pad_dim(atom_coords, 1, shape[1] - atom_coords.shape[1])
         init_coords = atom_coords.clone()
         eps = (
-            self.model.structure_module.noise_scale  # FIXME: Should this be used here?
+            self.model.structure_module.noise_scale
             * sigmas[-noising_steps - 1]
             * torch.randn(shape, device=self.device)
         )
@@ -393,6 +441,7 @@ class DiffusionStepper:
             "sigmas_and_gammas": sigmas_and_gammas,
             "diffusion_samples": diffusion_samples,
             "num_sampling_steps": num_sampling_steps,
+            "steering_vars": steering_vars,
         }
 
     def initialize_substructure_conditioned_diffusion(
@@ -437,6 +486,29 @@ class DiffusionStepper:
         )
 
         atom_mask = self.cached_representations["feats"]["atom_pad_mask"]
+
+        # Setup steering variables dictionary
+        steering_vars = {}
+
+        if self.model.steering_args["fk_steering"]:
+            potentials = get_potentials()
+            diffusion_samples = self.model.steering_args["num_particles"]
+            energy_traj = torch.empty((diffusion_samples, 0), device=self.device)
+            resample_weights = torch.ones(
+                diffusion_samples, device=self.device
+            ).reshape(-1, self.model.steering_args["num_particles"])
+            steering_vars["energy_traj"] = energy_traj
+            steering_vars["resample_weights"] = resample_weights
+            steering_vars["potentials"] = potentials
+
+        if self.model.steering_args["guidance_update"]:
+            scaled_guidance_update = torch.zeros(
+                (diffusion_samples, *atom_mask.shape[1:], 3),
+                dtype=torch.float32,
+                device=self.device,
+            )
+            steering_vars["scaled_guidance_update"] = scaled_guidance_update
+
         atom_mask = atom_mask.repeat_interleave(diffusion_samples, 0)
 
         shape = (*atom_mask.shape, 3)
@@ -467,15 +539,14 @@ class DiffusionStepper:
         init_coords = pad_dim(init_coords, 1, shape[1] - init_coords.shape[1])
 
         if invert:
-            inverse_selector = torch.ones(init_coords.shape[1], device=self.device).bool()
+            inverse_selector = torch.ones(
+                init_coords.shape[1], device=self.device
+            ).bool()
             inverse_selector[selection] = False
             selection = inverse_selector
 
         # set the initial coordinates for the selected substructure
-        # NOTE: The selector here should be selecting the substructure, not the segment that should be diffused.
-        atom_coords[:, selection, :] = init_coords[
-            :, selection, :
-        ]
+        atom_coords[:, selection, :] = init_coords[:, selection, :]
 
         token_repr = None
         token_a = None
@@ -489,9 +560,10 @@ class DiffusionStepper:
             "sigmas_and_gammas": sigmas_and_gammas,
             "diffusion_samples": diffusion_samples,
             "num_sampling_steps": num_sampling_steps,
+            "steering_vars": steering_vars,
         }
 
-    def step(
+    def step(  # FIXME: does not include steering here
         self,
         atom_coords: torch.Tensor,
         return_denoised: bool = False,

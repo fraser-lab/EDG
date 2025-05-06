@@ -1290,6 +1290,31 @@ class Ensemble:
         
         return np.stack([s.coor for s in self._structures])
 
+    @coor.setter
+    def coor(self, value: np.ndarray):
+        """Set coordinates for all structures in the ensemble.
+        
+        Parameters
+        ----------
+        value : np.ndarray
+            Array of shape (n_structures, n_atoms, 3) containing new coordinates
+            
+        Raises
+        ------
+        ValueError
+            If value does not match the expected shape or if ensemble is empty
+        """
+        if not self._structures:
+            raise ValueError("Cannot set coordinates for an empty ensemble")
+            
+        n_atoms_ref = self._structures[0].natoms
+        
+        if value.shape != (len(self._structures), n_atoms_ref, 3):
+            raise ValueError(f"Expected shape {(len(self._structures), n_atoms_ref, 3)}, got {value.shape}")
+        
+        for i, structure in enumerate(self._structures):
+            structure.coor = value[i]
+
     @property
     def q(self) -> np.ndarray:
         """Stack occupancy values from all structures in the ensemble.
