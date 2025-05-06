@@ -281,7 +281,7 @@ class XMap_torch:
             expanded_density,  # Input: [n_ops, batch_size, z, y, x] (N, C, D, H, W)
             normalized_coords_xyz,  # Grid: [n_ops, z, y, x, 3] (N, D, H, W, 3) expected order (x,y,z)
             mode="bilinear",
-            align_corners=False,
+            align_corners=False, # FIXME: test true or false?
             padding_mode="border",
         )  # Result: [n_ops, batch_size, z, y, x]
 

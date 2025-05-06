@@ -419,14 +419,16 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
 
         # get steering info
         if self.model.steering_args["fk_steering"]:
-            energy_traj: torch.Tensor = self.cached_diffusion_init["steering_vars"]["energy_traj"]
+            energy_traj: torch.Tensor = self.cached_diffusion_init["steering_vars"][
+                "energy_traj"
+            ]
             potentials: list = self.cached_diffusion_init["steering_vars"]["potentials"]
-            scaled_guidance_update: torch.Tensor = self.cached_diffusion_init["steering_vars"][
-                "scaled_guidance_update"
-            ]
-            resample_weights: torch.Tensor = self.cached_diffusion_init["steering_vars"][
-                "resample_weights"
-            ]
+            scaled_guidance_update: torch.Tensor = self.cached_diffusion_init[
+                "steering_vars"
+            ]["scaled_guidance_update"]
+            resample_weights: torch.Tensor = self.cached_diffusion_init[
+                "steering_vars"
+            ]["resample_weights"]
 
         network_condition_kwargs = dict(
             s_trunk=s,
@@ -553,19 +555,22 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
                     / t_hat
                 )
 
-            if self.model.steering_args["fk_steering"] and (
-                (
+            if (
+                self.model.steering_args["fk_steering"]
+                and (
                     self.current_step
                     % self.model.steering_args["fk_resampling_interval"]
                     == 0
                     and noise_var > 0
                 )
-                or self.current_step == num_sampling_steps - 1
+                # or self.current_step == num_sampling_steps - 1 # Changed from Boltz, since I want ensemble at the end.
             ):
                 resample_indices = (
                     torch.multinomial(
                         resample_weights,
-                        resample_weights.shape[1], # Changed from Boltz, since I want ensemble at the end.
+                        resample_weights.shape[
+                            1
+                        ],  # Changed from Boltz, since I want ensemble at the end.
                         replacement=True,
                     )
                     + resample_weights.shape[1]
