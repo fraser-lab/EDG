@@ -630,13 +630,13 @@ class DensityPotential(Potential):
             # Placeholder: weights *= torch.exp(-b_factors / (8 * np.pi**2)) ??
             pass
 
-        weighted_density = value * weights # [batch, n_atoms]
+        weighted_density = k * value * weights # [batch, n_atoms]
         negative_sum = -torch.sum(weighted_density, dim=-1) # [batch]
 
         if not compute_derivative:
             return negative_sum
 
-        dEnergy = -weights * torch.ones_like(value)  # [batch, n_atoms]
+        dEnergy = -k * weights * torch.ones_like(value)  # [batch, n_atoms]
 
         return negative_sum.detach(), dEnergy
 
@@ -688,7 +688,7 @@ class DensityPotential(Potential):
 
         # Normalize coordinates to [-1, 1] for grid_sample
         normalized_coords = (
-            2.0 * (grid_coords_rot_trans / grid_shape.view(1, 1, 1, 3)) - 1.0
+            2.0 * (grid_coords_rot_trans / (grid_shape.view(1, 1, 1, 3) - 1)) - 1.0
         )  # [n_ops, batch, n_atoms, 3]
 
         # Reshape coordinates for PyTorch's grid_sample function
@@ -721,13 +721,13 @@ class DensityPotential(Potential):
             align_corners=False,  # FIXME: test true?
         )  # [batch*n_atoms*n_ops, 1, 1, 1, 1]
 
-        # Reshape and sum over symmetry operations # FIXME: should I average??
+        # Reshape and sum over symmetry operations
         interpolated = interpolated.view(
             batch_size, n_atoms, n_ops
         )  # [batch, n_atoms, n_ops]
-        interpolated_sum = interpolated.mean(dim=2)  # [batch, n_atoms]
+        interpolated_mean = interpolated.mean(dim=2)  # [batch, n_atoms]
 
-        return interpolated_sum
+        return interpolated_mean
 
     def _compute_grid_coordinates(self, coordinates: torch.Tensor) -> torch.Tensor:
         """Transform Cartesian coordinates to grid coordinates.
