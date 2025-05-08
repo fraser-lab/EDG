@@ -11,7 +11,6 @@ from boltz.model.modules.utils import (
     center_random_augmentation,
     compute_random_augmentation,
 )
-from boltz.model.potentials.potentials import get_potentials
 import numpy as np
 from numpy.typing import NDArray
 

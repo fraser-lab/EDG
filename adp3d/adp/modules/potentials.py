@@ -465,31 +465,32 @@ class SubstructurePotential(FlatBottomPotential):
             )
 
         reference_coords = self.parameters["reference_coords"]  # [n_atoms, 3]
-        denoising_selection = self.parameters["denoising_selection"]  # [n_segment]
+        selection = self.parameters["denoising_selection"]  # [n_segment]
 
-        selection = torch.from_numpy(denoising_selection).to(
-            feats["atom_pad_mask"].device
-        )
+        if not isinstance(selection, torch.Tensor):
+            selection = torch.from_numpy(selection).to(
+                feats["atom_pad_mask"].device
+            )
+
         inverse_selector = torch.ones(
             reference_coords.shape[1], device=feats["atom_pad_mask"].device
         ).bool()
-        inverse_selector[selection] = False
 
-        # Create pair indices for the selected atoms
-        # Each atom is paired with itself (for comparison with reference)
-        selected_atoms = torch.where(inverse_selector)[0]
-        n_selected = selected_atoms.shape[0]
-        pair_index = torch.stack([selected_atoms, selected_atoms], dim=0)
+        if selection.shape[0] > 0:
+            inverse_selector[selection] = False
+
+        index = torch.where(inverse_selector)[0].unsqueeze(0) # The atoms outside the denoising region
+        n_selected = index.shape[0]
 
         lower_bounds = None
         # Upper bounds based on the buffer parameter
         upper_bounds = torch.full(
-            (n_selected,), parameters["buffer"], device=pair_index.device
+            (n_selected,), parameters["buffer"], device=index.device
         )
-        # Scaling factor for the potential
-        k = torch.full((n_selected,), parameters["scale"], device=pair_index.device)
 
-        return pair_index, (k, lower_bounds, upper_bounds), None
+        k = torch.ones_like(upper_bounds)
+
+        return index, (k, lower_bounds, upper_bounds), None
 
     def compute_variable(
         self, coords: torch.Tensor, index: torch.Tensor, compute_gradient: bool = False
@@ -510,12 +511,12 @@ class SubstructurePotential(FlatBottomPotential):
         Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]
             Distances between current and reference coordinates, and optionally gradients
         """
-        ref_coords = coords.new_zeros(coords.shape)
-        ref_coords[..., index[1], :] = coords.new_tensor(
+        ref_coords = torch.zeros_like(coords)
+        ref_coords[..., index[0], :] = coords.new_tensor(
             self.parameters["reference_coords"]
-        )[index[1]]
+        )[index[0]]
 
-        r_ij = coords.index_select(-2, index[0]) - ref_coords.index_select(-2, index[1])
+        r_ij = coords.index_select(-2, index[0]) - ref_coords.index_select(-2, index[0])
         r_ij_norm = torch.linalg.norm(r_ij, dim=-1)
 
         if not compute_gradient:
@@ -545,7 +546,7 @@ class DensityPotential(Potential):
         self,
         xmap: XMap_torch,
         parameters: Optional[
-            Dict[str, Union[ParameterSchedule, float, int, bool]]
+            Dict[str, Union[ParameterSchedule, float, int, bool, torch.Tensor]]
         ] = None,
     ) -> None:
         """Initialize the density potential.
@@ -565,7 +566,7 @@ class DensityPotential(Potential):
         """Initialize transformation matrices for coordinate conversions."""
         self.dtype = torch.float32  # need to set this here or else doubles start popping up and ruining operations
         self.device = self.xmap.array.device
-        
+
         lattice_to_cartesian = (
             self.xmap.unit_cell.frac_to_orth / self.xmap.unit_cell.abc
         )
@@ -573,31 +574,39 @@ class DensityPotential(Potential):
             self.xmap.unit_cell.orth_to_frac * self.xmap.unit_cell.abc.reshape(3, 1)
         )
         grid_to_cartesian = lattice_to_cartesian * self.xmap.voxelspacing.cpu().numpy()
-        self.register_buffer(
-            "lattice_to_cartesian",
-            torch.tensor(lattice_to_cartesian).to(dtype=self.dtype, device=self.device),
-        )
 
-        self.register_buffer(
-            "cartesian_to_lattice",
-            torch.tensor(cartesian_to_lattice).to(dtype=self.dtype, device=self.device),
+        self.lattice_to_cartesian = torch.tensor(lattice_to_cartesian).to(
+            dtype=self.dtype, device=self.device
         )
-
-        self.register_buffer(
-            "grid_to_cartesian",
-            torch.tensor(grid_to_cartesian).to(dtype=self.dtype, device=self.device),
+        self.cartesian_to_lattice = torch.tensor(cartesian_to_lattice).to(
+            dtype=self.dtype, device=self.device
+        )
+        self.grid_to_cartesian = torch.tensor(grid_to_cartesian).to(
+            dtype=self.dtype, device=self.device
         )
 
     def compute_function(
-        self, value: torch.Tensor, k: float = 1.0, compute_derivative: bool = False
+        self,
+        value: torch.Tensor,
+        elements: torch.Tensor,
+        b_factors: torch.Tensor,
+        occupancies: torch.Tensor,
+        k: float = 1.0,
+        compute_derivative: bool = False,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
-        """Compute the energy function from the interpolated density sum.
+        """Compute the energy function from the interpolated density.
 
         Parameters
         ----------
         value : torch.Tensor
-            Density score values (negative sum of interpolated densities)
-        scale : float, optional
+            Quantity that the energy is calculated from, here of shape [batch, n_atoms] (value is interpolated density)
+        elements : torch.Tensor
+            Atomic elements, shape [batch, n_atoms]
+        b_factors : torch.Tensor
+            B-factors for the atoms, shape [batch, n_atoms]
+        occupancies : torch.Tensor
+            Occupancies for the atoms, shape [batch, n_atoms]
+        k : float, optional
             Scaling factor for the energy, by default 1.0
         compute_derivative : bool, optional
             Whether to compute derivatives, by default False
@@ -607,21 +616,35 @@ class DensityPotential(Potential):
         Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]
             Energy values, and optionally derivatives
         """
-        energy = -k * value
+        
+        # TODO: Apply weights based on B-factors and occupancies
+        # This is a placeholder for future implementation
+        weights = torch.ones_like(b_factors)
+        if elements is not None:
+            # Placeholder: scale weight by element
+            pass
+        if occupancies is not None:
+            # Placeholder: scale weight by occupancy
+            pass
+        if b_factors is not None:
+            # Placeholder: weights *= torch.exp(-b_factors / (8 * np.pi**2)) ??
+            pass
+
+        weighted_density = value * weights # [batch, n_atoms]
+        negative_sum = -torch.sum(weighted_density, dim=-1) # [batch]
 
         if not compute_derivative:
-            return energy
+            return negative_sum
 
-        # Derivative of energy with respect to density score is constant
-        dEnergy = -k * torch.ones_like(value)
+        dEnergy = -weights * torch.ones_like(value)  # [batch, n_atoms]
 
-        return energy, dEnergy
+        return negative_sum.detach(), dEnergy
 
     def interpolate_density_at_positions(self, positions: torch.Tensor) -> torch.Tensor:
         """Interpolate experimental density values at given atomic positions with symmetry.
 
         This method applies all symmetry operations to the atomic positions and interpolates
-        the density at each symmetric position, then returns the sum.
+        the density at each symmetric position, then returns the average.
 
         Parameters
         ----------
@@ -633,7 +656,7 @@ class DensityPotential(Potential):
         torch.Tensor
             Interpolated density values at each position, shape [batch, n_atoms]
         """
-        if self.xmap is None or self.experimental_map is None:
+        if self.xmap is None:
             raise ValueError("XMap_torch object and experimental map must be provided")
 
         batch_size, n_atoms, _ = positions.shape
@@ -646,19 +669,26 @@ class DensityPotential(Potential):
         grid_coords_rot = torch.einsum(
             "oij,bnj->obni", self.xmap.R_matrices, grid_coords
         )
+
+        grid_shape = torch.tensor(self.xmap.array.shape, device=positions.device)
+        grid_shape_xyz = torch.tensor(self.xmap.array.shape[::-1], device=positions.device)
         grid_coords_rot_trans = grid_coords_rot + self.xmap.t_vectors.unsqueeze(
             1
-        ).unsqueeze(2) * self.xmap.array.shape[::-1].view(
+        ).unsqueeze(2) * grid_shape_xyz.view(
             1, 1, 1, 3
         )  # [n_ops, batch, n_atoms, 3]
 
         # to zyx
-        grid_coords_rot_trans = grid_coords_rot_trans[..., [2, 1, 0]]  # [n_ops, batch, n_atoms, 3]
-        grid_coords_rot_trans = grid_coords_rot_trans % self.xmap.array.shape.view(1, 1, 1, 3) # [n_ops, batch, n_atoms, 3]
+        grid_coords_rot_trans = grid_coords_rot_trans[
+            ..., [2, 1, 0]
+        ]  # [n_ops, batch, n_atoms, 3]
+        grid_coords_rot_trans = grid_coords_rot_trans % grid_shape.view(
+            1, 1, 1, 3
+        )  # [n_ops, batch, n_atoms, 3]
 
         # Normalize coordinates to [-1, 1] for grid_sample
         normalized_coords = (
-            2.0 * (grid_coords_rot_trans / self.xmap.array.shape.view(1, 1, 1, 3)) - 1.0
+            2.0 * (grid_coords_rot_trans / grid_shape.view(1, 1, 1, 3)) - 1.0
         )  # [n_ops, batch, n_atoms, 3]
 
         # Reshape coordinates for PyTorch's grid_sample function
@@ -680,7 +710,7 @@ class DensityPotential(Potential):
         )  # [1, 1, depth, height, width]
         exp_map_expanded = exp_map.expand(
             batch_size * n_atoms * n_ops, 1, *self.xmap.shape
-        )  # [batch*n_atoms*n_ops, 1, depth, height, width]
+        ).to(positions.dtype)  # [batch*n_atoms*n_ops, 1, depth, height, width]
 
         # Use grid_sample to interpolate density values at all symmetric positions
         interpolated = F.grid_sample(
@@ -688,14 +718,14 @@ class DensityPotential(Potential):
             normalized_coords_xyz.unsqueeze(1),  # [batch*n_atoms*n_ops, 1, 1, 1, 3]
             mode="bilinear",
             padding_mode="border",
-            align_corners=False, # FIXME: test true?
+            align_corners=False,  # FIXME: test true?
         )  # [batch*n_atoms*n_ops, 1, 1, 1, 1]
 
         # Reshape and sum over symmetry operations # FIXME: should I average??
         interpolated = interpolated.view(
             batch_size, n_atoms, n_ops
         )  # [batch, n_atoms, n_ops]
-        interpolated_sum = interpolated.sum(dim=2)  # [batch, n_atoms]
+        interpolated_sum = interpolated.mean(dim=2)  # [batch, n_atoms]
 
         return interpolated_sum
 
@@ -733,83 +763,52 @@ class DensityPotential(Potential):
     def compute_variable(
         self,
         coords: torch.Tensor,
-        index: Dict[str, torch.Tensor],
+        index: torch.Tensor,
         compute_gradient: bool = False,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
-        """Compute the negative sum of interpolated densities at atom positions.
+        """Compute grid coordinates to be used for density interpolation.
 
         Parameters
         ----------
         coords : torch.Tensor
             Atomic coordinates, shape [batch, n_atoms, 3]
-        index : Dict[str, torch.Tensor]
-            Dictionary containing feature information
+        index : torch.Tensor
+            Indices of the atoms to compute density for, shape [n_atoms]
         compute_gradient : bool, optional
             Whether to compute gradients, by default False
 
         Returns
         -------
         Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]
-            Density score and optionally gradients
+            grid coordinates and optionally gradients
         """
-        # Extract features from index
-        elements = index.get("elements", None)
-        b_factors = index.get("b_factors", None)
-        occupancies = index.get("occupancies", None)
-        active_mask = index.get("active", None)  # Mask indicating valid atoms
-        initial_centroid = index.get("initial_centroid", None)
+        coords_translated = coords[..., index[0], :] # [batch, n_active, 3]
 
-        # Translate coordinates back to original frame for density interpolation
-        coords_translated = coords
-        if initial_centroid is not None:
-            coords_translated = coords + initial_centroid.repeat(
-                coords.shape[0] // initial_centroid.shape[0], 1, 1
+        if self.parameters["initial_centroid"] is not None:
+            coords_translated = coords + self.parameters["initial_centroid"].repeat(
+                coords.shape[0] // self.parameters["initial_centroid"].shape[0], 1, 1
             )
 
-        # TODO: Apply weights based on B-factors and occupancies
-        # This is a placeholder for future implementation
-        weights = torch.ones_like(b_factors)
-        if occupancies is not None:
-            # Placeholder: weights *= occupancies
-            pass
-        if b_factors is not None:
-            # Placeholder: weights *= torch.exp(-b_factors / (8 * np.pi**2))
-            pass
-
-        # Apply active mask if available
-        if active_mask is not None:
-            weights = weights * active_mask
-
         if not compute_gradient:
-            # Interpolate density at atom positions
             interpolated_density = self.interpolate_density_at_positions(
                 coords_translated
             )
-
-            # Apply weights and calculate negative sum
-            weighted_density = interpolated_density * weights
-            negative_sum = -torch.sum(weighted_density, dim=-1)  # [batch]
-
-            return negative_sum
+            return interpolated_density
 
         # If we need gradients, we use autograd
-        coords_translated.requires_grad_(True)
+        coords_translated = coords_translated.clone().detach().requires_grad_(True)
 
-        # Interpolate density at atom positions with gradient tracking
-        interpolated_density = self.interpolate_density_at_positions(coords_translated)
-
-        # Apply weights and calculate negative sum
-        weighted_density = interpolated_density * weights
-        negative_sum = -torch.sum(weighted_density, dim=-1)  # [batch]
-
-        # Compute gradients using autograd
-        negative_sum.backward(torch.ones_like(negative_sum))
+        interpolated_density = self.interpolate_density_at_positions(coords_translated) # [batch, n_active]
+        
+        to_grad = interpolated_density.sum(dim=-1)
+        to_grad.backward(torch.ones_like(to_grad))
 
         # Get gradients with respect to coordinates
-        grad = coords_translated.grad.clone()
+        grad_coords = coords_translated.grad.clone()
         coords_translated.grad.zero_()
+        
+        return interpolated_density, grad_coords
 
-        return negative_sum.detach(), grad
 
     def compute_args(
         self, feats: Dict[str, Any], parameters: Dict[str, Any]
@@ -821,96 +820,21 @@ class DensityPotential(Potential):
         Parameters
         ----------
         feats : Dict[str, Any]
-            Dictionary of features
+            Dictionary of features from network
         parameters : Dict[str, Any]
-            Dictionary of parameters
+            Dictionary of parameters (occupancies and B factors are required for this potential)
 
         Returns
         -------
         Tuple[Dict[str, torch.Tensor], Tuple, Optional[Tuple[torch.Tensor, torch.Tensor]]]
             Tuple containing (index_dict, args, com_args)
         """
-        # Create a dictionary with the necessary features
-        index_dict = {
-            "elements": cast(torch.Tensor, feats["elements"][0]),
-            "b_factors": cast(torch.Tensor, feats["b_factors"][0]),
-            "occupancies": cast(torch.Tensor, feats["occupancies"][0]),
-            "active": cast(torch.Tensor, feats["atom_pad_mask"][0]),
-            "initial_centroid": cast(torch.Tensor, feats["initial_centroid"][0])
-            if "initial_centroid" in feats
-            else None,
-        }
+        indices = torch.where(feats["atom_pad_mask"][0].bool())[0].unsqueeze(0) # needs to be dim=2
+        elements = torch.where(feats["ref_element"])[0]
+        occupancies = parameters["occupancies"]
+        b_factors = parameters["b_factors"]
 
-        return index_dict, (), None
-
-    def compute(
-        self, coords: torch.Tensor, feats: Dict[str, Any], parameters: Dict[str, Any]
-    ) -> torch.Tensor:
-        """Compute density potential energy.
-
-        Parameters
-        ----------
-        coords : torch.Tensor
-            Atomic coordinates
-        feats : Dict[str, Any]
-            Features dictionary
-        parameters : Dict[str, Any]
-            Parameters dictionary
-
-        Returns
-        -------
-        torch.Tensor
-            Computed energy values
-        """
-        index_dict, _, _ = self.compute_args(feats, parameters)
-
-        # Ensure the density calculator and experimental map are available
-        if self.xmap is None or self.experimental_map is None:
-            return torch.zeros(coords.shape[:-2], device=coords.device)
-
-        density_score = self.compute_variable(
-            coords, index_dict, compute_gradient=False
-        )
-        energy = self.compute_function(density_score, parameters.get("scale", 1.0))
-
-        return energy
-
-    def compute_gradient(
-        self, coords: torch.Tensor, feats: Dict[str, Any], parameters: Dict[str, Any]
-    ) -> torch.Tensor:
-        """Compute density potential gradients.
-
-        Parameters
-        ----------
-        coords : torch.Tensor
-            Atomic coordinates
-        feats : Dict[str, Any]
-            Features dictionary
-        parameters : Dict[str, Any]
-            Parameters dictionary
-
-        Returns
-        -------
-        torch.Tensor
-            Computed gradients
-        """
-        index_dict, _, _ = self.compute_args(feats, parameters)
-
-        # Ensure the density calculator and experimental map are available
-        if self.xmap is None or self.experimental_map is None:
-            return torch.zeros_like(coords)
-
-        density_score, grad = self.compute_variable(
-            coords, index_dict, compute_gradient=True
-        )
-        energy, dEnergy = self.compute_function(
-            density_score, parameters.get("scale", 1.0), compute_derivative=True
-        )
-
-        # Scale the gradients by the energy derivative
-        scaled_grad = dEnergy.view(-1, 1, 1) * grad
-
-        return scaled_grad
+        return indices, (elements, b_factors, occupancies), None
 
 
 def get_potentials():
@@ -977,5 +901,26 @@ def get_potentials():
                 "buffer": 0.26180,
             }
         ),
+        # SET POTENTIALS IN DIFFUSION INIT WHERE YOU HAVE THE NECESSARY VARIABLES
+        # SubstructurePotential(
+        #     parameters={
+        #         "guidance_interval": 1,
+        #         "guidance_weight": 0.05,
+        #         "resampling_weight": 1.0,
+        #         "buffer": 0.5,
+        #         "denoising_selection": None, # must set these in the diffusion init
+        #         "reference_coords": None,
+        #     }
+        # ),
+        # DensityPotential(xmap = xmap,
+        #     parameters={
+        #         "guidance_interval": 1,
+        #         "guidance_weight": 0.1,
+        #         "resampling_weight": 1.0,
+        #         "occupancies": None, # must set these in the diffusion init
+        #         "b_factors": None,
+        #         "initial_centroid": None,
+        #     }
+        # )
     ]
     return potentials
