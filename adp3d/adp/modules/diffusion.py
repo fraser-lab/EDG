@@ -247,6 +247,7 @@ class DiffusionStepper:
         num_samples: Optional[int] = None,
         sampling_steps: Optional[int] = None,
         init_coords: Optional[torch.Tensor] = None,
+        extra_potentials: Optional[list] = None,
     ) -> None:
         """Initialize the diffusion process.
 
@@ -277,6 +278,9 @@ class DiffusionStepper:
 
         if self.model.steering_args["fk_steering"]:
             potentials = get_potentials()
+            if extra_potentials is not None:
+                potentials.extend(extra_potentials)
+
             diffusion_samples = self.model.steering_args["num_particles"]
             energy_traj = torch.empty((diffusion_samples, 0), device=self.device)
             resample_weights = torch.ones(
@@ -332,6 +336,7 @@ class DiffusionStepper:
         num_samples: Optional[int] = None,
         sampling_steps: Optional[int] = None,
         selector: NDArray[np.bool_] = None,
+        extra_potentials: Optional[list] = None,
     ) -> None:
         """
         Initialize with a partial diffusion setup, starting from some initial set of coordinates. This allows denoising from
@@ -352,6 +357,8 @@ class DiffusionStepper:
             by default the value from the model's structure_module.
         selector : NDArray[np.bool_], optional
             Selector mask for atoms to be noised, by default None (all atoms are noised).
+        potentials : Optional[list], optional
+            List of potentials for steering, by default None.
         """
         self.diffusion_trajectory = {}
 
@@ -378,6 +385,8 @@ class DiffusionStepper:
 
         if self.model.steering_args["fk_steering"]:
             potentials = get_potentials()
+            if extra_potentials is not None:
+                potentials.extend(extra_potentials)
             diffusion_samples = self.model.steering_args["num_particles"]
             energy_traj = torch.empty((diffusion_samples, 0), device=self.device)
             resample_weights = torch.ones(
@@ -451,6 +460,7 @@ class DiffusionStepper:
         num_samples: Optional[int] = None,
         sampling_steps: Optional[int] = None,
         invert: bool = False,
+        extra_potentials: Optional[list] = None,
     ) -> None:
         """Initialize diffusion with substructure conditioning.
 
@@ -471,6 +481,8 @@ class DiffusionStepper:
             Total number of sampling steps in the diffusion process, by default None.
         invert : bool, optional
             Whether to invert the selection (e.g. if the selection provided is for the motif to be denoised).
+        potentials : Optional[list], optional
+            List of potentials for steering, by default None.
         """
         self.diffusion_trajectory = {}
         self.current_step = 0
@@ -492,6 +504,8 @@ class DiffusionStepper:
 
         if self.model.steering_args["fk_steering"]:
             potentials = get_potentials()
+            if extra_potentials is not None:
+                potentials.extend(extra_potentials)
             diffusion_samples = self.model.steering_args["num_particles"]
             energy_traj = torch.empty((diffusion_samples, 0), device=self.device)
             resample_weights = torch.ones(

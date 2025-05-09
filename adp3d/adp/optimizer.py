@@ -44,6 +44,7 @@ from adp3d.data.sf import (
 from adp3d.adp.modules.diffusion import DiffusionStepper
 from adp3d.adp.modules.guided_diffusion import DensityGuidedDiffusionStepper
 from adp3d.utils.utility import try_gpu
+from adp3d.adp.modules.potentials import SubstructurePotential, DensityPotential
 
 
 @torch.jit.script
@@ -352,7 +353,6 @@ class DensityGuidedDiffusion:
         output_dir: str,
         num_steps: int = 200,
         num_samples: int = 1,
-        learning_rate: Union[List[float], float] = 1e-1,
         partial_diffusion: bool = False,
         steering: bool = False,
         diffusion_kwargs: Optional[dict] = None,
@@ -367,10 +367,8 @@ class DensityGuidedDiffusion:
         num_steps : int, optional
             Number of optimization steps, by default 200
         num_sample  : int, optional
-            Size of ensemble to generate, by default 1. 
+            Size of ensemble to generate, by default 1.
             NOTE: If steering, this will be ignored and the number of particles in FK steering will be used.
-        learning_rate : Union[List, float], optional
-            Learning rate for density optimization, by default 1e-1
         partial_diffusion : bool, optional
             Whether to use partial diffusion, by default False
         diffusion_kwargs : Dict[str, Any]
@@ -400,7 +398,7 @@ class DensityGuidedDiffusion:
             structure_to_density_input(self.structure)
         )
 
-        if steering: # make sure particles are all updated by density
+        if steering:  # make sure particles are all updated by density
             num_samples = self.stepper.model.steering_args["num_particles"]
 
         coords = repeat(coords, "a c -> n a c", n=num_samples)
@@ -432,6 +430,20 @@ class DensityGuidedDiffusion:
         ) / active.sum(dim=1, keepdim=True).unsqueeze(-1)
         coords_centered = coords - self.initial_centroid
 
+        density_potential = DensityPotential(
+            xmap=self.density_calculator.xmap,
+            parameters={
+                "guidance_interval": 1,
+                "guidance_weight": 1.0,
+                "resampling_weight": 2.0,
+                "occupancies": occupancies,
+                "b_factors": b_factors,
+                "initial_centroid": self.initial_centroid,
+            },
+        )
+
+        potentials = [density_potential]
+
         if partial_diffusion:
             if diffusion_kwargs is None:
                 diffusion_kwargs = {}
@@ -439,9 +451,25 @@ class DensityGuidedDiffusion:
                 diffusion_kwargs["structure"] = coords_centered
 
             self.stepper.initialize_partial_diffusion(
-                num_samples=num_samples, sampling_steps=num_steps, **diffusion_kwargs
+                num_samples=num_samples,
+                sampling_steps=num_steps,
+                extra_potentials=potentials,
+                **diffusion_kwargs,
             )
         elif substructure_conditioning_kwargs is not None:
+            substructure_potential = SubstructurePotential(
+                parameters={
+                    "guidance_interval": 1,
+                    "guidance_weight": 0.05,
+                    "resampling_weight": 1.0,
+                    "buffer": 0.5,
+                    "denoising_selection": substructure_conditioning_kwargs.get(
+                        "selection", np.array([], dtype=int)
+                    ),
+                    "reference_coords": coords_centered,
+                }
+            )
+            potentials.append(substructure_potential)
             self.stepper.initialize_substructure_conditioned_diffusion(
                 num_samples=num_samples,
                 sampling_steps=num_steps,
@@ -450,52 +478,19 @@ class DensityGuidedDiffusion:
                     "selection", np.array([], dtype=int)
                 ),
                 invert=True,
+                extra_potentials=potentials,
             )
         else:
             self.stepper.initialize_diffusion(
                 num_samples=num_samples,
                 sampling_steps=num_steps,
                 init_coords=coords_centered,
+                extra_potentials=potentials,
             )
 
         step_coords = self.stepper.cached_diffusion_init["atom_coords"]
 
         # TODO: implement Pseudo-B alignment weights from ROCKET
-
-        if substructure_conditioning_kwargs is not None:
-            substructure_conditioning_kwargs["coords"] = coords
-            # selection = torch.from_numpy(substructure_conditioning_kwargs["selection"]).to(
-            # self.device
-            # )
-            # inverse_selector = torch.ones(
-            # step_coords.shape[1], device=self.device
-            # ).bool()
-            # inverse_selector[selection] = False
-            # coords_centered_padded = pad_dim(coords_centered, 1, step_coords.shape[1] - coords_centered.shape[1])
-            # replace the unselected (not in segment) atoms in denoised with the initial structure coords for constraint
-            # NOTE: inverse_selector[:coords.shape[1]] is used to ensure the shape matches, as coords is not padded
-            # and padded 0s are added at the end of step_coords
-            # step_coords[:, inverse_selector, :] = coords_centered_padded[:, inverse_selector, :]
-            density_loss = partial(
-                self.density_score,
-                elements=elements,
-                b_factors=b_factors,
-                occupancies=occupancies,
-                active=active,
-                initial_centroid=self.initial_centroid,
-                norm=1,
-                substructure_conditioning_kwargs=substructure_conditioning_kwargs,
-            )
-        else:
-            density_loss = partial(  # TODO: this will break downstream in DensityGuidedDiffusionStepper as substructure_score will be None
-                self.density_score,
-                elements=elements,
-                b_factors=b_factors,
-                occupancies=occupancies,
-                active=active,
-                initial_centroid=self.initial_centroid,
-                norm=1,
-            )
 
         # v_density = torch.zeros_like(step_coords)
         scores = []
@@ -510,22 +505,12 @@ class DensityGuidedDiffusion:
         else:
             pbar = tqdm(range(num_steps), desc="Optimizing structure")
         for i in pbar:
-            if isinstance(learning_rate, float):
-                step_lr = learning_rate
-            else:
-                # Ensure i is within the bounds of the learning_rate list
-                step_lr = learning_rate[min(i, len(learning_rate) - 1)]
-
             # density guided step using self.density_score
-            step_coords, loss = self.stepper.dmap_step(
+            step_coords, loss = self.stepper.step_steering(
                 step_coords,
-                density_loss=density_loss,
-                zeta=step_lr,
-                dmap_steps=3,
-                # guidance_scale=step_lr,
                 augmentation=False,
                 align_to_input=True,
-                alignment_reverse_diffusion=False,  # FIXME: Breaks the computational graph
+                alignment_reverse_diffusion=False,  # FIXME: Breaks the computational graph (Shouldn't anymore since I am not computing gradient)
                 selection=(
                     substructure_conditioning_kwargs["selection"]
                     if substructure_conditioning_kwargs is not None
@@ -541,14 +526,6 @@ class DensityGuidedDiffusion:
             )
             scores.append(loss)
 
-            # Gradient descent with momentum # TODO: try others?
-            # v_density = 0.9 * v_density + step_lr * full_grad.unsqueeze(0)
-            # step_coords = step_coords - v_density
-
-            # Raw gradient descent
-            # step_coords = step_coords - step_lr * full_grad.unsqueeze(
-            #     0
-            # )
             coords_tensor = self.stepper.diffusion_trajectory[
                 f"step_{self.stepper.current_step - 1}"
             ]["coords"]
@@ -563,7 +540,7 @@ class DensityGuidedDiffusion:
             if i % 10 == 0:
                 with torch.no_grad():
                     model_map_ensemble = self.density_calculator(
-                        coords_tensor_translated[:num_samples, :, :],  # FIXME
+                        coords_tensor_translated,
                         elements,
                         b_factors,
                         occupancies,
@@ -577,7 +554,7 @@ class DensityGuidedDiffusion:
                     )
                     torch.cuda.empty_cache()
 
-                for j in range(num_samples):
+                for j in range(coords_tensor_translated.shape[0]):
                     structure = copy.deepcopy(self.structure)
 
                     structure.coor = coords_tensor_translated[j].cpu().numpy()
@@ -598,8 +575,7 @@ class DensityGuidedDiffusion:
 
         with torch.no_grad():
             model_map_ensemble = self.density_calculator(
-                final_coords_tensor_translated[:num_samples, :, :],  # FIXME
-                elements,
+                final_coords_tensor_translated,
                 b_factors,
                 occupancies,
                 active,
@@ -610,7 +586,7 @@ class DensityGuidedDiffusion:
             f"{output_dir}/final_map.ccp4", density=summed_map_array
         )
 
-        for j in range(num_samples):
+        for j in range(final_coords_tensor_translated.shape[0]):
             structure = copy.deepcopy(self.structure)
             structure.coor = final_coords_tensor_translated[j].cpu().numpy()
             # TODO: Update q and b factors if necessary for the final state
