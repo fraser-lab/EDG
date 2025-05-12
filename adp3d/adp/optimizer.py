@@ -24,6 +24,7 @@ from einops import rearrange, repeat
 from boltz.main import BoltzDiffusionParams
 from boltz.model.model import Boltz1
 from boltz.data.feature.pad import pad_dim
+from boltz.model.potentials.schedules import (PiecewiseStepFunction, ExponentialInterpolation)
 
 from adp3d.data import Structure
 from adp3d.adp.modules.density import (
@@ -434,8 +435,8 @@ class DensityGuidedDiffusion:
             xmap=self.density_calculator.xmap,
             parameters={
                 "guidance_interval": 1,
-                "guidance_weight": 1.0,
-                "resampling_weight": 2.0,
+                "guidance_weight": ExponentialInterpolation(start=0.2, end=0.0, alpha=-2.5),
+                "resampling_weight": 1.0,
                 "occupancies": occupancies,
                 "b_factors": b_factors,
                 "initial_centroid": self.initial_centroid,
@@ -443,6 +444,7 @@ class DensityGuidedDiffusion:
         )
 
         potentials = [density_potential]
+        # potentials = []
 
         if partial_diffusion:
             if diffusion_kwargs is None:
@@ -460,8 +462,8 @@ class DensityGuidedDiffusion:
             substructure_potential = SubstructurePotential(
                 parameters={
                     "guidance_interval": 1,
-                    "guidance_weight": 0.05,
-                    "resampling_weight": 1.0,
+                    "guidance_weight": 0.005,
+                    "resampling_weight": 0.,
                     "buffer": 0.5,
                     "denoising_selection": substructure_conditioning_kwargs.get(
                         "selection", np.array([], dtype=int)

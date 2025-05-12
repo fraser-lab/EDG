@@ -145,6 +145,34 @@ class FlatBottomPotential(Potential):
         return energy, dEnergy
 
 
+class HarmonicPotential(Potential):
+    def compute_function(
+        self, value, k, lower_bounds, upper_bounds, compute_derivative=False
+    ):
+        if lower_bounds is None:
+            lower_bounds = torch.full_like(value, float("-inf"))
+        if upper_bounds is None:
+            upper_bounds = torch.full_like(value, float("inf"))
+
+        neg_overflow_mask = value < lower_bounds
+        pos_overflow_mask = value > upper_bounds
+
+        energy = torch.zeros_like(value)
+        energy[neg_overflow_mask] = (k * (lower_bounds - value) ** 2)[neg_overflow_mask]
+        energy[pos_overflow_mask] = (k * (value - upper_bounds) ** 2)[pos_overflow_mask]
+        if not compute_derivative:
+            return energy
+
+        dEnergy = torch.zeros_like(value)
+        dEnergy[neg_overflow_mask] = (
+            -2 * k.expand_as(neg_overflow_mask)[neg_overflow_mask] * (lower_bounds - value)[neg_overflow_mask]
+        )
+        dEnergy[pos_overflow_mask] = (
+            2 * k.expand_as(pos_overflow_mask)[pos_overflow_mask] * (value - upper_bounds)[pos_overflow_mask]
+        )
+
+        return energy, dEnergy
+
 class DistancePotential(Potential):
     def compute_variable(self, coords, index, compute_gradient=False):
         r_ij = coords.index_select(-2, index[0]) - coords.index_select(-2, index[1])
@@ -420,7 +448,7 @@ class PlanarBondPotential(FlatBottomPotential, AbsDihedralPotential):
         return improper_index, (k, lower_bounds, upper_bounds), None
 
 
-class SubstructurePotential(FlatBottomPotential):
+class SubstructurePotential(HarmonicPotential):
     """Potential for constraining a substructure to reference coordinates.
 
     This potential applies a flat-bottom harmonic restraint between the current
@@ -524,11 +552,8 @@ class SubstructurePotential(FlatBottomPotential):
             return r_ij_norm
 
         r_hat_ij = r_ij / r_ij_norm.unsqueeze(-1)
-        grad_i = r_hat_ij
-        grad_j = torch.zeros_like(grad_i)  # No gradient for reference coords
-        grad = torch.stack((grad_i, grad_j), dim=1)
 
-        return r_ij_norm, grad
+        return r_ij_norm, r_hat_ij
 
 
 class DensityPotential(Potential):
@@ -599,7 +624,7 @@ class DensityPotential(Potential):
         coords : torch.Tensor
             Atomic coordinates, shape [batch, n_atoms, 3]
         index : torch.Tensor
-            Indices of the atoms to compute density for, shape [n_atoms]
+            Indices of the atoms to compute density value for, shape [batch, n_atoms]
         compute_gradient : bool, optional
             Whether to compute gradients, by default False
 
@@ -608,6 +633,7 @@ class DensityPotential(Potential):
         Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]
             grid coordinates and optionally gradients
         """
+        # TODO: think of how to use index creatively
         coords_translated = coords[..., index[0], :]  # [batch, n_active, 3]
 
         if self.parameters["initial_centroid"] is not None:
@@ -828,6 +854,7 @@ def get_potentials():
         VDWOverlapPotential(
             parameters={
                 "guidance_interval": 5,
+                # "guidance_weight": 0.125, # testing
                 "guidance_weight": PiecewiseStepFunction(
                     thresholds=[0.4], values=[0.125, 0.0]
                 ),
@@ -879,26 +906,5 @@ def get_potentials():
                 "buffer": 0.26180,
             }
         ),
-        # SET POTENTIALS IN DIFFUSION INIT WHERE YOU HAVE THE NECESSARY VARIABLES
-        # SubstructurePotential(
-        #     parameters={
-        #         "guidance_interval": 1,
-        #         "guidance_weight": 0.05,
-        #         "resampling_weight": 1.0,
-        #         "buffer": 0.5,
-        #         "denoising_selection": None, # must set these in the diffusion init
-        #         "reference_coords": None,
-        #     }
-        # ),
-        # DensityPotential(xmap = xmap,
-        #     parameters={
-        #         "guidance_interval": 1,
-        #         "guidance_weight": 0.1,
-        #         "resampling_weight": 1.0,
-        #         "occupancies": None, # must set these in the diffusion init
-        #         "b_factors": None,
-        #         "initial_centroid": None,
-        #     }
-        # )
     ]
     return potentials

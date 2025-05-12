@@ -862,7 +862,6 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
                         network_condition_kwargs["feats"],
                         parameters,
                     )
-                    # print(potential.__class__.__name__, component_energy) # FIXME
                     energy += parameters["resampling_weight"] * component_energy
             energy_traj = torch.cat((energy_traj, energy.unsqueeze(1)), dim=1)
 
@@ -1048,7 +1047,10 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
             return (
                 atom_coords_next.detach(),
                 atom_coords_denoised.detach(),
-                energy_traj.min().item(),
+                energy_traj.mean().item(),
             )
         else:
-            return atom_coords_next.detach(), energy_traj.min().item() # return minimum energy of ensemble
+            return (
+                atom_coords_next.detach(),
+                energy_traj.mean().item(),
+            )  # return minimum energy of ensemble
