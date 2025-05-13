@@ -1256,7 +1256,9 @@ class Ensemble:
         """
         if not all(isinstance(s, Structure) for s in structures):
             raise TypeError("All items in the list must be Structure objects.")
-        self._structures = list(structures)
+        
+        # Deep copy to avoid modifying original structures, which may be all the same object pointer
+        self._structures = [copy.deepcopy(s) for s in structures]
 
     def __len__(self):
         """Return the number of structures in the ensemble."""
@@ -1313,7 +1315,7 @@ class Ensemble:
             raise ValueError(f"Expected shape {(len(self._structures), n_atoms_ref, 3)}, got {value.shape}")
         
         for i, structure in enumerate(self._structures):
-            structure.coor = value[i]
+            structure.__setattr__("coor", value[i])
 
     @property
     def q(self) -> np.ndarray:
