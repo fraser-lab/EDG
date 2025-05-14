@@ -30,7 +30,7 @@ class Structure(_BaseStructure):
     def fromfile(cls, fname, use_auth=False):
         extension = os.path.splitext(fname)[1].lower()
 
-        if extension == ".cif":
+        if extension == ".cif" or extension == ".mmcif":
             if isinstance(fname, mmCIFFile):
                 pdbfile = fname
             else:
