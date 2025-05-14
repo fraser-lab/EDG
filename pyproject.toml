@@ -40,6 +40,6 @@ mac1_synthetic = "python ./_notebooks/run_mac1.py"
 [tool.pixi.dependencies]
 python = "3.10.*"
 pip = ">=25.1.1,<26"
-gcc_linux-64 = ">=9"
-gxx_linux-64 = ">=9"
+gcc_linux-64 = ">=9,<13"
+gxx_linux-64 = ">=9,<13"
 ninja = "*"

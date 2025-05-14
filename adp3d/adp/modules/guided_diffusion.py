@@ -727,7 +727,7 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
         alignment_reverse_diffusion: bool = True,
         selection: Optional[NDArray[np.bool_]] = None,
         alignment_weights: Optional[torch.Tensor] = None,
-        ensemble_size: int = 3,
+        ensemble_size: int = 1,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         """Execute a single diffusion denoising step with density guidance.
 
@@ -794,6 +794,10 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
             resample_weights: torch.Tensor = self.cached_diffusion_init[
                 "steering_vars"
             ]["resample_weights"]
+            ensemble_potentials: list = self.cached_diffusion_init["steering_vars"].get(
+                "ensemble_potentials", []
+            )
+            num_ensembles = multiplicity // ensemble_size
 
         network_condition_kwargs = dict(
             s_trunk=s,
@@ -844,6 +848,39 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
             )
         )
 
+        if align_to_input:
+
+            alignment_weights = (
+                alignment_weights.float()
+                if alignment_weights is not None
+                else inverse_selector.float()
+            )
+
+            atom_coords_denoised = weighted_rigid_align(
+                atom_coords_denoised.float(),
+                self.cached_diffusion_init["init_coords"].float(),
+                alignment_weights,
+                atom_mask.float(),
+            )
+
+        # Clamp to the motif
+        atom_coords_denoised[:, inverse_selector, :] = self.cached_diffusion_init[
+            "init_coords"
+        ][:, inverse_selector, :]
+
+        # TODO: finish ensemble particles
+        # if self.model.steering_args["fk_steering"] and (ensemble_size > 1):
+        #     try:
+        #         atom_coords_denoised_ensemble = atom_coords_denoised.reshape(
+        #             num_ensembles, ensemble_size, -1, 3
+        #         )
+        #     except RuntimeError as e:
+        #         print(
+        #             f"Atom_coords_denoised does not have an appropriate batch dimension to split into ensembles: \
+        #             {atom_coords_denoised.shape}, multiplicity: {multiplicity}, ensemble_size: {ensemble_size}"
+        #         )
+        #         raise e
+
         if self.model.steering_args["fk_steering"] and (
             (
                 self.current_step % self.model.steering_args["fk_resampling_interval"]
@@ -852,6 +889,8 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
             )
             or self.current_step == num_sampling_steps - 1
         ):
+            ## Individual potentials
+
             # Compute energy of x_0 prediction
             energy = torch.zeros(multiplicity, device=self.device)
             for potential in potentials:
@@ -987,28 +1026,6 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
             * denoised_over_sigma
         )
 
-        # Align to input for next step rather than denoised coords
-        if align_to_input:
-            if self.cached_diffusion_init["init_coords"] is None:
-                raise ValueError(
-                    "No initial input coordinates found in cached diffusion init. Please change from align_to_input if you are not using partial diffusion."
-                )
-            # align all except the motif
-
-            alignment_weights = (
-                alignment_weights.float()
-                if alignment_weights is not None
-                else atom_mask.float()
-            )
-            alignment_weights[:, selection] = 0.0
-
-            atom_coords_next = weighted_rigid_align(
-                atom_coords_next.float(),
-                self.cached_diffusion_init["init_coords"].float(),
-                alignment_weights,
-                atom_mask.float(),
-            ).to(atom_coords_next)
-
         if self.current_step == num_sampling_steps - 1:
             # Take top K ensemble members
             resample_indices = torch.topk(
@@ -1022,11 +1039,6 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
             energy_traj = energy_traj[resample_indices]
             if self.model.steering_args["guidance_update"]:
                 scaled_guidance_update = scaled_guidance_update[resample_indices]
-
-        # Clamp atom_coords_next to the motif # FIXME
-        atom_coords_next[:, inverse_selector, :] = self.cached_diffusion_init[
-            "init_coords"
-        ][:, inverse_selector, :]
 
         unpad_coords_next = atom_coords_next[
             :, pad_mask, :

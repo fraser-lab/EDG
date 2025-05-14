@@ -24,7 +24,10 @@ from einops import rearrange, repeat
 from boltz.main import BoltzDiffusionParams
 from boltz.model.model import Boltz1
 from boltz.data.feature.pad import pad_dim
-from boltz.model.potentials.schedules import (PiecewiseStepFunction, ExponentialInterpolation)
+from boltz.model.potentials.schedules import (
+    PiecewiseStepFunction,
+    ExponentialInterpolation,
+)
 
 from adp3d.data import Structure
 from adp3d.adp.modules.density import (
@@ -256,99 +259,6 @@ class DensityGuidedDiffusion:
 
         self.scattering_params = scattering_dense_tensor
 
-    def density_score(
-        self,
-        coords: torch.Tensor,
-        elements: torch.Tensor,
-        b_factors: torch.Tensor,
-        occupancies: torch.Tensor,
-        active: torch.Tensor,
-        initial_centroid: torch.Tensor,
-        norm: int = 1,
-        substructure_conditioning_kwargs: Optional[dict] = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Calculate density score and optionally substructure score for current coordinates.
-
-        Parameters
-        ----------
-        coords : torch.Tensor
-            Current atomic coordinates, shape [batch, atoms, 3]
-            NOTE: This should be just the atoms, not padded.
-        elements : torch.Tensor
-            Element atomic numbers for each atom, shape [batch, atoms]
-        b_factors : torch.Tensor
-            B-factors for each atom, shape [batch, atoms]
-        occupancies : torch.Tensor
-            Occupancies for each atom, shape [batch, atoms]
-        active : torch.Tensor
-            Mask for active atoms, shape [batch, atoms]
-        initial_centroid : torch.Tensor
-            Centroid of the original input coordinates, shape [batch, 1, 3]
-        norm : int, optional
-            Which norm to use for the score, by default 1
-        substructure_conditioning_kwargs : dict, optional
-            Keyword arguments for substructure conditioning, by default None
-            Values should be:
-                - selection : NDArray[np.bool_]
-                    Indices of atoms to leave out of conditioning
-                - coords : torch.Tensor
-                    Coordinates of atoms to condition on, shape [batch, atoms, 3]
-                - scale : float
-                    Scale factor for the conditioning
-
-        Returns
-        -------
-        Tuple[torch.Tensor, torch.Tensor]
-            Density score and substructure score
-        """
-        # Translate coordinates back to the original frame for density calculation
-        coords_translated = coords + initial_centroid.repeat(
-            coords.shape[0] // initial_centroid.shape[0], 1, 1
-        )  # FIXME: Should be a better way to do this
-
-        # Initialize substructure_score as a zero tensor
-        substructure_score = torch.tensor(0.0, device=self.device)
-        if substructure_conditioning_kwargs is not None:
-            # Translate conditioning coords as well
-            conditioning_coords = (
-                substructure_conditioning_kwargs["coords"] + initial_centroid
-            ).repeat(
-                coords.shape[0] // initial_centroid.shape[0], 1, 1
-            )  # FIXME: Figure out a way to improve this more generally
-            selection = substructure_conditioning_kwargs["selection"]
-            scale = substructure_conditioning_kwargs["scale"]
-            inverse_selector = torch.ones(
-                conditioning_coords.shape[1], device=self.device
-            ).bool()
-            inverse_selector[selection] = False
-            # Use translated coordinates for comparison
-            conditioning_coords_subset = conditioning_coords[:, inverse_selector, :]
-            current_coords_subset = coords_translated[:, inverse_selector, :]
-
-            # compute the difference between the conditioning coordinates and the current coords
-            substructure_score = -(
-                scale
-                / (coords.shape[0])
-                * torch.linalg.norm(current_coords_subset - conditioning_coords_subset)
-                ** 2
-            )
-
-        model_map = self.density_calculator(  # FIXME: testing here
-            coords_translated[: initial_centroid.shape[0], :, :],
-            elements,
-            b_factors,
-            occupancies,
-            active,
-        ).sum(0)  # TODO: dont use normalization, use e-/A^3
-
-        density_correlation_score = -torch.linalg.norm(
-            torch.flatten(self.y) - torch.flatten(model_map), ord=norm
-        )
-
-        return density_correlation_score, substructure_score
-        # # SiLU (swish) to penalize the model going out into solvent, but not penalize being not in exactly the density as much
-        # return torch.linalg.norm(torch.nn.SiLU(torch.flatten(self.y) - torch.flatten(model_map)))
-
     def optimize(
         self,
         output_dir: str,
@@ -431,15 +341,26 @@ class DensityGuidedDiffusion:
         ) / active.sum(dim=1, keepdim=True).unsqueeze(-1)
         coords_centered = coords - self.initial_centroid
 
+        initialized_density_calculator = partial(
+            self.density_calculator,
+            elements=elements,
+            b_factors=b_factors,
+            occupancies=occupancies,
+            active=active,
+        )
+
         density_potential = DensityPotential(
             xmap=self.density_calculator.xmap,
             parameters={
                 "guidance_interval": 1,
-                "guidance_weight": ExponentialInterpolation(start=0.2, end=0.0, alpha=-2.5),
+                "guidance_weight": ExponentialInterpolation(
+                    start=0.2, end=0.0, alpha=-2.5
+                ),
                 "resampling_weight": 1.0,
                 "occupancies": occupancies,
                 "b_factors": b_factors,
                 "initial_centroid": self.initial_centroid,
+                "density_calculator": initialized_density_calculator,
             },
         )
 
@@ -463,7 +384,7 @@ class DensityGuidedDiffusion:
                 parameters={
                     "guidance_interval": 1,
                     "guidance_weight": 0.005,
-                    "resampling_weight": 0.,
+                    "resampling_weight": 0.0,
                     "buffer": 0.5,
                     "denoising_selection": substructure_conditioning_kwargs.get(
                         "selection", np.array([], dtype=int)
@@ -510,14 +431,15 @@ class DensityGuidedDiffusion:
             # density guided step using self.density_score
             step_coords, loss = self.stepper.step_steering(
                 step_coords,
-                augmentation=False,
+                augmentation=True,
                 align_to_input=True,
-                alignment_reverse_diffusion=False,  # FIXME: Breaks the computational graph (Shouldn't anymore since I am not computing gradient)
+                alignment_reverse_diffusion=True,
                 selection=(
                     substructure_conditioning_kwargs["selection"]
                     if substructure_conditioning_kwargs is not None
                     else np.array([], dtype=int)
                 ),
+                ensemble_size = num_samples,
             )
 
             # update the progress bar with negative log likelihood

@@ -13,9 +13,9 @@ import torch.nn.functional as F
 
 from boltz.data import const
 from boltz.model.potentials.schedules import *
-from adp3d.utils.interpolation import trilinear_interpolation_torch
+from adp3d.utils.interpolation import trilinear_interpolation_torch, tricubic_interpolation_torch
 
-from .density import XMap_torch
+from .density import XMap_torch, DifferentiableTransformer
 
 
 class Potential(ABC):
@@ -165,13 +165,18 @@ class HarmonicPotential(Potential):
 
         dEnergy = torch.zeros_like(value)
         dEnergy[neg_overflow_mask] = (
-            -2 * k.expand_as(neg_overflow_mask)[neg_overflow_mask] * (lower_bounds - value)[neg_overflow_mask]
+            -2
+            * k.expand_as(neg_overflow_mask)[neg_overflow_mask]
+            * (lower_bounds - value)[neg_overflow_mask]
         )
         dEnergy[pos_overflow_mask] = (
-            2 * k.expand_as(pos_overflow_mask)[pos_overflow_mask] * (value - upper_bounds)[pos_overflow_mask]
+            2
+            * k.expand_as(pos_overflow_mask)[pos_overflow_mask]
+            * (value - upper_bounds)[pos_overflow_mask]
         )
 
         return energy, dEnergy
+
 
 class DistancePotential(Potential):
     def compute_variable(self, coords, index, compute_gradient=False):
@@ -551,7 +556,7 @@ class SubstructurePotential(HarmonicPotential):
         if not compute_gradient:
             return r_ij_norm
 
-        r_hat_ij = r_ij / r_ij_norm.unsqueeze(-1)
+        r_hat_ij = r_ij / r_ij_norm.unsqueeze(-1) if r_ij_norm.sum() > 0 else r_ij
 
         return r_ij_norm, r_hat_ij
 
@@ -561,10 +566,10 @@ class DensityPotential(Potential):
 
     This potential computes an energy based on the agreement between the model
     and the experimental density map. Lower energy corresponds to better agreement.
-    Uses the real_space_refine potential Tdata from Phenix (Afonine, et al. )
-    T_data = -∑_A ρ_interp(r_A)
+    Uses the real_space_refine potential Tdata from Phenix (Afonine, et al.)
+    T_data = -∑_G ⍴_calc(g) * ⍴_map(g)
 
-    where ρ_interp(r_A) is the experimental map density interpolated at atomic position r_A.
+    where ρ(g) is the map density at grid position g. ρ(g) is a function of atom positions, occupancies, and B-factors.
     Lower energy corresponds to atoms positioned in regions of higher experimental density.
     """
 
@@ -617,14 +622,14 @@ class DensityPotential(Potential):
         index: torch.Tensor,
         compute_gradient: bool = False,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
-        """Compute grid coordinates to be used for density interpolation.
+        """Compute density to be used for energy computation.
 
         Parameters
         ----------
         coords : torch.Tensor
             Atomic coordinates, shape [batch, n_atoms, 3]
         index : torch.Tensor
-            Indices of the atoms to compute density value for, shape [batch, n_atoms]
+            Indices of the atoms to compute density value for, shape [batch, n_atoms] # TODO: extend this to allow multiple regions to change?
         compute_gradient : bool, optional
             Whether to compute gradients, by default False
 
@@ -633,8 +638,7 @@ class DensityPotential(Potential):
         Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]
             grid coordinates and optionally gradients
         """
-        # TODO: think of how to use index creatively
-        coords_translated = coords[..., index[0], :]  # [batch, n_active, 3]
+        coords_translated = coords[..., index[0], :]  # [..., n_active, 3]
 
         if self.parameters["initial_centroid"] is not None:
             coords_translated = coords_translated + self.parameters[
@@ -644,26 +648,19 @@ class DensityPotential(Potential):
             )
 
         if not compute_gradient:
-            interpolated_density = self.interpolate_density_at_positions(
-                coords_translated
-            )
-            return interpolated_density
+            with torch.no_grad():
+                rho_calc = self.parameters["density_calculator"](coords_translated)
+                return rho_calc
 
-        # If we need gradients, we use autograd
-        coords_translated = coords_translated.clone().detach().requires_grad_(True)
+        rho_calc = self.parameters["density_calculator"](coords_translated).sum(0)
 
-        interpolated_density = self.interpolate_density_at_positions(
-            coords_translated
-        )  # [batch, n_active]
-
-        to_grad = interpolated_density.sum(dim=-1)
-        to_grad.backward(torch.ones_like(to_grad))
+        rho_calc.backward(torch.ones_like(rho_calc), retain_graph=True)
 
         # Get gradients with respect to coordinates
-        grad_coords = coords_translated.grad.clone()
-        coords_translated.grad.zero_()
+        grad_coords = coords.grad.clone()
+        coords.grad.zero_()
 
-        return interpolated_density, grad_coords
+        return rho_calc, grad_coords
 
     def compute_args(
         self, feats: Dict[str, Any], parameters: Dict[str, Any]
@@ -724,31 +721,56 @@ class DensityPotential(Potential):
         Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]
             Energy values, and optionally derivatives
         """
-
-        # TODO: Apply weights based on B-factors and occupancies
-        # This is a placeholder for future implementation
-        weights = torch.ones_like(b_factors)
-        if elements is not None:
-            # Placeholder: scale weight by element
-            pass
-        if occupancies is not None:
-            # Placeholder: scale weight by occupancy
-            pass
-        if b_factors is not None:
-            # Placeholder: weights *= torch.exp(-b_factors / (8 * np.pi**2)) ??
-            pass
-
-        weighted_density = k * value * weights  # [batch, n_atoms]
-        negative_sum = -torch.sum(weighted_density, dim=-1)  # [batch]
+        # target = -(value * self.xmap.array.to(torch.float32)).sum()
+        target = ((value - self.xmap.array.to(torch.float32)) ** 2).sum()
 
         if not compute_derivative:
-            return negative_sum
+            return target
 
-        dEnergy = -k * weights * torch.ones_like(value)  # [batch, n_atoms]
+        # dEnergy = - k * target
+        dEnergy = 2 * k * target  # [batch, n_atoms]
 
-        return negative_sum.detach(), dEnergy
+        return target.detach(), dEnergy
 
-    def interpolate_density_at_positions(self, positions: torch.Tensor) -> torch.Tensor:
+    def compute_gradient(
+        self,
+        coords: torch.Tensor,
+        feats: Dict[str, Any],
+        parameters: Dict[str, Any],
+    ):
+        """Compute the gradient of the density potential.
+
+        Parameters
+        ----------
+        coords : torch.Tensor
+            Atomic coordinates, shape [batch, n_atoms, 3]
+        feats : Dict[str, Any]
+            Dictionary of features from network
+        parameters : Dict[str, Any]
+            Dictionary of parameters (occupancies and B factors are required for this potential)
+
+        Returns
+        -------
+        torch.Tensor
+            Gradient of the density potential with respect to atomic coordinates.
+        """
+        coords = coords.clone().detach().requires_grad_()
+        index, args, com_args = self.compute_args(feats, parameters)
+        value, grad_value = self.compute_variable(coords, index, compute_gradient=True)
+
+        energy = self.compute_function(
+            value,
+            *args,
+            compute_derivative=False,
+        )
+
+        energy.backward()
+        grad_atom = coords.grad.clone()
+        coords.grad.zero_()
+
+        return grad_atom
+
+    def interpolate_density_at_positions(self, positions: torch.Tensor, mode: str = "tricubic") -> torch.Tensor:
         """Interpolate experimental density values at given atomic positions with symmetry.
 
         This method applies all symmetry operations to the atomic positions and interpolates
@@ -797,7 +819,8 @@ class DensityPotential(Potential):
         )  # [n_ops, batch, n_atoms, 3]
 
         # Use grid_sample to interpolate density values at all symmetric positions
-        interpolated = trilinear_interpolation_torch(
+        interp_func = trilinear_interpolation_torch if mode == "trilinear" else tricubic_interpolation_torch
+        interpolated = interp_func(
             self.xmap.array.float(), grid_coords_rot_trans
         )
 
