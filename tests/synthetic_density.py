@@ -7,14 +7,15 @@ experimental parameters.
 
 import os
 from pathlib import Path
-from typing import Optional, Union, Tuple, List
+from typing import Optional, Union, Tuple, List, NamedTuple
 
 import torch
 import numpy as np
 
 from adp3d.data import Structure
 from adp3d.data.structure import Ensemble
-from adp3d.qfit.volume import XMap, Resolution
+from adp3d.qfit.volume import XMap, Resolution, GetSpaceGroup, GridParameters
+from adp3d.qfit.unitcell import UnitCell
 from adp3d.adp.modules.density import (
     DifferentiableTransformer,
     XMap_torch,
@@ -43,7 +44,8 @@ class SyntheticDensityGenerator:
         structure: Union[str, Structure, Ensemble],
         reference_map_file: Optional[str] = None,
         resolution: Optional[float] = None,
-        em_mode: bool = False,
+        unit_cell: Optional[NamedTuple] = None,
+        em_mode: Optional[bool] = False,  
         device: Optional[Union[str, torch.device]] = None,
     ):
         """Initialize the synthetic density generator.
@@ -56,6 +58,8 @@ class SyntheticDensityGenerator:
             Path to a reference map file (CCP4, MRC, or MTZ format) to use for grid parameters.
         resolution : float, optional
             Map resolution in Angstroms, required if no reference map is provided.
+        unit_cell : NamedTuple, optional
+            Unit cell parameters (a, b, c, alpha, beta, gamma) for the structure.
         em_mode : bool, optional
             Whether to use electron microscopy mode instead of X-ray crystallography.
         device : Optional[Union[str, torch.device]], optional
@@ -91,7 +95,7 @@ class SyntheticDensityGenerator:
         if reference_map_file is not None:
             self._setup_from_reference(reference_map_file)
         elif resolution is not None:
-            self._setup_from_parameters(resolution)
+            self._setup_from_parameters(resolution, unit_cell)
         else:
             raise ValueError("Either reference_map_file or resolution must be provided")
     
@@ -126,9 +130,10 @@ class SyntheticDensityGenerator:
             scattering_params=self.scattering_params,
             em=self.em_mode,
             device=self.device,
+            # use_cuda_kernels=True,
         )
     
-    def _setup_from_parameters(self, resolution: float) -> None:
+    def _setup_from_parameters(self, resolution: float, unit_cell: NamedTuple = None) -> None:
         """Set up the generator using specified parameters.
         
         Parameters
@@ -140,16 +145,24 @@ class SyntheticDensityGenerator:
         
         # Get the unit cell from the first structure if using an ensemble
         structure_ref = self.structure[0] if self.is_ensemble else self.structure
-        unit_cell = structure_ref.unit_cell
+        unit_cell = structure_ref.unit_cell if unit_cell is None else unit_cell
         
         # Create an appropriately-sized grid based on resolution
-        grid_a = max(24, int(unit_cell.a / resolution * 2.0))
-        grid_b = max(24, int(unit_cell.b / resolution * 2.0))
-        grid_c = max(24, int(unit_cell.c / resolution * 2.0))
+        grid_a = int(unit_cell.a / resolution * 4.0)
+        grid_b = int(unit_cell.b / resolution * 4.0)
+        grid_c = int(unit_cell.c / resolution * 4.0)
         
         empty_array = np.zeros((grid_a, grid_b, grid_c), dtype=np.float32)
+        # original atom coordinates are at 0, 0, 0 for AF3 predictions, need to offset by half the unit cell
+        offset = (
+            unit_cell.a / resolution * 2.0,
+            unit_cell.b / resolution * 2.0,
+            unit_cell.c / resolution * 2.0,
+        )
+
         ref_map = XMap(
             empty_array,
+            grid_parameters=GridParameters(voxelspacing=resolution / 4, offset=offset),
             resolution=Resolution(high=resolution, low=1000.0),
             unit_cell=unit_cell,
         )
@@ -161,6 +174,7 @@ class SyntheticDensityGenerator:
             scattering_params=self.scattering_params,
             em=self.em_mode,
             device=self.device,
+            # use_cuda_kernels=True,
         )
     
     def _setup_scattering_params(self) -> None:
@@ -232,22 +246,10 @@ class SyntheticDensityGenerator:
             Generated density map.
         """
         coords, elements, b_factors, occupancies, active, _ = structure_to_density_input(structure)
-        
-        # Convert element strings to atomic numbers using the atomic_num_dict
-        element_ids = torch.tensor(
-            [
-                self.atomic_num_dict.get(
-                    elem.upper() if len(elem) == 1 else elem[0].upper() + elem[1:].lower(),
-                    self.atomic_num_dict.get("C", 0)  # Default to C if not found
-                )
-                for elem in elements
-            ],
-            dtype=torch.long,
-            device=self.device,
-        )
+    
         
         coords = coords.to(self.device).float().unsqueeze(0)  # Add batch dim
-        element_ids = element_ids.unsqueeze(0)  # Add batch dim
+        elements = elements.to(self.device).long().unsqueeze(0)  # Add batch dim
         b_factors = b_factors.to(self.device).float().unsqueeze(0) * b_factor_scale
         occupancies = occupancies.to(self.device).float().unsqueeze(0) * occupancy_scale
         active = active.to(self.device).bool().unsqueeze(0)
@@ -255,7 +257,7 @@ class SyntheticDensityGenerator:
         with torch.no_grad():
             density_map = self.density_calculator(
                 coords,
-                element_ids,
+                elements,
                 b_factors,
                 occupancies,
                 active,
@@ -339,15 +341,32 @@ class SyntheticDensityGenerator:
 
 if __name__ == "__main__":
     # generate synthetic mac1 data
-    pdb_5sop = Structure.fromfile("/home/kchrispens/adp-replicate/tests/resources/mac1_synthetic/5SOP_modified.pdb")
-    pdb_5soq = Structure.fromfile("/home/kchrispens/adp-replicate/tests/resources/mac1_synthetic/5SOQ_modified.pdb")
-    pdb_5sq8 = Structure.fromfile("/home/kchrispens/adp-replicate/tests/resources/mac1_synthetic/5SQ8_modified.pdb")
+    # pdb_5sop = Structure.fromfile("/home/kchrispens/adp-replicate/tests/resources/mac1_synthetic/5SOP_modified.pdb")
+    # pdb_5soq = Structure.fromfile("/home/kchrispens/adp-replicate/tests/resources/mac1_synthetic/5SOQ_modified.pdb")
+    # pdb_5sq8 = Structure.fromfile("/home/kchrispens/adp-replicate/tests/resources/mac1_synthetic/5SQ8_modified.pdb")
 
-    ensemble = Ensemble([pdb_5sop, pdb_5soq, pdb_5sq8])
-    ref_map_file = "/home/kchrispens/adp-replication/tests/resources/mac1_synthetic/5soq-sf.mtz"
+    # ensemble = Ensemble([pdb_5sop, pdb_5soq, pdb_5sq8])
+    # ref_map_file = "/home/kchrispens/adp-replication/tests/resources/mac1_synthetic/5soq-sf.mtz"
 
-    density_generator = SyntheticDensityGenerator(ensemble, ref_map_file)
+    # density_generator = SyntheticDensityGenerator(ensemble, ref_map_file)
 
-    density = density_generator.generate_map()
+    # density = density_generator.generate_map()
 
-    density_generator.save_map("/home/kchrispens/adp-replicate/tests/resources/mac1_synthetic/5sop_5soq_5sq8.ccp4", density)
+    # density_generator.save_map("/home/kchrispens/adp-replicate/tests/resources/mac1_synthetic/5sop_5soq_5sq8.ccp4", density)
+
+    # generate synthetic AAAWAAA data
+    pdb = Structure.fromfile("/home/kchrispens/adp-replicate/tests/resources/AAAWAAA/AAAWAAA_Waltconf.mmcif")
+
+    unit_cell = UnitCell(30.0, 30.0, 30.0)
+
+    density_generator = SyntheticDensityGenerator(structure=pdb, resolution=8.0, unit_cell=unit_cell, em_mode=False)
+    density = density_generator.generate_map(b_factor_scale=1.0, occupancy_scale=1.0)
+    density_generator.save_map("/home/kchrispens/adp-replicate/tests/resources/AAAWAAA/ckAAAWAAA_Waltconf_8.ccp4", density)
+
+    density_generator = SyntheticDensityGenerator(structure=pdb, resolution=4.0, unit_cell=unit_cell, em_mode=False)
+    density = density_generator.generate_map(b_factor_scale=1.0, occupancy_scale=1.0)
+    density_generator.save_map("/home/kchrispens/adp-replicate/tests/resources/AAAWAAA/ckAAAWAAA_Waltconf_4.ccp4", density)
+
+    density_generator = SyntheticDensityGenerator(structure=pdb, resolution=1.0, unit_cell=unit_cell, em_mode=False)
+    density = density_generator.generate_map(b_factor_scale=1.0, occupancy_scale=1.0)
+    density_generator.save_map("/home/kchrispens/adp-replicate/tests/resources/AAAWAAA/ckAAAWAAA_Waltconf_1.ccp4", density)
