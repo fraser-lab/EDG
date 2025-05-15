@@ -172,7 +172,7 @@ packages:
 - pypi: .
   name: adp3d
   version: 0.1.0
-  sha256: fa45cd72894621e53810a6efe7ceeb1925e426e2106e04b4f9eba5ddb4edecbb
+  sha256: 2bc83243cd7c235fbb79a883ac3cffb19465a0c391440595d56aa5adcb0b2116
   requires_dist:
   - numpy
   - torch>=2.5.1

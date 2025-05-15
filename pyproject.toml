@@ -36,6 +36,7 @@ boltz = { path = "../boltz", editable = true }
 
 [tool.pixi.tasks]
 mac1_synthetic = "python ./_notebooks/run_mac1.py"
+aaawaaa = "python ./_notebooks/run_AAAWAAA.py"
 
 [tool.pixi.dependencies]
 python = "3.10.*"
