@@ -556,7 +556,8 @@ class SubstructurePotential(HarmonicPotential):
         if not compute_gradient:
             return r_ij_norm
 
-        r_hat_ij = r_ij / r_ij_norm.unsqueeze(-1) if r_ij_norm.sum() > 0 else r_ij
+        r_hat_ij = r_ij / r_ij_norm.unsqueeze(-1)
+        r_hat_ij = torch.where(torch.isnan(r_hat_ij), torch.zeros_like(r_hat_ij), r_hat_ij)
 
         return r_ij_norm, r_hat_ij
 

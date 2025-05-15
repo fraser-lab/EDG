@@ -353,8 +353,8 @@ class DensityGuidedDiffusion:
             xmap=self.density_calculator.xmap,
             parameters={
                 "guidance_interval": 1,
-                "guidance_weight": ExponentialInterpolation(
-                    start=0.2, end=0.0, alpha=-2.5
+                "guidance_weight": PiecewiseStepFunction(
+                    [0.25], [0.0001, 0.0]
                 ),
                 "resampling_weight": 1.0,
                 "occupancies": occupancies,
@@ -383,7 +383,7 @@ class DensityGuidedDiffusion:
             substructure_potential = SubstructurePotential(
                 parameters={
                     "guidance_interval": 1,
-                    "guidance_weight": 0.005,
+                    "guidance_weight": 0.1,
                     "resampling_weight": 0.0,
                     "buffer": 0.5,
                     "denoising_selection": substructure_conditioning_kwargs.get(
@@ -500,15 +500,17 @@ class DensityGuidedDiffusion:
         with torch.no_grad():
             model_map_ensemble = self.density_calculator(
                 final_coords_tensor_translated,
+                elements,
                 b_factors,
                 occupancies,
                 active,
             )
-        summed_map_array = model_map_ensemble.sum(0)
-        # Use the existing XMap object to save the calculated density
-        self.density_calculator.xmap.tofile(
-            f"{output_dir}/final_map.ccp4", density=summed_map_array
-        )
+            summed_map_array = model_map_ensemble.sum(0)
+            # Use the existing XMap object to save the calculated density
+            self.density_calculator.xmap.tofile(
+                f"{output_dir}/final_map.ccp4", density=summed_map_array
+            )
+            torch.cuda.empty_cache()
 
         for j in range(final_coords_tensor_translated.shape[0]):
             structure = copy.deepcopy(self.structure)
