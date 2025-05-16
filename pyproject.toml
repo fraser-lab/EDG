@@ -1,20 +1,6 @@
 [project]
 authors = [{name = "Karson Chrispens", email = "karson.chrispens@ucsf.edu"}]
-dependencies = [
-    "numpy",
-    "torch>=2.5.1",
-    "pandas",
-    "scikit-learn",
-    "scipy",
-    "tqdm",
-    "matplotlib",
-    "pytest",
-    "mrcfile",
-    "gemmi",
-    "rdkit",
-    "einops",
-    "setuptools",
-    "biopython",
+dependencies = [ "setuptools", "numpy>=1.26.4,<2", "torch>=2.7.0,<3", "pandas>=2.2.3,<3", "scikit-learn>=1.6.1,<2", "scipy>=1.13.1,<2", "tqdm>=4.67.1,<5", "matplotlib>=3.10.3,<4", "pytest>=8.3.5,<9", "mrcfile>=1.5.4,<2", "gemmi>=0.7.1,<0.8", "rdkit>=2025.3.2,<2026", "einops>=0.8.0,<0.9", "biopython>=1.84,<2", "opt-einsum>=3.4.0,<4", "notebook>=7.4.2,<8",
 ]
 name = "adp3d"
 requires-python = ">=3.10"
@@ -37,6 +23,7 @@ boltz = { path = "../boltz", editable = true }
 [tool.pixi.tasks]
 mac1_synthetic = "python ./_notebooks/run_mac1.py"
 aaawaaa = "python ./_notebooks/run_AAAWAAA.py"
+cuda_density_test = "python ./tests/test_density.py"
 
 [tool.pixi.dependencies]
 python = "3.10.*"
