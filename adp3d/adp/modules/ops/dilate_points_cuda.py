@@ -28,7 +28,7 @@ class DilateAtomCentricCUDA(torch.autograd.Function):
         Parameters
         ----------
         atom_coords_grid : torch.Tensor
-            Atomic coordinates in grid units, shape [batch_size, N_atoms, 3]
+            Atomic coordinates in grid units, shape [batch_size, symmetry_ops, N_atoms, 3]
         atom_occupancies : torch.Tensor
             Atomic occupancies, shape [batch_size, N_atoms]
         radial_profiles : torch.Tensor
@@ -58,8 +58,6 @@ class DilateAtomCentricCUDA(torch.autograd.Function):
         lmax_grid_units = lmax_grid_units.contiguous()
         grid_dims = grid_dims.contiguous()
         grid_to_cartesian_matrix = grid_to_cartesian_matrix.contiguous()
-
-        batch_size, n_atoms, _ = atom_coords_grid.shape
 
         if CUDA_AVAILABLE:
             output_density_grid = dilate_points_cuda.forward(
@@ -171,7 +169,7 @@ def dilate_atom_centric(
     Parameters
     ----------
     atom_coords_grid : torch.Tensor
-        Atomic coordinates in grid units, shape [batch_size, N_atoms, 3]
+        Atomic coordinates in grid units, shape [batch_size, symmetry_ops, N_atoms, 3]
     atom_occupancies : torch.Tensor
         Atomic occupancies, shape [batch_size, N_atoms]
     radial_profiles : torch.Tensor

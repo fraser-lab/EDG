@@ -12,6 +12,7 @@ from adp3d.qfit.volume import XMap, GridParameters, Resolution
 from adp3d.qfit.unitcell import UnitCell
 from adp3d.qfit.spacegroups import GetSpaceGroup
 from adp3d.utils.quadrature import GaussLegendreQuadrature
+from adp3d.adp.modules.ops.dilate_points_cuda import dilate_atom_centric
 
 
 @dataclass
@@ -281,7 +282,7 @@ class XMap_torch:
             expanded_density,  # Input: [n_ops, batch_size, z, y, x] (N, C, D, H, W)
             normalized_coords_xyz,  # Grid: [n_ops, z, y, x, 3] (N, D, H, W, 3) expected order (x,y,z)
             mode="bilinear",
-            align_corners=False, # FIXME: test true or false?
+            align_corners=False,  # FIXME: test true or false?
             padding_mode="border",
         )  # Result: [n_ops, batch_size, z, y, x]
 
@@ -306,6 +307,7 @@ class DifferentiableTransformer(torch.nn.Module):
         em: bool = False,
         space_group: Optional[int] = None,
         device: torch.device = torch.device("cpu"),
+        use_cuda_kernels: bool = False,
     ) -> None:
         """Initialize differentiable transformer.
 
@@ -325,8 +327,8 @@ class DifferentiableTransformer(torch.nn.Module):
             Space group number, by default None (in which case it is expected from the XMap unit cell).
         device : torch.device, optional
             Device to use for computations, by default 'cpu'.
-        dtype : torch.dtype, optional
-            Data type for computations, by default None (float32).
+        use_cuda_kernels : bool, optional
+            Whether to use CUDA kernels for performance, by default False. # TODO: set to True later once tested
         """
         super().__init__()
         self.device = device
@@ -352,6 +354,7 @@ class DifferentiableTransformer(torch.nn.Module):
             device=self.device,
             dtype=self.scattering_params.dtype,
         )
+        self.use_cuda_kernels = use_cuda_kernels
         self._setup_transforms()
 
     def _setup_transforms(self) -> None:
@@ -428,10 +431,6 @@ class DifferentiableTransformer(torch.nn.Module):
             else active.to(dtype=torch.bool, device=self.device)
         )
 
-        radial_densities = self._compute_radial_densities(elements, b_factors).to(
-            self.dtype
-        )
-
         grid_coordinates = self._compute_grid_coordinates(coordinates).to(
             dtype=torch.float32
         )
@@ -441,19 +440,54 @@ class DifferentiableTransformer(torch.nn.Module):
             device=self.device,
         )
 
-        base_density = dilate_points_torch(
-            grid_coordinates,
-            active,
-            occupancies,
-            lmax,
-            radial_densities,
-            self.density_params.rstep,
-            self.density_params.rmax,
-            self.grid_to_cartesian,
-            self.grid_shape,
-        )
+        if self.use_cuda_kernels:
+            radial_densities, radial_derivatives = self._compute_radial_derivatives(
+                elements, b_factors
+            )
+            radial_densities = radial_densities.to(dtype=self.dtype).float()
+            radial_derivatives = radial_derivatives.to(dtype=self.dtype).float()
 
-        final_density = self.xmap.apply_symmetry(base_density)
+            grid_shape_tensor = torch.tensor(self.grid_shape, device=self.device)
+
+            grid_coor_rot = torch.einsum(
+                "rji,bni->brnj",
+                self.xmap.R_matrices,
+                grid_coordinates,
+            )
+
+            # Apply fractional translation scaled by (nx, ny, nz)
+            grid_coor_rot += self.xmap.t_vectors.unsqueeze(1) * grid_shape_tensor.flip(
+                0
+            ).view(1, 1, 3)
+
+            final_density = dilate_atom_centric(
+                grid_coor_rot,
+                occupancies,
+                radial_densities,
+                radial_derivatives,
+                self.density_params.rstep,
+                self.density_params.rmax,
+                lmax,
+                self.grid_shape,
+                self.grid_to_cartesian,
+            )
+        else:
+            radial_densities = self._compute_radial_densities(elements, b_factors).to(
+                dtype=self.dtype
+            )
+            base_density = dilate_points_torch(
+                grid_coordinates,
+                active,
+                occupancies,
+                lmax,
+                radial_densities,
+                self.density_params.rstep,
+                self.density_params.rmax,
+                self.grid_to_cartesian,
+                self.grid_shape,
+            )
+
+            final_density = self.xmap.apply_symmetry(base_density)
 
         return final_density
 
@@ -497,7 +531,7 @@ class DifferentiableTransformer(torch.nn.Module):
         max_extent_voxel = torch.ceil((radius + 1e-6) / min_voxel_spacing).int().item()
 
         nearby_grid_indices = torch.arange(
-            -max_extent_voxel, max_extent_voxel + 1, device=device, dtype=torch.long
+            -max_extent_voxel, max_extent_voxel + 1, device=device, dtype=torch.int
         )
         nearby_grid_offsets = torch.stack(
             torch.meshgrid(
@@ -511,10 +545,10 @@ class DifferentiableTransformer(torch.nn.Module):
 
         mask_volume = torch.zeros(grid_shape, device=device, dtype=torch.bool)
         grid_shape_tensor = torch.tensor(
-            grid_shape, device=device, dtype=torch.long
+            grid_shape, device=device, dtype=torch.int
         ).view(1, 1, 3)  # Shape: [1, 1, 3]
 
-        coord_floored = torch.floor(grid_coordinates).long()  # Shape: [n_atoms, 3]
+        coord_floored = torch.floor(grid_coordinates).int()  # Shape: [n_atoms, 3]
         grid_points_absolute = coord_floored.unsqueeze(
             1
         ) + nearby_grid_offsets.unsqueeze(0)  # Shape: [n_atoms, n_nearby, 3]
@@ -592,7 +626,7 @@ class DifferentiableTransformer(torch.nn.Module):
             combined, dim=0, return_inverse=True
         )
 
-        unique_elements = unique_combinations[:, 0].long()
+        unique_elements = unique_combinations[:, 0].int()
         element_asf = self.scattering_params[
             unique_elements
         ]  # Shape: [n_unique, n_coeffs, 2]
@@ -635,7 +669,7 @@ class DifferentiableTransformer(torch.nn.Module):
 
     def _compute_radial_derivatives(
         self, elements: torch.Tensor, b_factors: torch.Tensor
-    ) -> torch.Tensor:
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Compute radial density derivatives efficiently.
 
         Parameters
@@ -647,8 +681,8 @@ class DifferentiableTransformer(torch.nn.Module):
 
         Returns
         -------
-        torch.Tensor
-            Radial density derivatives of shape (batch_size, n_atoms, n_radial).
+        Tuple[torch.Tensor, torch.Tensor]
+            Radial densities and their approximate derivatives of shape (batch_size, n_atoms, n_radial).
         """
         densities = self._compute_radial_densities(elements, b_factors)
 
@@ -662,7 +696,7 @@ class DifferentiableTransformer(torch.nn.Module):
             2 * self.density_params.rstep
         )
 
-        return derivatives
+        return densities, derivatives
 
     def _compute_grid_coordinates(self, coordinates: torch.Tensor) -> torch.Tensor:
         """Transform Cartesian coordinates to grid coordinates.
@@ -777,7 +811,7 @@ def dilate_points_torch(
     rad_continuous = distances_to_nearby / rstep  # [batch_size, n_nearby, n_atoms]
     rad_indices_low = torch.floor(
         rad_continuous
-    ).long()  # [batch_size, n_nearby, n_atoms]
+    ).int()  # [batch_size, n_nearby, n_atoms]
     weights_high = (
         rad_continuous - rad_indices_low.float()
     )  # [batch_size, n_nearby, n_atoms]
@@ -803,7 +837,7 @@ def dilate_points_torch(
     n_nearby = nearby_grid.shape[0]
     coord_floored = torch.floor(
         coordinates[batch_idx, atom_idx]
-    ).long()  # [n_active_atoms, 3]
+    ).int()  # [n_active_atoms, 3]
 
     # modulo for periodic boundary
     grid_points = (
@@ -841,7 +875,7 @@ def dilate_points_torch(
     # scatter_add_ onto the grid
     grid_points_flat = grid_points.reshape(
         -1, 3
-    ).long()  # [n_active_atoms * n_nearby, 3]
+    ).int()  # [n_active_atoms * n_nearby, 3]
     grid_strides = [
         grid_shape[1] * grid_shape[2],
         grid_shape[2],

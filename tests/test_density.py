@@ -237,7 +237,7 @@ class TestAtomDensityCUDA:
             
             # Run CUDA implementation
             result_cuda = dilate_atom_centric(
-                grid_coords,
+                grid_coords.unsqueeze(1), # add symmetry operation dimension
                 occupancies,
                 radial_profiles.float(),
                 radial_derivatives.float(),
@@ -370,11 +370,11 @@ class TestAtomDensityCUDA:
         device = transformers["pytorch"].device
         
         # Prepare inputs
-        coords = test_data["coordinates"].to(device).detach().clone()
-        element_ids = test_data["element_ids"].to(device).detach().clone()
-        b_factors = test_data["b_factors"].to(device).detach().clone()
-        occupancies = test_data["occupancies"].to(device).detach().clone()
-        active = test_data["active"].to(device).detach().clone()
+        coords = test_data["coordinates"].to(device).float().detach().clone()
+        element_ids = test_data["element_ids"].to(device).int().detach().clone()
+        b_factors = test_data["b_factors"].to(device).float().detach().clone()
+        occupancies = test_data["occupancies"].to(device).float().detach().clone()
+        active = test_data["active"].to(device).detach().bool().clone()
         
         # Run forward pass with both implementations
         with torch.no_grad():
@@ -384,7 +384,7 @@ class TestAtomDensityCUDA:
                 b_factors,
                 occupancies,
                 active
-            )
+            ).sum(0)
             
             density_map_cuda = transformers["cuda"](
                 coords,
@@ -392,29 +392,30 @@ class TestAtomDensityCUDA:
                 b_factors,
                 occupancies,
                 active
-            )
+            ).sum(0)
         
+        # Write map to file
+        transformers["pytorch"].xmap.tofile(str(test_data["data_dir"] / "generated_map_pytorch.ccp4"), density_map_pytorch)
+        transformers["cuda"].xmap.tofile(str(test_data["data_dir"] / "generated_map_cuda.ccp4"), density_map_cuda)
+
         # Compare results
         assert density_map_cuda.shape == density_map_pytorch.shape
         
-        # Compute correlation between the two outputs
         pytorch_flat = density_map_pytorch.cpu().numpy().flatten()
         cuda_flat = density_map_cuda.cpu().numpy().flatten()
         correlation, _ = pearsonr(pytorch_flat, cuda_flat)
-        
-        # Check for high correlation
-        assert correlation > 0.6, f"Correlation between PyTorch and CUDA outputs too low: {correlation}"
 
         # Check for close agreement with qFit
         qfit_map_tensor = torch.from_numpy(test_data["qfit_map"].array).to(device=device, dtype=torch.float32)
-        qfit_map_tensor = qfit_map_tensor.unsqueeze(0).expand(density_map_cuda.shape[0], -1, -1, -1)
         assert density_map_cuda.shape == qfit_map_tensor.shape
         assert density_map_pytorch.shape == qfit_map_tensor.shape
         correlation_qfit, _ = pearsonr(
             density_map_cuda.cpu().numpy().flatten(), 
             qfit_map_tensor.cpu().numpy().flatten()
         )
+        print(f"PyTorch vs CUDA correlation: {correlation:.4f}\nCUDA vs qFit correlation: {correlation_qfit:.4f}")
         assert correlation_qfit > 0.8, f"Correlation with qFit map too low: {correlation_qfit}"
+        assert correlation > 0.6, f"Correlation between PyTorch and CUDA outputs too low: {correlation}"
 
     def test_backward_pass(self, test_data, transformers):
         """Test that the backward pass computes correct gradients.
@@ -968,4 +969,4 @@ class TestPerformanceComparison:
 
 
 if __name__ == "__main__":
-    pytest.main(["-xvs", __file__])
+    pytest.main(["-vs", __file__])

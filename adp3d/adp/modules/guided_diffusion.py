@@ -868,18 +868,17 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
             "init_coords"
         ][:, inverse_selector, :]
 
-        # TODO: finish ensemble particles
-        # if self.model.steering_args["fk_steering"] and (ensemble_size > 1):
-        #     try:
-        #         atom_coords_denoised_ensemble = atom_coords_denoised.reshape(
-        #             num_ensembles, ensemble_size, -1, 3
-        #         )
-        #     except RuntimeError as e:
-        #         print(
-        #             f"Atom_coords_denoised does not have an appropriate batch dimension to split into ensembles: \
-        #             {atom_coords_denoised.shape}, multiplicity: {multiplicity}, ensemble_size: {ensemble_size}"
-        #         )
-        #         raise e
+        if self.model.steering_args["fk_steering"] and (ensemble_size > 1):
+            try:
+                atom_coords_denoised_ensemble = atom_coords_denoised.reshape(
+                    num_ensembles, ensemble_size, -1, 3
+                )
+            except RuntimeError as e:
+                print(
+                    f"Atom_coords_denoised does not have an appropriate batch dimension to split into ensembles: \
+                    {atom_coords_denoised.shape}, multiplicity: {multiplicity}, ensemble_size: {ensemble_size}"
+                )
+                raise e
 
         if self.model.steering_args["fk_steering"] and (
             (
@@ -889,15 +888,13 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
             )
             or self.current_step == num_sampling_steps - 1
         ):
-            ## Individual potentials
-
             # Compute energy of x_0 prediction
             energy = torch.zeros(multiplicity, device=self.device)
             for potential in potentials:
                 parameters = potential.compute_parameters(steering_t)
                 if parameters["resampling_weight"] > 0:
                     component_energy = potential.compute(
-                        atom_coords_denoised,
+                        atom_coords_denoised_ensemble,
                         network_condition_kwargs["feats"],
                         parameters,
                     )
@@ -1059,10 +1056,10 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
             return (
                 atom_coords_next.detach(),
                 atom_coords_denoised.detach(),
-                energy_traj.mean().item(),
+                energy_traj[:, -1].mean().item(),
             )
         else:
             return (
                 atom_coords_next.detach(),
-                energy_traj.mean().item(),
+                energy_traj[:, -1].mean().item(),
             )  # return minimum energy of ensemble

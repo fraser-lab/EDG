@@ -361,12 +361,16 @@ if __name__ == "__main__":
 
     density_generator = SyntheticDensityGenerator(structure=pdb, resolution=8.0, unit_cell=unit_cell, em_mode=False)
     density = density_generator.generate_map(b_factor_scale=1.0, occupancy_scale=1.0)
-    density_generator.save_map("/home/kchrispens/adp-replicate/tests/resources/AAAWAAA/ckAAAWAAA_Waltconf_8.ccp4", density)
+    density_generator.save_map("/home/kchrispens/adp-replicate/tests/resources/AAAWAAA/AAAWAAA_Waltconf_8.ccp4", density)
 
     density_generator = SyntheticDensityGenerator(structure=pdb, resolution=4.0, unit_cell=unit_cell, em_mode=False)
     density = density_generator.generate_map(b_factor_scale=1.0, occupancy_scale=1.0)
-    density_generator.save_map("/home/kchrispens/adp-replicate/tests/resources/AAAWAAA/ckAAAWAAA_Waltconf_4.ccp4", density)
+    density_generator.save_map("/home/kchrispens/adp-replicate/tests/resources/AAAWAAA/AAAWAAA_Waltconf_4.ccp4", density)
+
+    density_generator = SyntheticDensityGenerator(structure=pdb, resolution=2.0, unit_cell=unit_cell, em_mode=False)
+    density = density_generator.generate_map(b_factor_scale=1.0, occupancy_scale=1.0)
+    density_generator.save_map("/home/kchrispens/adp-replicate/tests/resources/AAAWAAA/AAAWAAA_Waltconf_2.ccp4", density)
 
     density_generator = SyntheticDensityGenerator(structure=pdb, resolution=1.0, unit_cell=unit_cell, em_mode=False)
     density = density_generator.generate_map(b_factor_scale=1.0, occupancy_scale=1.0)
-    density_generator.save_map("/home/kchrispens/adp-replicate/tests/resources/AAAWAAA/ckAAAWAAA_Waltconf_1.ccp4", density)
+    density_generator.save_map("/home/kchrispens/adp-replicate/tests/resources/AAAWAAA/AAAWAAA_Waltconf_1.ccp4", density)

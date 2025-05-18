@@ -281,7 +281,8 @@ class PoseBustersPotential(FlatBottomPotential, DistancePotential):
         return pair_index, (k, lower_bounds, upper_bounds), None
 
 
-class ConnectionsPotential(FlatBottomPotential, DistancePotential):
+# class ConnectionsPotential(FlatBottomPotential, DistancePotential):
+class ConnectionsPotential(HarmonicPotential, DistancePotential): # FIXME: testing
     def compute_args(self, feats, parameters):
         pair_index = feats["connected_atom_index"][0]
         lower_bounds = None
@@ -653,7 +654,7 @@ class DensityPotential(Potential):
                 rho_calc = self.parameters["density_calculator"](coords_translated)
                 return rho_calc
 
-        rho_calc = self.parameters["density_calculator"](coords_translated).sum(0)
+        rho_calc = self.parameters["density_calculator"](coords_translated)
 
         rho_calc.backward(torch.ones_like(rho_calc), retain_graph=True)
 
@@ -723,7 +724,7 @@ class DensityPotential(Potential):
             Energy values, and optionally derivatives
         """
         # target = -(value * self.xmap.array.to(torch.float32)).sum()
-        target = ((value - self.xmap.array.to(torch.float32)) ** 2).sum()
+        target = ((value - self.xmap.array.to(torch.float32)) ** 2).sum(dim=[-3, -2, -1])
 
         if not compute_derivative:
             return target
@@ -731,7 +732,7 @@ class DensityPotential(Potential):
         # dEnergy = - k * target
         dEnergy = 2 * k * target  # [batch, n_atoms]
 
-        return target.detach(), dEnergy
+        return target, dEnergy
 
     def compute_gradient(
         self,
@@ -757,7 +758,7 @@ class DensityPotential(Potential):
         """
         coords = coords.clone().detach().requires_grad_()
         index, args, com_args = self.compute_args(feats, parameters)
-        value, grad_value = self.compute_variable(coords, index, compute_gradient=True)
+        value, _ = self.compute_variable(coords, index, compute_gradient=True)
 
         energy = self.compute_function(
             value,
@@ -765,11 +766,34 @@ class DensityPotential(Potential):
             compute_derivative=False,
         )
 
-        energy.backward()
+        energy.backward(torch.ones_like(energy))
         grad_atom = coords.grad.clone()
         coords.grad.zero_()
 
         return grad_atom
+
+    def compute(self, coords, feats, parameters):
+        index, args, com_args = self.compute_args(feats, parameters)
+
+        if index.shape[1] == 0:
+            return torch.zeros(coords.shape[:-2], device=coords.device)
+
+        if com_args is not None:
+            com_index, atom_pad_mask = com_args
+            unpad_com_index = com_index[atom_pad_mask]
+            unpad_coords = coords[..., atom_pad_mask, :]
+            coords = torch.zeros(
+                (*unpad_coords.shape[:-2], unpad_com_index.max() + 1, 3),
+                device=coords.device,
+            ).scatter_reduce(
+                -2,
+                unpad_com_index.unsqueeze(-1).expand_as(unpad_coords),
+                unpad_coords,
+                "mean",
+            )
+        value = self.compute_variable(coords, index, compute_gradient=False)
+        energy = self.compute_function(value, *args)
+        return energy
 
     def interpolate_density_at_positions(self, positions: torch.Tensor, mode: str = "tricubic") -> torch.Tensor:
         """Interpolate experimental density values at given atomic positions with symmetry.

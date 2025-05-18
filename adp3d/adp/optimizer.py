@@ -315,11 +315,11 @@ class DensityGuidedDiffusion:
         coords = repeat(coords, "a c -> n a c", n=num_samples)
         elements = repeat(elements, "e -> n e", n=num_samples)
         # FIXME: using uniform b-factors and occupancies for now
-        b_factors = repeat(b_factors, "b -> n b", n=num_samples) / num_samples  # FIXME
+        b_factors = repeat(b_factors, "b -> n b", n=num_samples)
         # b_factors = torch.full(elements.size(), 4 / num_samples)
         occupancies = (
-            repeat(occupancies, "q -> n q", n=num_samples) / num_samples
-        )  # FIXME: / num_samples
+            repeat(occupancies, "q -> n q", n=num_samples) # / num_samples # FIXME
+        )
         active = repeat(active, "a -> n a", n=num_samples)
 
         if resolution == 0.0 or resolution is None:
@@ -353,10 +353,11 @@ class DensityGuidedDiffusion:
             xmap=self.density_calculator.xmap,
             parameters={
                 "guidance_interval": 1,
+                # "guidance_weight": 0.0,
                 "guidance_weight": PiecewiseStepFunction(
                     [0.25], [0.0001, 0.0]
                 ),
-                "resampling_weight": 1.0,
+                "resampling_weight": 0.0001,
                 "occupancies": occupancies,
                 "b_factors": b_factors,
                 "initial_centroid": self.initial_centroid,
