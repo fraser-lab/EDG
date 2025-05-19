@@ -12,6 +12,7 @@ from adp3d.qfit.volume import XMap, GridParameters, Resolution
 from adp3d.qfit.unitcell import UnitCell
 from adp3d.qfit.spacegroups import GetSpaceGroup
 from adp3d.utils.quadrature import GaussLegendreQuadrature
+from adp3d.utils.interpolation import tricubic_interpolation_torch
 from adp3d.adp.modules.ops.dilate_points_cuda import dilate_atom_centric
 
 
@@ -289,6 +290,101 @@ class XMap_torch:
         summed_density = transformed_density.sum(dim=0)  # [batch_size, z, y, x]
 
         return summed_density
+    
+    def downsample_to_resolution(
+        self,
+        target_resolution: float,
+        apply_filter: bool = True,
+        sigma_factor: float = 0.5,
+    ) -> "XMap_torch":
+        """Resample density map to a target resolution using tricubic interpolation.
+        
+        Parameters
+        ----------
+        target_resolution : float
+            Target resolution in Angstroms.
+        apply_filter : bool, optional
+            Apply Gaussian filter when downsampling to prevent aliasing, by default True.
+        sigma_factor : float, optional
+            Factor to determine sigma for Gaussian filter, by default 0.5.
+        
+        Returns
+        -------
+        XMap_torch
+            New XMap_torch instance with resampled density map.
+        """
+        current_resolution = self.resolution.high
+        unit_cell = self.unit_cell
+        device = self.array.device
+        
+        new_grid_a = int(unit_cell.a / target_resolution * 4.0)
+        new_grid_b = int(unit_cell.b / target_resolution * 4.0)
+        new_grid_c = int(unit_cell.c / target_resolution * 4.0)
+        new_shape = torch.tensor([new_grid_a, new_grid_b, new_grid_c], device=device)
+        
+        new_voxelspacing = torch.tensor([target_resolution / 4.0] * 3, device=device)
+        
+        scale_factor = target_resolution / current_resolution
+        
+        if scale_factor < 1:
+            warnings.warn(
+                f"Target resolution ({target_resolution} Å) higher than current "
+                f"resolution ({current_resolution} Å). Upsampling may not add information."
+            )
+        
+        if scale_factor > 1 and apply_filter:
+            sigma = scale_factor * sigma_factor
+            kernel_size = int(2 * round(2 * sigma) + 1)
+            kernel_size = max(3, kernel_size)
+            kernel_size = kernel_size + (1 - kernel_size % 2)
+            
+            grid = torch.arange(kernel_size, device=device) - (kernel_size - 1) / 2
+            gaussian_1d = torch.exp(-(grid**2) / (2 * sigma**2))
+            gaussian_1d = gaussian_1d / gaussian_1d.sum()
+            
+            kernel_x = gaussian_1d.view(1, 1, 1, 1, kernel_size)
+            kernel_y = gaussian_1d.view(1, 1, 1, kernel_size, 1)
+            kernel_z = gaussian_1d.view(1, 1, kernel_size, 1, 1)
+            
+            padded = F.pad(self.array.unsqueeze(0).unsqueeze(0), (1, 1, 1, 1, 1, 1), mode='replicate')
+            filtered = F.conv3d(padded, kernel_x, padding=(0, 0, kernel_size//2))
+            filtered = F.conv3d(filtered, kernel_y, padding=(0, kernel_size//2, 0))
+            filtered = F.conv3d(filtered, kernel_z, padding=(kernel_size//2, 0, 0))
+            array_for_sampling = filtered.squeeze(0).squeeze(0)
+        else:
+            array_for_sampling = self.array
+        
+        original_shape = torch.tensor(self.shape, device=device)
+        
+        z_norm = torch.linspace(0, 1, new_shape[0], device=device)
+        y_norm = torch.linspace(0, 1, new_shape[1], device=device)
+        x_norm = torch.linspace(0, 1, new_shape[2], device=device)
+        
+        z_orig = z_norm * (original_shape[0] - 1)
+        y_orig = y_norm * (original_shape[1] - 1)
+        x_orig = x_norm * (original_shape[2] - 1)
+        
+        grid_z, grid_y, grid_x = torch.meshgrid(z_orig, y_orig, x_orig, indexing="ij")
+        points_zyx = torch.stack([grid_z, grid_y, grid_x], dim=-1)
+        
+        resampled_array = tricubic_interpolation_torch(array_for_sampling, points_zyx)
+        
+        new_grid_parameters = GridParameters(
+            voxelspacing=new_voxelspacing.cpu().numpy(),
+            offset=self.offset.cpu().numpy(),
+        )
+        
+        new_resolution = Resolution(high=target_resolution, low=self.resolution.low)
+        
+        return XMap_torch(
+            array=resampled_array,
+            grid_parameters=new_grid_parameters,
+            unit_cell=self.unit_cell,
+            resolution=new_resolution,
+            hkl=self.hkl,
+            origin=self.origin,
+            device=self.array.device,
+        )
 
 
 class DifferentiableTransformer(torch.nn.Module):
