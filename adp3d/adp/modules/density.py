@@ -137,7 +137,7 @@ class XMap_torch:
                 self.resolution = Resolution(high=self.resolution, low=1000.0)
             if self.resolution.low is None:
                 warnings.warn(
-                    f"resolution does not have low limit set, using 1000 Å as low"
+                    "resolution does not have low limit set, using 1000 Å as low"
                 )
                 self.resolution.low = 1000.0
         else:
@@ -147,8 +147,6 @@ class XMap_torch:
                 raise ValueError("unit_cell must be provided")
             if self.resolution is None:
                 raise ValueError("resolution must be provided")
-            if self.hkl is None:
-                raise ValueError("hkl must be provided")
             if self.voxelspacing is None:
                 raise ValueError("grid_parameters must be provided")
             if self.offset is None:
@@ -162,9 +160,15 @@ class XMap_torch:
                 self.resolution, Resolution
             ):
                 warnings.warn(
-                    f"resolution does not have a low attribute, using 1000 Å as low"
+                    "resolution does not have a low attribute, using 1000 Å as low"
                 )
                 self.resolution.low = 1000.0
+
+            if self.array == torch.zeros(self.array.shape) and self.hkl is None:
+                warnings.warn(
+                    f"hkl ({self.hkl}) is not provided and array is zeros. \
+                    If this is intended to contain structure factors for computing a map, please provide hkl."
+                )
 
     def _setup_symmetry_matrices(self, device: torch.device) -> None:
         """Precompute symmetry operation matrices for efficient application."""
@@ -290,24 +294,24 @@ class XMap_torch:
         summed_density = transformed_density.sum(dim=0)  # [batch_size, z, y, x]
 
         return summed_density
-    
+
     def downsample_to_resolution(
         self,
         target_resolution: float,
         apply_filter: bool = True,
-        sigma_factor: float = 0.5,
+        filter_type: str = "brickwall",
     ) -> "XMap_torch":
         """Resample density map to a target resolution using tricubic interpolation.
-        
+
         Parameters
         ----------
         target_resolution : float
             Target resolution in Angstroms.
         apply_filter : bool, optional
             Apply Gaussian filter when downsampling to prevent aliasing, by default True.
-        sigma_factor : float, optional
-            Factor to determine sigma for Gaussian filter, by default 0.5.
-        
+        filter_type : str, optional
+            Type of filter to apply ('hamming' or 'brickwall'), by default 'brickwall'.
+
         Returns
         -------
         XMap_torch
@@ -316,66 +320,72 @@ class XMap_torch:
         current_resolution = self.resolution.high
         unit_cell = self.unit_cell
         device = self.array.device
-        
+
         new_grid_a = int(unit_cell.a / target_resolution * 4.0)
         new_grid_b = int(unit_cell.b / target_resolution * 4.0)
         new_grid_c = int(unit_cell.c / target_resolution * 4.0)
         new_shape = torch.tensor([new_grid_a, new_grid_b, new_grid_c], device=device)
-        
-        new_voxelspacing = torch.tensor([target_resolution / 4.0] * 3, device=device)
-        
+
         scale_factor = target_resolution / current_resolution
-        
+
+        new_voxelspacing = torch.tensor([target_resolution / 4.0] * 3, device=device)
+        new_offset = (self.offset / scale_factor).detach().clone()
+
         if scale_factor < 1:
             warnings.warn(
                 f"Target resolution ({target_resolution} Å) higher than current "
                 f"resolution ({current_resolution} Å). Upsampling may not add information."
             )
-        
+
         if scale_factor > 1 and apply_filter:
-            sigma = scale_factor * sigma_factor
-            kernel_size = int(2 * round(2 * sigma) + 1)
-            kernel_size = max(3, kernel_size)
-            kernel_size = kernel_size + (1 - kernel_size % 2)
-            
-            grid = torch.arange(kernel_size, device=device) - (kernel_size - 1) / 2
-            gaussian_1d = torch.exp(-(grid**2) / (2 * sigma**2))
-            gaussian_1d = gaussian_1d / gaussian_1d.sum()
-            
-            kernel_x = gaussian_1d.view(1, 1, 1, 1, kernel_size)
-            kernel_y = gaussian_1d.view(1, 1, 1, kernel_size, 1)
-            kernel_z = gaussian_1d.view(1, 1, kernel_size, 1, 1)
-            
-            padded = F.pad(self.array.unsqueeze(0).unsqueeze(0), (1, 1, 1, 1, 1, 1), mode='replicate')
-            filtered = F.conv3d(padded, kernel_x, padding=(0, 0, kernel_size//2))
-            filtered = F.conv3d(filtered, kernel_y, padding=(0, kernel_size//2, 0))
-            filtered = F.conv3d(filtered, kernel_z, padding=(kernel_size//2, 0, 0))
-            array_for_sampling = filtered.squeeze(0).squeeze(0)
+            f_density = to_f_density(self.array)
+
+            shape = torch.tensor(f_density.shape, device=device)
+            grid_z, grid_y, grid_x = torch.meshgrid(
+                [torch.arange(-(s // 2), -(s // 2) + s, device=device) for s in shape],
+                indexing="ij",
+            )
+
+            # Calculate physical frequencies based on voxel spacing
+            freq_z = grid_z / (shape[0] * self.voxelspacing[0])
+            freq_y = grid_y / (shape[1] * self.voxelspacing[1])
+            freq_x = grid_x / (shape[2] * self.voxelspacing[2])
+
+            radial_freq = torch.sqrt(freq_z**2 + freq_y**2 + freq_x**2)
+            cutoff_freq = 1.0 / target_resolution
+
+            if filter_type == "hamming":
+                resolution_filter = radial_hamming_3d(radial_freq, cutoff_freq)
+            elif filter_type == "brickwall":
+                resolution_filter = (radial_freq < cutoff_freq).float()
+
+            f_density = f_density * resolution_filter
+            array_for_sampling = to_density(f_density)
         else:
             array_for_sampling = self.array
-        
+
         original_shape = torch.tensor(self.shape, device=device)
-        
+
         z_norm = torch.linspace(0, 1, new_shape[0], device=device)
         y_norm = torch.linspace(0, 1, new_shape[1], device=device)
         x_norm = torch.linspace(0, 1, new_shape[2], device=device)
-        
+
         z_orig = z_norm * (original_shape[0] - 1)
         y_orig = y_norm * (original_shape[1] - 1)
         x_orig = x_norm * (original_shape[2] - 1)
-        
+
         grid_z, grid_y, grid_x = torch.meshgrid(z_orig, y_orig, x_orig, indexing="ij")
         points_zyx = torch.stack([grid_z, grid_y, grid_x], dim=-1)
-        
+
         resampled_array = tricubic_interpolation_torch(array_for_sampling, points_zyx)
-        
+
         new_grid_parameters = GridParameters(
             voxelspacing=new_voxelspacing.cpu().numpy(),
-            offset=self.offset.cpu().numpy(),
+            offset=new_offset.cpu().numpy(),
         )
-        
+
         new_resolution = Resolution(high=target_resolution, low=self.resolution.low)
-        
+
         return XMap_torch(
             array=resampled_array,
             grid_parameters=new_grid_parameters,
@@ -1129,7 +1139,6 @@ def scale_map(
     xmap_masked = xmap_array[mask]
     model_masked = model_map_array[mask]
 
-    # Check if maps are already similar
     xmap_std = xmap_masked.std()
     model_std = model_masked.std()
 
@@ -1146,7 +1155,6 @@ def scale_map(
 
     # If maps are already very similar, apply gentle scaling
     if rel_mean_diff < similarity_threshold and rel_std_diff < similarity_threshold:
-        # Apply minimal correction - just match means and standard deviations
         scaling_factor = model_std / (xmap_std + 1e-10)
         offset = model_masked_mean - scaling_factor * xmap_masked_mean
         return scaling_factor * xmap_array + offset
@@ -1158,7 +1166,6 @@ def scale_map(
     s2 = torch.dot(model_masked_centered, xmap_masked_centered)
     s1 = torch.dot(xmap_masked_centered, xmap_masked_centered)
 
-    # Ensure numerical stability
     s1 = torch.max(s1, torch.tensor(min_scaling_denominator, device=s1.device))
 
     scaling_factor = s2 / s1
@@ -1169,12 +1176,68 @@ def scale_map(
     return scaled_xmap_array
 
 
-def to_f_density(map: torch.Tensor) -> torch.Tensor:
+def to_f_density(real_map: torch.Tensor) -> torch.Tensor:
     """FFT a density map."""
     # f_density
-    return torch.fft.fftshift(
+    # pad map to odd shape
+    map_shape = real_map.shape[-3:]
+    pad_amount = [dim % 2 for dim in map_shape]
+    if pad_amount != [0, 0, 0]:
+        real_map = F.pad(
+            real_map, (0, pad_amount[2], 0, pad_amount[1], 0, pad_amount[0])
+        )
+
+    f_map = torch.fft.fftshift(
         torch.fft.fftn(
-            torch.fft.ifftshift(map, dim=(-3, -2, -1)), dim=(-3, -2, -1), norm="ortho"
+            torch.fft.ifftshift(real_map, dim=(-3, -2, -1)), dim=(-3, -2, -1)
         ),
         dim=(-3, -2, -1),
     )
+    f_map = f_map[..., : map_shape[0], : map_shape[1], : map_shape[2]]
+    return f_map
+
+
+def to_density(f_map: torch.Tensor) -> torch.Tensor:
+    """Inverse FFT a density map."""
+    # density
+    # pad map to odd shape
+    map_shape = f_map.shape[-3:]
+    pad_amount = [dim % 2 for dim in map_shape]
+    if pad_amount != [0, 0, 0]:
+        f_map = F.pad(f_map, (0, pad_amount[2], 0, pad_amount[1], 0, pad_amount[0]))
+
+    density = torch.real(
+        torch.fft.fftshift(
+            torch.fft.ifftn(
+                torch.fft.ifftshift(f_map, dim=(-3, -2, -1)),
+                dim=(-3, -2, -1),
+            ),
+            dim=(-3, -2, -1),
+        )
+    )
+
+    # remove padding
+    density = density[..., : map_shape[0], : map_shape[1], : map_shape[2]]
+    return density
+
+
+def radial_hamming_3d(f_mag, cutoff_radius):
+    """3D radial Hamming filter in Fourier space
+
+    Args:
+        f_mag: Frequency magnitudes from FFT
+        cutoff_radius: Frequency cutoff in same units as frequency coordinates
+
+    Returns:
+        3D tensor containing the Hamming filter
+    """
+    filter = torch.zeros_like(f_mag)
+
+    mask = f_mag <= cutoff_radius
+
+    r_scaled = f_mag[mask] / cutoff_radius  # Scale to [0,1]
+    hamming_vals = 0.54 + 0.46 * torch.cos(torch.pi * r_scaled)
+
+    filter[mask] = hamming_vals
+
+    return filter
