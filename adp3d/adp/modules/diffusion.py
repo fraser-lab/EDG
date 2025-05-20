@@ -4,7 +4,12 @@ from math import sqrt
 
 from pathlib import Path
 from boltz.model.model import Boltz1
-from boltz.main import BoltzDiffusionParams, BoltzSteeringParams
+from boltz.main import (
+    BoltzDiffusionParams,
+    BoltzSteeringParams,
+    PairformerArgs,
+    MSAModuleArgs,
+)
 from boltz.model.potentials.potentials import get_potentials
 from boltz.model.modules.utils import default, center_random_augmentation
 from boltz.model.loss.diffusion import weighted_rigid_align
@@ -87,6 +92,9 @@ class DiffusionStepper:
             checkpoint_path
         ).parent  # NOTE: assumes checkpoint and ccd dictionary get downloaded to the same place
 
+        pairformer_args = PairformerArgs(use_trifast=(device != "cpu"))
+        msa_module_args = MSAModuleArgs(use_trifast=(device != "cpu"))
+
         if model is not None:
             self.model = model.to(self.device).eval()
         else:
@@ -99,6 +107,8 @@ class DiffusionStepper:
                     diffusion_process_args=asdict(diffusion_args),
                     ema=False,
                     steering_args=asdict(steering_args),
+                    pairformer_args=asdict(pairformer_args),
+                    msa_module_args=asdict(msa_module_args),
                 )
                 .to(self.device)
                 .eval()
@@ -154,7 +164,7 @@ class DiffusionStepper:
             msa_dir=processed_dir / "msa",
         )
 
-        # Create data module # TODO: set this up so batched will work with later functions? This will require getting density maps into the schema I think
+        # Create data module
         data_module = BoltzInferenceDataModule(
             manifest=processed.manifest,
             target_dir=processed.targets_dir,
@@ -181,7 +191,7 @@ class DiffusionStepper:
         """
         return self.data_module.transfer_batch_to_device(
             next(iter(self.data_module.predict_dataloader())), self.device, 0
-        )  # FIXME: I generally assume batch size of 1, which will break in the future.
+        )  # NOTE: I generally assume batch size of 1, which may break in the future.
 
     def compute_representations(
         self,
@@ -280,6 +290,8 @@ class DiffusionStepper:
             potentials = get_potentials()
             if extra_potentials is not None:
                 potentials.extend(extra_potentials)
+                # reverse the ordering so substructure and density come before physicality potentials
+                potentials.reverse()
 
             diffusion_samples = self.model.steering_args["num_particles"]
             energy_traj = torch.empty((diffusion_samples, 0), device=self.device)
@@ -387,6 +399,8 @@ class DiffusionStepper:
             potentials = get_potentials()
             if extra_potentials is not None:
                 potentials.extend(extra_potentials)
+                # reverse the ordering so substructure and density come before physicality potentials
+                potentials.reverse()
             diffusion_samples = self.model.steering_args["num_particles"]
             energy_traj = torch.empty((diffusion_samples, 0), device=self.device)
             resample_weights = torch.ones(
@@ -506,6 +520,8 @@ class DiffusionStepper:
             potentials = get_potentials()
             if extra_potentials is not None:
                 potentials.extend(extra_potentials)
+                # reverse the ordering so substructure and density come before physicality potentials
+                potentials.reverse()
             diffusion_samples = self.model.steering_args["num_particles"]
             energy_traj = torch.empty((diffusion_samples, 0), device=self.device)
             resample_weights = torch.ones(
