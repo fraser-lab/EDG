@@ -174,7 +174,7 @@ class SyntheticDensityGenerator:
             scattering_params=self.scattering_params,
             em=self.em_mode,
             device=self.device,
-            # use_cuda_kernels=True,
+            use_cuda_kernels=True,
         )
     
     def _setup_scattering_params(self) -> None:
@@ -247,7 +247,6 @@ class SyntheticDensityGenerator:
         """
         coords, elements, b_factors, occupancies, active, _ = structure_to_density_input(structure)
     
-        
         coords = coords.to(self.device).float().unsqueeze(0)  # Add batch dim
         elements = elements.to(self.device).long().unsqueeze(0)  # Add batch dim
         b_factors = b_factors.to(self.device).float().unsqueeze(0) * b_factor_scale
@@ -317,6 +316,7 @@ class SyntheticDensityGenerator:
         self, 
         output_file: str, 
         density_map: Optional[torch.Tensor] = None,
+        downsample_to: Optional[float] = None,
     ) -> None:
         """Save the generated density map to a file.
         
@@ -326,6 +326,8 @@ class SyntheticDensityGenerator:
             Path to the output file (will be saved in CCP4 format).
         density_map : Optional[torch.Tensor], optional
             Density map to save, by default None (uses the last generated map).
+        downsample_to : Optional[float], optional
+            Downsample the density map to this resolution, by default None.
         """
         if density_map is None:
             if not hasattr(self, 'last_density_map'):
@@ -334,8 +336,15 @@ class SyntheticDensityGenerator:
         
         # Create directory if it doesn't exist
         os.makedirs(os.path.dirname(os.path.abspath(output_file)), exist_ok=True)
+
+        xmap = self.density_calculator.xmap
+        xmap.array = density_map
+
+        # Downsample the density map if requested
+        if downsample_to is not None:
+            xmap = xmap.downsample_to_resolution(downsample_to, apply_filter=True)
         
-        self.density_calculator.xmap.tofile(output_file, density=density_map.cpu().numpy())
+        xmap.tofile(output_file)
         print(f"Saved density map to {output_file}")
 
 
@@ -374,3 +383,7 @@ if __name__ == "__main__":
     density_generator = SyntheticDensityGenerator(structure=pdb, resolution=1.0, unit_cell=unit_cell, em_mode=False)
     density = density_generator.generate_map(b_factor_scale=1.0, occupancy_scale=1.0)
     density_generator.save_map("/home/kchrispens/adp-replicate/tests/resources/AAAWAAA/AAAWAAA_Waltconf_1.ccp4", density)
+
+    density_generator = SyntheticDensityGenerator(structure=pdb, resolution=1.0, unit_cell=unit_cell, em_mode=False)
+    density = density_generator.generate_map(b_factor_scale=1.0, occupancy_scale=1.0)
+    density_generator.save_map("/home/kchrispens/adp-replicate/tests/resources/AAAWAAA/AAAWAAA_Waltconf_4_downsampled_from_1_brickwall_filtered.ccp4", density, downsample_to=4.0)
