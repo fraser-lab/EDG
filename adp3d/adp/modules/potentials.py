@@ -13,7 +13,10 @@ import torch.nn.functional as F
 
 from boltz.data import const
 from boltz.model.potentials.schedules import *
-from adp3d.utils.interpolation import trilinear_interpolation_torch, tricubic_interpolation_torch
+from adp3d.utils.interpolation import (
+    trilinear_interpolation_torch,
+    tricubic_interpolation_torch,
+)
 
 from .density import XMap_torch, DifferentiableTransformer
 
@@ -255,7 +258,8 @@ class AbsDihedralPotential(DihedralPotential):
         return phi, grad
 
 
-class PoseBustersPotential(FlatBottomPotential, DistancePotential):
+# class PoseBustersPotential(FlatBottomPotential, DistancePotential):
+class PoseBustersPotential(HarmonicPotential, DistancePotential):
     def compute_args(self, feats, parameters):
         pair_index = feats["rdkit_bounds_index"][0]
         lower_bounds = feats["rdkit_lower_bounds"][0].clone()
@@ -281,13 +285,30 @@ class PoseBustersPotential(FlatBottomPotential, DistancePotential):
         return pair_index, (k, lower_bounds, upper_bounds), None
 
 
-# class ConnectionsPotential(FlatBottomPotential, DistancePotential):
-class ConnectionsPotential(HarmonicPotential, DistancePotential): # FIXME: testing
+class ConnectionsPotential(FlatBottomPotential, DistancePotential):
     def compute_args(self, feats, parameters):
         pair_index = feats["connected_atom_index"][0]
         lower_bounds = None
         upper_bounds = torch.full(
             (pair_index.shape[1],), parameters["buffer"], device=pair_index.device
+        )
+        k = torch.ones_like(upper_bounds)
+
+        return pair_index, (k, lower_bounds, upper_bounds), None
+
+
+class BondPotential(HarmonicPotential, DistancePotential):
+    def compute_args(self, feats, parameters):
+        pair_index = feats["bond_index"][0]
+        lower_bounds = torch.full(
+            (pair_index.shape[1],),
+            parameters["bond_length"] - parameters["buffer"],
+            device=pair_index.device,
+        )
+        upper_bounds = torch.full(
+            (pair_index.shape[1],),
+            parameters["bond_length"] + parameters["buffer"],
+            device=pair_index.device,
         )
         k = torch.ones_like(upper_bounds)
 
@@ -558,7 +579,9 @@ class SubstructurePotential(HarmonicPotential):
             return r_ij_norm
 
         r_hat_ij = r_ij / r_ij_norm.unsqueeze(-1)
-        r_hat_ij = torch.where(torch.isnan(r_hat_ij), torch.zeros_like(r_hat_ij), r_hat_ij)
+        r_hat_ij = torch.where(
+            torch.isnan(r_hat_ij), torch.zeros_like(r_hat_ij), r_hat_ij
+        )
 
         return r_ij_norm, r_hat_ij
 
@@ -621,6 +644,7 @@ class DensityPotential(Potential):
     def compute_variable(
         self,
         coords: torch.Tensor,
+        density_params: Dict[str, torch.Tensor],
         index: torch.Tensor,
         compute_gradient: bool = False,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
@@ -630,6 +654,8 @@ class DensityPotential(Potential):
         ----------
         coords : torch.Tensor
             Atomic coordinates, shape [batch, n_atoms, 3]
+        density_params : Dict[str, torch.Tensor]
+            Dictionary of parameters for density calculation (occupancies, B factors, etc.)
         index : torch.Tensor
             Indices of the atoms to compute density value for, shape [batch, n_atoms] # TODO: extend this to allow multiple regions to change?
         compute_gradient : bool, optional
@@ -651,10 +677,12 @@ class DensityPotential(Potential):
 
         if not compute_gradient:
             with torch.no_grad():
-                rho_calc = self.parameters["density_calculator"](coords_translated)
+                rho_calc = self.density_calculator(coords_translated, *density_params)
                 return rho_calc
 
-        rho_calc = self.parameters["density_calculator"](coords_translated)
+        rho_calc = self.parameters["density_calculator"](
+            coords_translated, *density_params
+        )
 
         rho_calc.backward(torch.ones_like(rho_calc), retain_graph=True)
 
@@ -690,7 +718,24 @@ class DensityPotential(Potential):
         occupancies = parameters["occupancies"]
         b_factors = parameters["b_factors"]
 
-        return indices, (elements, b_factors, occupancies), None
+        density_params = {
+            "elements": elements,
+            "b_factors": b_factors,
+            "occupancies": occupancies,
+            # Now for the most complicated way to get this...
+            "active": torch.where(feats["atom_pad_mask"][0].bool())[0][indices[0]],
+        }
+
+        xmap = self.xmap.downsample_to_resolution(parameters["resolution"])
+
+        self.density_calculator = DifferentiableTransformer(
+            xmap=xmap,
+            scattering_params=parameters["scattering_params"],
+            em=parameters["em"],
+            device=self.device,
+        )
+
+        return indices, density_params, None
 
     def compute_function(
         self,
@@ -724,7 +769,9 @@ class DensityPotential(Potential):
             Energy values, and optionally derivatives
         """
         # target = -(value * self.xmap.array.to(torch.float32)).sum()
-        target = ((value - self.xmap.array.to(torch.float32)) ** 2).sum(dim=[-3, -2, -1])
+        target = ((value - self.xmap.array.to(torch.float32)) ** 2).sum(
+            dim=[-3, -2, -1]
+        )
 
         if not compute_derivative:
             return target
@@ -795,7 +842,9 @@ class DensityPotential(Potential):
         energy = self.compute_function(value, *args)
         return energy
 
-    def interpolate_density_at_positions(self, positions: torch.Tensor, mode: str = "tricubic") -> torch.Tensor:
+    def interpolate_density_at_positions(
+        self, positions: torch.Tensor, mode: str = "tricubic"
+    ) -> torch.Tensor:
         """Interpolate experimental density values at given atomic positions with symmetry.
 
         This method applies all symmetry operations to the atomic positions and interpolates
@@ -844,10 +893,12 @@ class DensityPotential(Potential):
         )  # [n_ops, batch, n_atoms, 3]
 
         # Use grid_sample to interpolate density values at all symmetric positions
-        interp_func = trilinear_interpolation_torch if mode == "trilinear" else tricubic_interpolation_torch
-        interpolated = interp_func(
-            self.xmap.array.float(), grid_coords_rot_trans
+        interp_func = (
+            trilinear_interpolation_torch
+            if mode == "trilinear"
+            else tricubic_interpolation_torch
         )
+        interpolated = interp_func(self.xmap.array.float(), grid_coords_rot_trans)
 
         # Reshape and sum over symmetry operations
         interpolated = interpolated.view(
@@ -923,7 +974,7 @@ def get_potentials():
         PoseBustersPotential(
             parameters={
                 "guidance_interval": 1,
-                "guidance_weight": 0.05,
+                "guidance_weight": 0.2,
                 "resampling_weight": 0.1,
                 "bond_buffer": 0.20,
                 "angle_buffer": 0.20,

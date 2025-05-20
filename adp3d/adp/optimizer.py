@@ -26,6 +26,7 @@ from boltz.model.model import Boltz1
 from boltz.data.feature.pad import pad_dim
 from boltz.model.potentials.schedules import (
     PiecewiseStepFunction,
+    PiecewiseStepComposer,
     ExponentialInterpolation,
 )
 
@@ -353,15 +354,20 @@ class DensityGuidedDiffusion:
             xmap=self.density_calculator.xmap,
             parameters={
                 "guidance_interval": 1,
-                # "guidance_weight": 0.0,
                 "guidance_weight": PiecewiseStepFunction(
-                    [0.25], [0.0001, 0.0]
+                    [0.25, 0.5, 0.75], [0.0001, 0.001, 0.01, 0.1]
                 ),
-                "resampling_weight": 0.0001,
+                "resolution": PiecewiseStepComposer(
+                    [0.25, 0.5, 0.75], [ExponentialInterpolation(resolution, 4., 0), 4., 8., 10.]
+                ),
+                "resampling_weight": PiecewiseStepFunction(
+                    [0.25, 0.5, 0.75], [0.0001, 0.001, 0.01, 0.1]
+                ),
                 "occupancies": occupancies,
                 "b_factors": b_factors,
                 "initial_centroid": self.initial_centroid,
-                "density_calculator": initialized_density_calculator,
+                "scattering_params": self.scattering_params,
+                "em": self.em,
             },
         )
 
