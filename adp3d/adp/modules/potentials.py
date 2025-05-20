@@ -677,11 +677,11 @@ class DensityPotential(Potential):
 
         if not compute_gradient:
             with torch.no_grad():
-                rho_calc = self.density_calculator(coords_translated, *density_params)
+                rho_calc = self.density_calculator(coords_translated, **density_params)
                 return rho_calc
 
-        rho_calc = self.parameters["density_calculator"](
-            coords_translated, *density_params
+        rho_calc = self.density_calculator(
+            coords_translated, **density_params
         )
 
         rho_calc.backward(torch.ones_like(rho_calc), retain_graph=True)
@@ -714,7 +714,7 @@ class DensityPotential(Potential):
         indices = torch.where(feats["atom_pad_mask"][0].bool())[0].unsqueeze(
             0
         )  # needs to be dim=2
-        elements = torch.where(feats["ref_element"])[0]
+        elements = parameters["elements"]
         occupancies = parameters["occupancies"]
         b_factors = parameters["b_factors"]
 
@@ -722,18 +722,29 @@ class DensityPotential(Potential):
             "elements": elements,
             "b_factors": b_factors,
             "occupancies": occupancies,
-            # Now for the most complicated way to get this...
-            "active": torch.where(feats["atom_pad_mask"][0].bool())[0][indices[0]],
         }
 
-        xmap = self.xmap.downsample_to_resolution(parameters["resolution"])
+        if parameters["resolution"] == self.xmap.resolution.high:
+            self.density_calculator = DifferentiableTransformer(
+                xmap=self.xmap,
+                scattering_params=parameters["scattering_params"],
+                em=parameters["em"],
+                device=self.device,
+            )
+        else:
+            try:
+                res_high = self.density_calculator.xmap.resolution.high
+            except: # noqa: E722
+                res_high = 0.
 
-        self.density_calculator = DifferentiableTransformer(
-            xmap=xmap,
-            scattering_params=parameters["scattering_params"],
-            em=parameters["em"],
-            device=self.device,
-        )
+            if parameters["resolution"] != res_high:
+                xmap = self.xmap.downsample_to_resolution(parameters["resolution"])
+                self.density_calculator = DifferentiableTransformer(
+                    xmap=xmap,
+                    scattering_params=parameters["scattering_params"],
+                    em=parameters["em"],
+                    device=self.device,
+                )
 
         return indices, density_params, None
 
@@ -768,10 +779,10 @@ class DensityPotential(Potential):
         Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]
             Energy values, and optionally derivatives
         """
-        # target = -(value * self.xmap.array.to(torch.float32)).sum()
-        target = ((value - self.xmap.array.to(torch.float32)) ** 2).sum(
-            dim=[-3, -2, -1]
-        )
+        target = -(value * self.density_calculator.array.to(torch.float32)).sum(dim=[-3, -2, -1])
+        # target = ((value - self.density_calculator.xmap.array.to(torch.float32)) ** 2).sum(
+        #     dim=[-3, -2, -1]
+        # )
 
         if not compute_derivative:
             return target
@@ -805,11 +816,11 @@ class DensityPotential(Potential):
         """
         coords = coords.clone().detach().requires_grad_()
         index, args, com_args = self.compute_args(feats, parameters)
-        value, _ = self.compute_variable(coords, index, compute_gradient=True)
+        value, _ = self.compute_variable(coords, args, index, compute_gradient=True)
 
         energy = self.compute_function(
             value,
-            *args,
+            **args,
             compute_derivative=False,
         )
 
@@ -838,7 +849,7 @@ class DensityPotential(Potential):
                 unpad_coords,
                 "mean",
             )
-        value = self.compute_variable(coords, index, compute_gradient=False)
+        value = self.compute_variable(coords, args, index, compute_gradient=False)
         energy = self.compute_function(value, *args)
         return energy
 

@@ -794,10 +794,8 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
             resample_weights: torch.Tensor = self.cached_diffusion_init[
                 "steering_vars"
             ]["resample_weights"]
-            ensemble_potentials: list = self.cached_diffusion_init["steering_vars"].get(
-                "ensemble_potentials", []
-            )
             num_ensembles = multiplicity // ensemble_size
+            score = None
 
         network_condition_kwargs = dict(
             s_trunk=s,
@@ -868,17 +866,17 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
             "init_coords"
         ][:, inverse_selector, :]
 
-        if self.model.steering_args["fk_steering"] and (ensemble_size > 1):
-            try:
-                atom_coords_denoised_ensemble = atom_coords_denoised.reshape(
-                    num_ensembles, ensemble_size, -1, 3
-                )
-            except RuntimeError as e:
-                print(
-                    f"Atom_coords_denoised does not have an appropriate batch dimension to split into ensembles: \
-                    {atom_coords_denoised.shape}, multiplicity: {multiplicity}, ensemble_size: {ensemble_size}"
-                )
-                raise e
+        # if self.model.steering_args["fk_steering"] and (ensemble_size > 1):
+        #     try:
+        #         atom_coords_denoised_ensemble = atom_coords_denoised.reshape(
+        #             num_ensembles, ensemble_size, -1, 3
+        #         )
+        #     except RuntimeError as e:
+        #         print(
+        #             f"Atom_coords_denoised does not have an appropriate batch dimension to split into ensembles: \
+        #             {atom_coords_denoised.shape}, multiplicity: {multiplicity}, ensemble_size: {ensemble_size}"
+        #         )
+        #         raise e
 
         if self.model.steering_args["fk_steering"] and (
             (
@@ -890,14 +888,16 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
         ):
             # Compute energy of x_0 prediction
             energy = torch.zeros(multiplicity, device=self.device)
+            score = torch.zeros(multiplicity, device=self.device)
             for potential in potentials:
                 parameters = potential.compute_parameters(steering_t)
                 if parameters["resampling_weight"] > 0:
                     component_energy = potential.compute(
-                        atom_coords_denoised_ensemble,
+                        atom_coords_denoised,
                         network_condition_kwargs["feats"],
                         parameters,
                     )
+                    score += component_energy
                     energy += parameters["resampling_weight"] * component_energy
             energy_traj = torch.cat((energy_traj, energy.unsqueeze(1)), dim=1)
 
@@ -926,7 +926,7 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
         # Compute guidance update to x_0 prediction
         if (
             self.model.steering_args["guidance_update"]
-            and self.current_step < num_sampling_steps - 1
+            # and self.current_step < num_sampling_steps - 1
         ):
             guidance_update = torch.zeros_like(atom_coords_denoised)
             for guidance_step in range(self.model.steering_args["num_gd_steps"]):
@@ -1023,19 +1023,19 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
             * denoised_over_sigma
         )
 
-        if self.current_step == num_sampling_steps - 1:
-            # Take top K ensemble members
-            resample_indices = torch.topk(
-                energy_traj[:, -1], ensemble_size, largest=False
-            ).indices.flatten()
-            atom_coords = atom_coords[resample_indices]
-            atom_coords_noisy = atom_coords_noisy[resample_indices]
-            atom_mask = atom_mask[resample_indices]
-            if atom_coords_denoised is not None:
-                atom_coords_denoised = atom_coords_denoised[resample_indices]
-            energy_traj = energy_traj[resample_indices]
-            if self.model.steering_args["guidance_update"]:
-                scaled_guidance_update = scaled_guidance_update[resample_indices]
+        # if self.current_step == num_sampling_steps - 1:
+        #     # Take top K ensemble members
+        #     resample_indices = torch.topk(
+        #         energy_traj[:, -1], ensemble_size, largest=False
+        #     ).indices.flatten()
+        #     atom_coords = atom_coords[resample_indices]
+        #     atom_coords_noisy = atom_coords_noisy[resample_indices]
+        #     atom_mask = atom_mask[resample_indices]
+        #     if atom_coords_denoised is not None:
+        #         atom_coords_denoised = atom_coords_denoised[resample_indices]
+        #     energy_traj = energy_traj[resample_indices]
+        #     if self.model.steering_args["guidance_update"]:
+        #         scaled_guidance_update = scaled_guidance_update[resample_indices]
 
         unpad_coords_next = atom_coords_next[
             :, pad_mask, :
@@ -1052,14 +1052,25 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
 
         self.current_step += 1  # NOTE: current step to execute
 
+        if score is None:
+            score = torch.zeros_like(energy_traj[:, -1])
+            for potential in potentials:
+                parameters = potential.compute_parameters(steering_t)
+                component_energy = potential.compute(
+                    atom_coords_denoised,
+                    network_condition_kwargs["feats"],
+                    parameters,
+                )
+                score += component_energy
+
         if return_denoised:
             return (
                 atom_coords_next.detach(),
                 atom_coords_denoised.detach(),
-                energy_traj[:, -1].mean().item(),
+                score.mean().item(),
             )
         else:
             return (
                 atom_coords_next.detach(),
-                energy_traj[:, -1].mean().item(),
+                score.mean().item(),
             )  # return minimum energy of ensemble

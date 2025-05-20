@@ -323,12 +323,14 @@ class DensityGuidedDiffusion:
         )
         active = repeat(active, "a -> n a", n=num_samples)
 
-        if resolution == 0.0 or resolution is None:
+        if resolution is None:
             if self.density_calculator.xmap.resolution is not None:
                 resolution = self.density_calculator.xmap.resolution.high
-            warnings.warn(
-                f"Resolution of input structure is {resolution}. Using 2.0 A instead."
-            )
+            else:
+                warnings.warn(
+                    f"Resolution of input structure is {resolution}. Using 2.0 A instead."
+                )
+                resolution = 2.0
 
         coords = coords.to(self.device).float()
         elements = elements.to(self.device).long()
@@ -363,8 +365,9 @@ class DensityGuidedDiffusion:
                 "resampling_weight": PiecewiseStepFunction(
                     [0.25, 0.5, 0.75], [0.0001, 0.001, 0.01, 0.1]
                 ),
-                "occupancies": occupancies,
+                "elements": elements,
                 "b_factors": b_factors,
+                "occupancies": occupancies,
                 "initial_centroid": self.initial_centroid,
                 "scattering_params": self.scattering_params,
                 "em": self.em,

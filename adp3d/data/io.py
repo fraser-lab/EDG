@@ -175,7 +175,7 @@ def structure_to_density_input(
             b_factors,
             occupancies,
             mask_not_present,
-            structure.info.resolution if structure.info.resolution > 0 else 2.0,
+            structure.info.resolution if structure.info.resolution > 0 else None,
         )
     elif isinstance(structure, Structure):
         mask_not_present = torch.from_numpy(structure.active).bool()
@@ -195,7 +195,7 @@ def structure_to_density_input(
             b_factors,
             occupancies,
             mask_not_present,
-            structure.resolution if structure.resolution is not None else 2.0,
+            structure.resolution,
         )
     else:
         raise ValueError("structure must be a Boltz-1 or qFit Structure object.")
