@@ -164,7 +164,10 @@ class XMap_torch:
                 )
                 self.resolution.low = 1000.0
 
-            if self.array == torch.zeros(self.array.shape) and self.hkl is None:
+            if (
+                torch.all(self.array == torch.zeros(self.array.shape, device=self.array.device))
+                and self.hkl is None
+            ):
                 warnings.warn(
                     f"hkl ({self.hkl}) is not provided and array is zeros. \
                     If this is intended to contain structure factors for computing a map, please provide hkl."
@@ -338,6 +341,7 @@ class XMap_torch:
             )
 
         if scale_factor > 1 and apply_filter:
+            orig_shape = self.array.shape
             f_density = to_f_density(self.array)
 
             shape = torch.tensor(f_density.shape, device=device)
@@ -360,7 +364,10 @@ class XMap_torch:
                 resolution_filter = (radial_freq < cutoff_freq).float()
 
             f_density = f_density * resolution_filter
-            array_for_sampling = to_density(f_density)
+            # crop in case padding occurred in to_f_density
+            array_for_sampling = to_density(f_density)[
+                ..., : orig_shape[0], : orig_shape[1], : orig_shape[2]
+            ]
         else:
             array_for_sampling = self.array
 
@@ -1177,11 +1184,13 @@ def scale_map(
 
 
 def to_f_density(real_map: torch.Tensor) -> torch.Tensor:
-    """FFT a density map."""
+    """FFT a density map.
+
+    Pads the map to odd shape before FFT to avoid half-sample ambiguity"""
     # f_density
     # pad map to odd shape
     map_shape = real_map.shape[-3:]
-    pad_amount = [dim % 2 for dim in map_shape]
+    pad_amount = [int(dim % 2 == 0) for dim in map_shape]
     if pad_amount != [0, 0, 0]:
         real_map = F.pad(
             real_map, (0, pad_amount[2], 0, pad_amount[1], 0, pad_amount[0])
@@ -1193,20 +1202,13 @@ def to_f_density(real_map: torch.Tensor) -> torch.Tensor:
         ),
         dim=(-3, -2, -1),
     )
-    f_map = f_map[..., : map_shape[0], : map_shape[1], : map_shape[2]]
     return f_map
 
 
 def to_density(f_map: torch.Tensor) -> torch.Tensor:
     """Inverse FFT a density map."""
     # density
-    # pad map to odd shape
-    map_shape = f_map.shape[-3:]
-    pad_amount = [dim % 2 for dim in map_shape]
-    if pad_amount != [0, 0, 0]:
-        f_map = F.pad(f_map, (0, pad_amount[2], 0, pad_amount[1], 0, pad_amount[0]))
-
-    density = torch.real(
+    return torch.real(
         torch.fft.fftshift(
             torch.fft.ifftn(
                 torch.fft.ifftshift(f_map, dim=(-3, -2, -1)),
@@ -1215,10 +1217,6 @@ def to_density(f_map: torch.Tensor) -> torch.Tensor:
             dim=(-3, -2, -1),
         )
     )
-
-    # remove padding
-    density = density[..., : map_shape[0], : map_shape[1], : map_shape[2]]
-    return density
 
 
 def radial_hamming_3d(f_mag, cutoff_radius):
