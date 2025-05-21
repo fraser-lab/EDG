@@ -37,25 +37,49 @@ __global__ void dilate_atom_centric_forward_kernel(
     const int total_atoms = batch_size * N_symmetry_ops * N_atoms;
 
     if (idx >= total_atoms)
+    {
         return;
+    }
+
+    // Debug print for the first few threads in first block
+    // if (blockIdx.x == 0 && threadIdx.x < 4)
+    // {
+    //     printf("Thread %d running: batch_size=%d, N_symmetry_ops=%d, N_atoms=%d\n",
+    //            threadIdx.x, batch_size, N_symmetry_ops, N_atoms);
+    // }
 
     int b_idx = idx / (N_symmetry_ops * N_atoms);
     int sym_op_idx = (idx / N_atoms) % N_symmetry_ops;
     int atom_i = idx % N_atoms;
 
-    assert(b_idx >= 0 && b_idx < batch_size);
-    assert(sym_op_idx >= 0 && sym_op_idx < N_symmetry_ops);
-    assert(atom_i >= 0 && atom_i < N_atoms);
-
     int point_offset = b_idx * (N_symmetry_ops * N_atoms * 3) +
                        sym_op_idx * (N_atoms * 3) +
                        atom_i * 3;
+
+    // if (point_offset < 0 || point_offset + 2 >= total_atoms * 3)
+    // {
+    //     printf("ERROR: Thread %d,%d has invalid point_offset=%d (total=%d)\n",
+    //            blockIdx.x, threadIdx.x, point_offset, total_atoms * 3);
+    //     return;
+    // }
 
     float center_a = points[point_offset];
     float center_b = points[point_offset + 1];
     float center_c = points[point_offset + 2];
 
+    // if (blockIdx.x == 0 && threadIdx.x < 4)
+    // {
+    //     printf("Thread %d: center_a=%f, center_b=%f, center_c=%f\n",
+    //            threadIdx.x, center_a, center_b, center_c);
+    // }
+
     float q = occupancies[b_idx * N_atoms + atom_i];
+
+    // if (blockIdx.x == 0 && threadIdx.x < 4)
+    // {
+    //     printf("Thread %d: occupancy_offset=%d, max valid offset=%d\n",
+    //            threadIdx.x, b_idx * N_atoms + atom_i, batch_size * N_atoms - 1);
+    // }
 
     const float *curr_radial_densities = &radial_densities[b_idx * N_atoms * N_radial_points + atom_i * N_radial_points];
 
@@ -63,7 +87,10 @@ __global__ void dilate_atom_centric_forward_kernel(
     int Dy = grid_dims[1];
     int Dz = grid_dims[0];
 
-    assert(Dx > 0 && Dy > 0 && Dz > 0);
+    // if (blockIdx.x == 0 && threadIdx.x < 4)
+    // {
+    //     printf("Thread %d: Dx=%d, Dy=%d, Dz=%d\n", threadIdx.x, Dx, Dy, Dz);
+    // }
 
     int amin = (int)floorf(center_a - lmax[0]);
     int bmin = (int)floorf(center_b - lmax[1]);
@@ -73,9 +100,21 @@ __global__ void dilate_atom_centric_forward_kernel(
     int bmax = (int)floorf(center_b + lmax[1]);
     int cmax = (int)floorf(center_c + lmax[2]);
 
+    // if (blockIdx.x == 0 && threadIdx.x < 4)
+    // {
+    //     printf("Thread %d: amin/amax=%d/%d, bmin/bmax=%d/%d, cmin/cmax=%d/%d\n",
+    //            threadIdx.x, amin, amax, bmin, bmax, cmin, cmax);
+    // }
+
     int out_slice = Dy * Dx;
     float rmax2 = rmax * rmax;
     int max_out_idx = Dz * Dy * Dx - 1;
+
+    // if (blockIdx.x == 0 && threadIdx.x < 4)
+    // {
+    //     printf("Thread %d: out_slice=%d, rmax2=%f, max_out_idx=%d\n",
+    //            threadIdx.x, out_slice, rmax2, max_out_idx);
+    // }
 
     for (int c = cmin; c <= cmax; ++c)
     {
@@ -88,6 +127,14 @@ __global__ void dilate_atom_centric_forward_kernel(
         float dy_c = grid_to_cartesian[5] * dc;
         float dx_c = grid_to_cartesian[2] * dc;
 
+        // if (blockIdx.x == 0 && threadIdx.x < 4 && c == cmin)
+        // {
+        //     printf("Thread %d: z-loop first iter: c=%d, c_wrapped=%d, ind_c=%d, dc=%f\n",
+        //            threadIdx.x, c, c_wrapped, ind_c, dc);
+        //     printf("Thread %d: grid_to_cartesian[8,5,2]=%f,%f,%f\n",
+        //            threadIdx.x, grid_to_cartesian[8], grid_to_cartesian[5], grid_to_cartesian[2]);
+        // }
+
         for (int b = bmin; b <= bmax; ++b)
         {
             int b_wrapped = modulo(b, Dy);
@@ -97,6 +144,14 @@ __global__ void dilate_atom_centric_forward_kernel(
             float dy = dy_c + grid_to_cartesian[4] * db;
             float d2_zy = dz2 + dy * dy;
             float dx_cb = dx_c + grid_to_cartesian[1] * db;
+
+            // if (blockIdx.x == 0 && threadIdx.x < 4 && c == cmin && b == bmin)
+            // {
+            //     printf("Thread %d: y-loop first iter: b=%d, b_wrapped=%d, ind_cb=%d, db=%f\n",
+            //            threadIdx.x, b, b_wrapped, ind_cb, db);
+            //     printf("Thread %d: grid_to_cartesian[4,1]=%f,%f\n",
+            //            threadIdx.x, grid_to_cartesian[4], grid_to_cartesian[1]);
+            // }
 
             for (int a = amin; a <= amax; ++a)
             {

@@ -51,15 +51,26 @@ class DilateAtomCentricCUDA(torch.autograd.Function):
         torch.Tensor
             Output density grid, shape [batch_size, Dz, Dy, Dx]
         """
+
+        # Clone inputs and store the original tensors in context
+        ctx.save_for_backward(
+            atom_coords_grid, atom_occupancies, radial_profiles, 
+            radial_profiles_derivatives, lmax_grid_units, grid_dims, 
+            grid_to_cartesian_matrix
+        )
+        ctx.r_step = r_step
+        ctx.rmax_cartesian = rmax_cartesian
+
         atom_coords_grid = atom_coords_grid.contiguous()
         atom_occupancies = atom_occupancies.contiguous()
         radial_profiles = radial_profiles.contiguous()
-        radial_profiles_derivatives = radial_profiles_derivatives.contiguous()
-        lmax_grid_units = lmax_grid_units.contiguous()
-        grid_dims = grid_dims.contiguous()
+        lmax_grid_units = lmax_grid_units.to(torch.int32).contiguous()
+        grid_dims = grid_dims.to(torch.int32).contiguous()
         grid_to_cartesian_matrix = grid_to_cartesian_matrix.contiguous()
 
         if CUDA_AVAILABLE:
+            torch.cuda.synchronize()
+
             output_density_grid = dilate_points_cuda.forward(
                 atom_coords_grid,
                 atom_occupancies,
@@ -70,21 +81,10 @@ class DilateAtomCentricCUDA(torch.autograd.Function):
                 grid_dims,
                 grid_to_cartesian_matrix,
             )
+
+            torch.cuda.synchronize()
         else:
             raise RuntimeError("CUDA is not available.")
-
-        ctx.save_for_backward(
-            atom_coords_grid,
-            atom_occupancies,
-            radial_profiles,
-            radial_profiles_derivatives,
-            lmax_grid_units,
-            grid_dims,
-            grid_to_cartesian_matrix,
-        )
-
-        ctx.r_step = r_step
-        ctx.rmax_cartesian = rmax_cartesian
 
         return output_density_grid
 
@@ -161,62 +161,45 @@ def dilate_atom_centric(
     grid_dims: Union[torch.Tensor, tuple],
     grid_to_cartesian_matrix: torch.Tensor,
 ) -> torch.Tensor:
-    """High-level interface to atom-centric density dilation.
-
-    This function handles data type and device consistency, and calls the
-    appropriate implementation based on availability.
-
-    Parameters
-    ----------
-    atom_coords_grid : torch.Tensor
-        Atomic coordinates in grid units, shape [batch_size, symmetry_ops, N_atoms, 3]
-    atom_occupancies : torch.Tensor
-        Atomic occupancies, shape [batch_size, N_atoms]
-    radial_profiles : torch.Tensor
-        Pre-calculated radial density values P(r), shape [batch_size, N_atoms, N_radial_points]
-    radial_profiles_derivatives : torch.Tensor
-        Pre-calculated derivatives of radial density P'(r), shape [batch_size, N_atoms, N_radial_points]
-    r_step : float
-        Step size for radial_profiles sampling
-    rmax_cartesian : float
-        Maximum radius for an atom's influence in Cartesian space
-    lmax_grid_units : torch.Tensor
-        Maximum extent in grid units along each axis, shape [3]
-    grid_dims : torch.Tensor or tuple
-        Dimensions of output grid [Dz, Dy, Dx], shape [3]
-    grid_to_cartesian_matrix : torch.Tensor
-        Transformation matrix from grid to Cartesian coordinates, shape [3, 3]
-
-    Returns
-    -------
-    torch.Tensor
-        Output density grid, shape [batch_size, Dz, Dy, Dx]
-    """
-
     device = atom_coords_grid.device
     dtype = atom_coords_grid.dtype
 
-    lmax_grid_units = lmax_grid_units.to(torch.int32)
-    grid_dims = (
-        grid_dims.to(torch.int32)
-        if isinstance(grid_dims, torch.Tensor)
-        else torch.tensor(grid_dims, dtype=torch.int32, device=device)
-    )
+    # Create completely new tensors to avoid any view/storage issues
+    # This is more aggressive than just .contiguous() which may maintain underlying storage
+    atom_coords_grid = atom_coords_grid.clone().to(device=device, dtype=dtype).contiguous()
+    atom_occupancies = atom_occupancies.clone().to(device=device, dtype=dtype).contiguous()
+    radial_profiles = radial_profiles.clone().to(device=device, dtype=dtype).contiguous()
+    radial_profiles_derivatives = radial_profiles_derivatives.clone().to(device=device, dtype=dtype).contiguous()
+    
+    # Force allocate new memory for integer tensors
+    if isinstance(lmax_grid_units, torch.Tensor):
+        lmax_grid_units = torch.ceil(lmax_grid_units).clone().to(dtype=torch.int32, device=device).contiguous()
+    else:
+        lmax_grid_units = torch.tensor(lmax_grid_units, dtype=torch.int32, device=device)
+        
+    if isinstance(grid_dims, torch.Tensor):
+        grid_dims = grid_dims.clone().to(dtype=torch.int32, device=device).contiguous()
+    else:
+        grid_dims = torch.tensor(grid_dims, dtype=torch.int32, device=device)
+        
+    grid_to_cartesian_matrix = grid_to_cartesian_matrix.clone().to(device=device, dtype=dtype).contiguous()
+    
+    # Debug validation
+    print(f"Final check - coords: is_contiguous={atom_coords_grid.is_contiguous()}, " 
+          f"is_cuda={atom_coords_grid.is_cuda}, storage_offset={atom_coords_grid.storage_offset()}, "
+          f"stride={atom_coords_grid.stride()}")
 
-    atom_coords_grid = atom_coords_grid.to(dtype)
-    atom_occupancies = atom_occupancies.to(dtype)
-    radial_profiles = radial_profiles.to(dtype)
-    radial_profiles_derivatives = radial_profiles_derivatives.to(dtype)
-    grid_to_cartesian_matrix = grid_to_cartesian_matrix.to(dtype)
-
+    # Force synchronize before kernel call to ensure memory is fully moved to device
+    torch.cuda.synchronize(device)
+    
     return DilateAtomCentricCUDA.apply(
-        atom_coords_grid,
-        atom_occupancies,
-        radial_profiles,
-        radial_profiles_derivatives,
+        atom_coords_grid,  # [B, sym_ops, N, 3]
+        atom_occupancies,  # [B, N]
+        radial_profiles,   # [B, N, R]
+        radial_profiles_derivatives,  # [B, N, R]
         r_step,
         rmax_cartesian,
-        lmax_grid_units,
-        grid_dims,
-        grid_to_cartesian_matrix,
+        lmax_grid_units,   # [3]
+        grid_dims,         # [3]
+        grid_to_cartesian_matrix,  # [3, 3]
     )
