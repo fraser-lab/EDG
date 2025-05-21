@@ -108,7 +108,7 @@ class XMap_torch:
             self.unit_cell = unit_cell
             self.resolution = resolution
             self.hkl = hkl
-            self.origin = origin
+            self.origin = origin if origin is not None else torch.zeros(3, device=device)
             self.array = array
             self.shape = self.array.shape
 
@@ -165,7 +165,10 @@ class XMap_torch:
                 self.resolution.low = 1000.0
 
             if (
-                torch.all(self.array == torch.zeros(self.array.shape, device=self.array.device))
+                torch.all(
+                    self.array
+                    == torch.zeros(self.array.shape, device=self.array.device)
+                )
                 and self.hkl is None
             ):
                 warnings.warn(
@@ -799,14 +802,55 @@ class DifferentiableTransformer(torch.nn.Module):
         """
         densities = self._compute_radial_densities(elements, b_factors)
 
-        # Calculate gradients using finite differences for better efficiency
-        # This computes gradients for all atoms in all batches at once
-        padding = 1  # For central difference approximation
-        padded = F.pad(densities, (padding, padding), mode="replicate")
+        r = torch.arange(
+            0,
+            self.density_params.rmax + self.density_params.rstep,
+            self.density_params.rstep,
+            device=self.device,
+        )
 
-        # Central difference formula: (f(x+h) - f(x-h))/(2h)
-        derivatives = (padded[:, :, 2:] - padded[:, :, :-2]) / (
-            2 * self.density_params.rstep
+        batch_size, n_atoms = elements.shape
+        elements_flat = elements.reshape(-1)
+        b_factors_flat = b_factors.reshape(-1)
+
+        combined = torch.stack([elements_flat, b_factors_flat], dim=1)
+        unique_combinations, inverse_indices = torch.unique(
+            combined, dim=0, return_inverse=True
+        )
+
+        unique_elements = unique_combinations[:, 0].int()
+        element_asf = self.scattering_params[unique_elements]
+        unique_bfactors = unique_combinations[:, 1]
+
+        def integrate_single_element_derivative(
+            asf: torch.Tensor, bfac: torch.Tensor
+        ) -> torch.Tensor:
+            """Compute density derivative for a single element and b-factor."""
+
+            def integrand_fn(s):
+                return scattering_integrand_derivative(
+                    s,
+                    r,
+                    asf,
+                    bfac,
+                    em=self.em,
+                )
+
+            result = self.integrator(
+                integrand_fn,
+                integration_limits=torch.tensor(
+                    [[self.density_params.smin, self.density_params.smax]],
+                    device=self.device,
+                ),
+                dim=1,
+            )
+            return result
+
+        integrate_elements = torch.vmap(integrate_single_element_derivative)
+        all_unique_derivatives = integrate_elements(element_asf, unique_bfactors)
+
+        derivatives = all_unique_derivatives[inverse_indices].reshape(
+            batch_size, n_atoms, r.shape[0]
         )
 
         return densities, derivatives
@@ -1091,6 +1135,66 @@ def scattering_integrand(
 
     result = torch.where(r_small_mask, small_r_values, large_r_values)
 
+    return result
+
+
+def scattering_integrand_derivative(
+    s: torch.Tensor,
+    r: torch.Tensor,
+    asf: torch.Tensor,
+    bfactor: torch.Tensor,
+    em: bool = False,
+) -> torch.Tensor:
+    """Compute the derivative of scattering integrand with respect to radius.
+
+    Parameters are the same as scattering_integrand, but this calculates
+    the analytical derivative with respect to r.
+    """
+    s_expanded = s.reshape(*s.shape, 1)
+    r_expanded = r.reshape(1, -1)
+    s2 = s_expanded * s_expanded
+    bfactor_expanded = bfactor.reshape(*bfactor.shape, 1, 1)
+
+    if em:
+        a_coeffs = asf[..., :5, 0]
+        b_coeffs = asf[..., :5, 1]
+        a_coeffs = a_coeffs.reshape(*a_coeffs.shape, 1, 1)
+        b_coeffs = b_coeffs.reshape(*b_coeffs.shape, 1, 1)
+        exp_terms = torch.exp(-b_coeffs * s2.unsqueeze(-3))
+        f = torch.sum(a_coeffs * exp_terms, dim=-3)
+    else:
+        a_coeffs = asf[..., :5, 0]
+        b_coeffs = asf[..., :5, 1]
+        constant_term = asf[..., 5, 0].reshape(*asf.shape[:-2], 1, 1)
+        a_coeffs = a_coeffs.reshape(*a_coeffs.shape, 1, 1)
+        b_coeffs = b_coeffs.reshape(*b_coeffs.shape, 1, 1)
+        exp_terms = torch.exp(-b_coeffs * s2.unsqueeze(-3))
+        f = torch.sum(a_coeffs * exp_terms, dim=-3) + constant_term
+
+    four_pi_s = 4 * torch.pi * s_expanded
+    w = 8 * f * torch.exp(-bfactor_expanded * s2) * s_expanded
+
+    eps = 1e-4
+    r_small_mask = (r_expanded < eps).expand(
+        s_expanded.shape[:-1] + r_expanded.shape[-1:]
+    )
+
+    ar = four_pi_s * r_expanded
+    ar2 = ar * ar
+
+    # For derivatives, calculate cos and sin terms
+    cos_term = torch.cos(ar)
+    sin_term = torch.sin(ar)
+
+    # For r > eps: w/r * (a*cos(ar) - sin(ar)/r)
+    safe_r = torch.where(r_expanded > 0, r_expanded, torch.ones_like(r_expanded))
+    large_r_values = w * (four_pi_s * cos_term - sin_term / safe_r) / safe_r
+
+    # prevent singularity with Taylor expansion
+    a3 = four_pi_s * four_pi_s * four_pi_s
+    small_r_values = w * a3 * r_expanded * (ar2 - 8) / 24.0
+
+    result = torch.where(r_small_mask, small_r_values, large_r_values)
     return result
 
 

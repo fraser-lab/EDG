@@ -164,30 +164,27 @@ def dilate_atom_centric(
     device = atom_coords_grid.device
     dtype = atom_coords_grid.dtype
 
-    # Create completely new tensors to avoid any view/storage issues
-    # This is more aggressive than just .contiguous() which may maintain underlying storage
     atom_coords_grid = atom_coords_grid.clone().to(device=device, dtype=dtype).contiguous()
     atom_occupancies = atom_occupancies.clone().to(device=device, dtype=dtype).contiguous()
     radial_profiles = radial_profiles.clone().to(device=device, dtype=dtype).contiguous()
     radial_profiles_derivatives = radial_profiles_derivatives.clone().to(device=device, dtype=dtype).contiguous()
     
-    # Force allocate new memory for integer tensors
     if isinstance(lmax_grid_units, torch.Tensor):
         lmax_grid_units = torch.ceil(lmax_grid_units).clone().to(dtype=torch.int32, device=device).contiguous()
     else:
-        lmax_grid_units = torch.tensor(lmax_grid_units, dtype=torch.int32, device=device)
+        lmax_grid_units = torch.ceil(torch.tensor(lmax_grid_units, dtype=torch.int32, device=device)).contiguous()
         
     if isinstance(grid_dims, torch.Tensor):
         grid_dims = grid_dims.clone().to(dtype=torch.int32, device=device).contiguous()
     else:
-        grid_dims = torch.tensor(grid_dims, dtype=torch.int32, device=device)
+        grid_dims = torch.tensor(grid_dims, dtype=torch.int32, device=device).contiguous()
         
     grid_to_cartesian_matrix = grid_to_cartesian_matrix.clone().to(device=device, dtype=dtype).contiguous()
     
     # Debug validation
-    print(f"Final check - coords: is_contiguous={atom_coords_grid.is_contiguous()}, " 
-          f"is_cuda={atom_coords_grid.is_cuda}, storage_offset={atom_coords_grid.storage_offset()}, "
-          f"stride={atom_coords_grid.stride()}")
+    # print(f"Final check - coords: is_contiguous={atom_coords_grid.is_contiguous()}, " 
+    #       f"is_cuda={atom_coords_grid.is_cuda}, storage_offset={atom_coords_grid.storage_offset()}, "
+    #       f"stride={atom_coords_grid.stride()}")
 
     # Force synchronize before kernel call to ensure memory is fully moved to device
     torch.cuda.synchronize(device)
