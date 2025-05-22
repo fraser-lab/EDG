@@ -108,7 +108,9 @@ class XMap_torch:
             self.unit_cell = unit_cell
             self.resolution = resolution
             self.hkl = hkl
-            self.origin = origin if origin is not None else torch.zeros(3, device=device)
+            self.origin = (
+                origin if origin is not None else torch.zeros(3, device=device)
+            )
             self.array = array
             self.shape = self.array.shape
 
@@ -327,9 +329,9 @@ class XMap_torch:
         unit_cell = self.unit_cell
         device = self.array.device
 
-        new_grid_a = int(unit_cell.a / target_resolution * 4.0)
-        new_grid_b = int(unit_cell.b / target_resolution * 4.0)
-        new_grid_c = int(unit_cell.c / target_resolution * 4.0)
+        new_grid_a = int(np.ceil(unit_cell.a / target_resolution * 4.0))
+        new_grid_b = int(np.ceil(unit_cell.b / target_resolution * 4.0))
+        new_grid_c = int(np.ceil(unit_cell.c / target_resolution * 4.0))
         new_shape = torch.tensor([new_grid_a, new_grid_b, new_grid_c], device=device)
 
         scale_factor = target_resolution / current_resolution
@@ -374,15 +376,21 @@ class XMap_torch:
         else:
             array_for_sampling = self.array
 
-        original_shape = torch.tensor(self.shape, device=device)
+        original_shape = torch.tensor(self.shape, device=device, dtype=torch.float32)
 
-        z_norm = torch.linspace(0, 1, new_shape[0], device=device)
-        y_norm = torch.linspace(0, 1, new_shape[1], device=device)
-        x_norm = torch.linspace(0, 1, new_shape[2], device=device)
+        z_norm = (
+            torch.arange(new_shape[0], device=device, dtype=torch.float32)
+        ) / new_shape[0].float()
+        y_norm = (
+            torch.arange(new_shape[1], device=device, dtype=torch.float32)
+        ) / new_shape[1].float()
+        x_norm = (
+            torch.arange(new_shape[2], device=device, dtype=torch.float32)
+        ) / new_shape[2].float()
 
-        z_orig = z_norm * (original_shape[0] - 1)
-        y_orig = y_norm * (original_shape[1] - 1)
-        x_orig = x_norm * (original_shape[2] - 1)
+        z_orig = z_norm * original_shape[0]
+        y_orig = y_norm * original_shape[1]
+        x_orig = x_norm * original_shape[2]
 
         grid_z, grid_y, grid_x = torch.meshgrid(z_orig, y_orig, x_orig, indexing="ij")
         points_zyx = torch.stack([grid_z, grid_y, grid_x], dim=-1)
@@ -423,7 +431,7 @@ class DifferentiableTransformer(torch.nn.Module):
         em: bool = False,
         space_group: Optional[int] = None,
         device: torch.device = torch.device("cpu"),
-        use_cuda_kernels: bool = False,
+        use_cuda_kernels: bool = True,
     ) -> None:
         """Initialize differentiable transformer.
 

@@ -130,7 +130,7 @@ class SyntheticDensityGenerator:
             scattering_params=self.scattering_params,
             em=self.em_mode,
             device=self.device,
-            # use_cuda_kernels=True,
+            use_cuda_kernels=True,
         )
     
     def _setup_from_parameters(self, resolution: float, unit_cell: NamedTuple = None) -> None:
@@ -142,29 +142,43 @@ class SyntheticDensityGenerator:
             Map resolution in Angstroms.
         """
         self.resolution = resolution
+        voxelspacing = resolution / 4.0
         
         # Get the unit cell from the first structure if using an ensemble
         structure_ref = self.structure[0] if self.is_ensemble else self.structure
         unit_cell = structure_ref.unit_cell if unit_cell is None else unit_cell
         
         # Create an appropriately-sized grid based on resolution
-        grid_a = int(unit_cell.a / resolution * 4.0)
-        grid_b = int(unit_cell.b / resolution * 4.0)
-        grid_c = int(unit_cell.c / resolution * 4.0)
+        grid_a = int(np.ceil(unit_cell.a / resolution * 4.0))
+        grid_b = int(np.ceil(unit_cell.b / resolution * 4.0))
+        grid_c = int(np.ceil(unit_cell.c / resolution * 4.0))
+
+        actual_extent_a = grid_a * voxelspacing
+        actual_extent_b = grid_b * voxelspacing
+        actual_extent_c = grid_c * voxelspacing
+
+        # Cartesian coordinate of grid index (0,0,0)
+        # This centers the defined unit_cell within the actual grid extent
+        map_origin_cartesian = np.array([
+            (unit_cell.a - actual_extent_a) / 2.0,
+            (unit_cell.b - actual_extent_b) / 2.0,
+            (unit_cell.c - actual_extent_c) / 2.0,
+        ])
         
         empty_array = np.zeros((grid_a, grid_b, grid_c), dtype=np.float32)
         # original atom coordinates are at 0, 0, 0 for AF3 predictions, need to offset by half the unit cell
-        offset = (
-            unit_cell.a / resolution * 2.0,
-            unit_cell.b / resolution * 2.0,
-            unit_cell.c / resolution * 2.0,
+        self.center = (
+            unit_cell.a / 2.0,
+            unit_cell.b / 2.0,
+            unit_cell.c / 2.0,
         )
 
         ref_map = XMap(
             empty_array,
-            grid_parameters=GridParameters(voxelspacing=resolution / 4, offset=offset),
+            grid_parameters=GridParameters(voxelspacing=voxelspacing), # , offset=offset
             resolution=Resolution(high=resolution, low=1000.0),
             unit_cell=unit_cell,
+            origin=map_origin_cartesian,
         )
         
         self.xmap = XMap_torch(ref_map, device=self.device)
@@ -246,6 +260,9 @@ class SyntheticDensityGenerator:
             Generated density map.
         """
         coords, elements, b_factors, occupancies, active, _ = structure_to_density_input(structure)
+
+        # move coords to center of unit cell (0, 0, 0) is 0 A, 0 A, 0 A
+        coords = coords - torch.tensor(self.center, dtype=coords.dtype, device=coords.device)
     
         coords = coords.to(self.device).float().unsqueeze(0)  # Add batch dim
         elements = elements.to(self.device).long().unsqueeze(0)  # Add batch dim
