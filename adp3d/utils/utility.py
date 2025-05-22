@@ -29,6 +29,7 @@ def try_gpu():
     from io import StringIO
     import pandas as pd
     import torch
+    import os
     try:
         gpu_stats = subprocess.check_output(["nvidia-smi", "--format=csv", "--query-gpu=memory.used,memory.free"])
         gpu_stats_str = gpu_stats.decode('utf-8')
@@ -41,6 +42,14 @@ def try_gpu():
             print("No GPUs found.")
             return torch.device('cpu')
         idx = gpu_df['memory.free'].idxmax()
+        
+        available_gpus = os.environ.get('CUDA_VISIBLE_DEVICES', None)
+        if available_gpus is not None:
+            available_gpus = [int(gpu) for gpu in available_gpus.split(',')]
+            if idx not in available_gpus:
+                print(f"Selected GPU {idx} is not in CUDA_VISIBLE_DEVICES: {available_gpus}. Selecting first available GPU.")
+                return torch.device(available_gpus[0])
+            
         print('Returning GPU{} with {} free MiB'.format(idx, gpu_df.iloc[idx]['memory.free']))
         
         return torch.device('cuda:{}'.format(idx))
