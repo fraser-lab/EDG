@@ -53,6 +53,13 @@ class Potential(ABC):
         energy = self.compute_function(value, *args)
         return energy.sum(dim=-1)
 
+    def compute_ensemble(self, coords, feats, parameters):
+        num_ensembles, ensemble_size = coords.shape[:2]
+        coords_flat = coords.reshape(-1, *coords.shape[2:])
+
+        energy_flat = self.compute(coords_flat, feats, parameters)
+        return energy_flat.reshape(num_ensembles, ensemble_size)
+
     def compute_gradient(self, coords, feats, parameters):
         index, args, com_args = self.compute_args(feats, parameters)
         if com_args is not None:
@@ -94,6 +101,13 @@ class Potential(ABC):
             grad_atom = grad_atom[..., com_index, :]
 
         return grad_atom
+
+    def compute_gradient_ensemble(self, coords, feats, parameters):
+        num_ensembles, ensemble_size = coords.shape[:2]
+        coords_flat = coords.reshape(-1, *coords.shape[2:])
+
+        grad_flat = self.compute_gradient(coords_flat, feats, parameters)
+        return grad_flat.reshape(num_ensembles, ensemble_size, *grad_flat.shape[1:])
 
     def compute_parameters(self, t):
         if self.parameters is None:
@@ -299,18 +313,83 @@ class ConnectionsPotential(FlatBottomPotential, DistancePotential):
 
 class BondPotential(HarmonicPotential, DistancePotential):
     def compute_args(self, feats, parameters):
-        pair_index = feats["bond_index"][0]
-        lower_bounds = torch.full(
-            (pair_index.shape[1],),
-            parameters["bond_length"] - parameters["buffer"],
-            device=pair_index.device,
+        pair_index = torch.empty(
+            2, 0, dtype=torch.long, device=feats["atom_pad_mask"].device
         )
-        upper_bounds = torch.full(
-            (pair_index.shape[1],),
-            parameters["bond_length"] + parameters["buffer"],
-            device=pair_index.device,
-        )
-        k = torch.ones_like(upper_bounds)
+        paired_aa = torch.empty_like(pair_index)
+        paired_rna = torch.empty_like(pair_index)
+        paired_dna = torch.empty_like(pair_index)
+
+        atom_chain_id = (
+            torch.bmm(
+                feats["atom_to_token"].float(), feats["asym_id"].unsqueeze(-1).float()
+            )
+            .squeeze(-1)
+            .long()
+        )[0]
+        atom_pad_mask = feats["atom_pad_mask"][0].bool()
+        atom_chain_id = atom_chain_id[atom_pad_mask]
+        res_token_indices = torch.where(feats["res_type"][0])[1]
+
+        is_aa_mask = (res_token_indices > 1) & (res_token_indices < 22)
+        is_rna_mask = (res_token_indices > 22) & (res_token_indices < 27)
+        is_dna_mask = (res_token_indices > 27) & (res_token_indices < 32)
+
+        CA_index = torch.where(feats["r_set_to_rep_atom"][0])[1][is_aa_mask]
+        N_index = CA_index - 1
+        C_index = CA_index + 1
+
+        C1_rna_index = torch.where(feats["r_set_to_rep_atom"][0])[1][is_rna_mask]
+        O3_rna_index = C1_rna_index - 3
+        P_rna_index = C1_rna_index - 11
+
+        C1_dna_index = torch.where(feats["r_set_to_rep_atom"][0])[1][is_dna_mask]
+        O3_dna_index = C1_dna_index - 2
+        P_dna_index = C1_dna_index - 10
+
+        for chain in feats["asym_id"].unique():
+            in_chain = torch.where(atom_chain_id[C_index] == chain)[0]
+
+            if len(CA_index > 1):
+                C_to_pair_in_chain = C_index[in_chain][:-1].clone()
+                N_to_pair_in_chain = N_index[in_chain][1:].clone()
+                paired_aa = torch.stack((C_to_pair_in_chain, N_to_pair_in_chain))
+
+            if len(C1_rna_index > 1):
+                O3_rna_to_pair_in_chain = O3_rna_index[in_chain][:-1].clone()
+                P_rna_to_pair_in_chain = P_rna_index[in_chain][1:].clone()
+                paired_rna = torch.stack(
+                    (O3_rna_to_pair_in_chain, P_rna_to_pair_in_chain)
+                )
+
+            if len(C1_dna_index > 1):
+                O3_dna_to_pair_in_chain = O3_dna_index[in_chain][:-1].clone()
+                P_dna_to_pair_in_chain = P_dna_index[in_chain][1:].clone()
+                paired_dna = torch.stack(
+                    (O3_dna_to_pair_in_chain, P_dna_to_pair_in_chain)
+                )
+
+            pair_index = torch.cat(
+                (pair_index, paired_aa, paired_rna, paired_dna), dim=1
+            )
+
+        lower_bounds = torch.zeros(pair_index.shape[1], device=pair_index.device)
+        upper_bounds = torch.zeros(pair_index.shape[1], device=pair_index.device)
+
+        lower_bounds[is_aa_mask * ~is_dna_mask * ~is_rna_mask] = parameters[
+            "aa_bond_length"
+        ] * (1.0 - parameters["buffer"])
+        upper_bounds[is_aa_mask * ~is_dna_mask * ~is_rna_mask] = parameters[
+            "aa_bond_length"
+        ] * (1.0 + parameters["buffer"])
+        lower_bounds[is_dna_mask * ~is_rna_mask * ~is_aa_mask] = parameters[
+            "nucleotide_bond_length"
+        ] * (1.0 - parameters["buffer"])
+        upper_bounds[is_dna_mask * ~is_rna_mask * ~is_aa_mask] = parameters[
+            "nucleotide_bond_length"
+        ] * (1.0 + parameters["buffer"])
+
+        k = torch.ones_like(lower_bounds)
 
         return pair_index, (k, lower_bounds, upper_bounds), None
 
@@ -513,7 +592,6 @@ class SubstructurePotential(HarmonicPotential):
             self.parameters["denoising_selection"] is None
             or self.parameters["reference_coords"] is None
         ):
-            # If no selection is provided, return empty indices
             return (
                 torch.zeros((2, 0), device=feats["atom_pad_mask"].device),
                 (torch.tensor([]), None, None),
@@ -527,19 +605,16 @@ class SubstructurePotential(HarmonicPotential):
             selection = torch.from_numpy(selection).to(feats["atom_pad_mask"].device)
 
         inverse_selector = torch.ones(
-            reference_coords.shape[1], device=feats["atom_pad_mask"].device
+            reference_coords.shape[-2], device=feats["atom_pad_mask"].device
         ).bool()
 
         if selection.shape[0] > 0:
             inverse_selector[selection] = False
 
-        index = torch.where(inverse_selector)[0].unsqueeze(
-            0
-        )  # The atoms outside the denoising region
+        index = torch.where(inverse_selector)[0].unsqueeze(0)
         n_selected = index.shape[0]
 
         lower_bounds = None
-        # Upper bounds based on the buffer parameter
         upper_bounds = torch.full(
             (n_selected,), parameters["buffer"], device=index.device
         )
@@ -568,9 +643,11 @@ class SubstructurePotential(HarmonicPotential):
             Distances between current and reference coordinates, and optionally gradients
         """
         ref_coords = torch.zeros_like(coords)
-        ref_coords[..., index[0], :] = self.parameters["reference_coords"][
-            ..., index[0], :
-        ].to(dtype=coords.dtype, device=coords.device)
+        ref_coords[..., index[0], :] = (
+            self.parameters["reference_coords"][..., index[0], :]
+            .to(dtype=coords.dtype, device=coords.device)
+            .flatten(0, 1)
+        )
 
         r_ij = coords.index_select(-2, index[0]) - ref_coords.index_select(-2, index[0])
         r_ij_norm = torch.linalg.norm(r_ij, dim=-1)
@@ -584,6 +661,73 @@ class SubstructurePotential(HarmonicPotential):
         )
 
         return r_ij_norm, r_hat_ij
+
+    def compute_ensemble(self, coords, feats, parameters):
+        """Compute the potential for an ensemble of structures.
+
+        Parameters
+        ----------
+        coords : torch.Tensor
+            Atomic coordinates, shape [batch, n_ensembles, n_atoms, 3]
+        feats : Dict[str, Any]
+            Dictionary of features from network
+        parameters : Dict[str, Any]
+            Dictionary of parameters
+        Returns
+        -------
+        torch.Tensor
+            Energy values for the ensemble of structures.
+        """
+        num_ensembles, ensemble_size = coords.shape[:2]
+        original_ref_coords = self.parameters["reference_coords"]
+
+        if (
+            original_ref_coords.dim() == 3
+            and original_ref_coords.shape[0] == num_ensembles * ensemble_size
+        ):
+            self.parameters["reference_coords"] = original_ref_coords
+        elif original_ref_coords.dim() == 2:
+            self.parameters["reference_coords"] = original_ref_coords.unsqueeze(
+                0
+            ).expand(num_ensembles * ensemble_size, -1, -1)
+
+        result = super().compute_ensemble(coords, feats, parameters)
+        self.parameters["reference_coords"] = original_ref_coords
+
+        return result
+
+    def compute_gradient_ensemble(self, coords, feats, parameters):
+        """Compute the gradient of the potential for an ensemble of structures.
+        Parameters
+        ----------
+        coords : torch.Tensor
+            Atomic coordinates, shape [batch, n_ensembles, n_atoms, 3]
+        feats : Dict[str, Any]
+            Dictionary of features from network
+        parameters : Dict[str, Any]
+            Dictionary of parameters
+        Returns
+        -------
+        torch.Tensor
+            Gradient of the potential for the ensemble of structures.
+        """
+        num_ensembles, ensemble_size = coords.shape[:2]
+        original_ref_coords = self.parameters["reference_coords"]
+
+        if (
+            original_ref_coords.dim() == 3
+            and original_ref_coords.shape[0] == num_ensembles * ensemble_size
+        ):
+            self.parameters["reference_coords"] = original_ref_coords
+        elif original_ref_coords.dim() == 2:
+            self.parameters["reference_coords"] = original_ref_coords.unsqueeze(
+                0
+            ).expand(num_ensembles * ensemble_size, -1, -1)
+
+        result = super().compute_gradient_ensemble(coords, feats, parameters)
+        self.parameters["reference_coords"] = original_ref_coords
+
+        return result
 
 
 class DensityPotential(Potential):
@@ -666,23 +810,14 @@ class DensityPotential(Potential):
         Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]
             grid coordinates and optionally gradients
         """
-        coords_translated = coords[..., index[0], :]  # [..., n_active, 3]
-
-        if self.parameters["initial_centroid"] is not None:
-            coords_translated = coords_translated + self.parameters[
-                "initial_centroid"
-            ].repeat(
-                coords.shape[0] // self.parameters["initial_centroid"].shape[0], 1, 1
-            )
+        coords_selected = coords[..., index[0], :]  # [..., n_active, 3]
 
         if not compute_gradient:
             with torch.no_grad():
-                rho_calc = self.density_calculator(coords_translated, **density_params)
+                rho_calc = self.density_calculator(coords_selected, **density_params)
                 return rho_calc
 
-        rho_calc = self.density_calculator(
-            coords_translated, **density_params
-        )
+        rho_calc = self.density_calculator(coords_selected, **density_params)
 
         rho_calc.backward(torch.ones_like(rho_calc), retain_graph=True)
 
@@ -734,8 +869,8 @@ class DensityPotential(Potential):
         else:
             try:
                 res_high = self.density_calculator.xmap.resolution.high
-            except: # noqa: E722
-                res_high = 0.
+            except:  # noqa: E722
+                res_high = 0.0
 
             if parameters["resolution"] != res_high:
                 xmap = self.xmap.downsample_to_resolution(parameters["resolution"])
@@ -762,7 +897,7 @@ class DensityPotential(Potential):
         Parameters
         ----------
         value : torch.Tensor
-            Quantity that the energy is calculated from, here of shape [batch, n_atoms] (value is interpolated density)
+            Quantity that the energy is calculated from, here of shape [batch, *value_shape] (here it is the density)
         elements : torch.Tensor
             Atomic elements, shape [batch, n_atoms]
         b_factors : torch.Tensor
@@ -779,17 +914,65 @@ class DensityPotential(Potential):
         Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]
             Energy values, and optionally derivatives
         """
-        target = -(value * self.density_calculator.array.to(torch.float32)).sum(dim=[-3, -2, -1])
-        # target = ((value - self.density_calculator.xmap.array.to(torch.float32)) ** 2).sum(
+        # target = -(value * self.density_calculator.xmap.array.to(torch.float32)).sum(
         #     dim=[-3, -2, -1]
         # )
+        target = (
+            (value - self.density_calculator.xmap.array.to(torch.float32)) ** 2
+        ).sum(dim=[-3, -2, -1])
 
         if not compute_derivative:
             return target
 
-        # dEnergy = - k * target
+        # dEnergy = -k * target
         dEnergy = 2 * k * target  # [batch, n_atoms]
 
+        return target, dEnergy
+
+    def compute_function_ensemble(
+        self,
+        value: torch.Tensor,
+        elements: torch.Tensor,
+        b_factors: torch.Tensor,
+        occupancies: torch.Tensor,
+        k: float = 1.0,
+        compute_derivative: bool = False,
+    ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+        """Compute the energy function from the interpolated density.
+
+        Parameters
+        ----------
+        value : torch.Tensor
+            Quantity that the energy is calculated from, here of shape [batch, ensemble_size, *value_shape] (here it is the density)
+        elements : torch.Tensor
+            Atomic elements, shape [batch, n_atoms]
+        b_factors : torch.Tensor
+            B-factors for the atoms, shape [batch, n_atoms]
+        occupancies : torch.Tensor
+            Occupancies for the atoms, shape [batch, n_atoms]
+        k : float, optional
+            Scaling factor for the energy, by default 1.0
+        compute_derivative : bool, optional
+            Whether to compute derivatives, by default False
+
+        Returns
+        -------
+        Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]
+            Energy values, and optionally derivatives
+        """
+        value = value.sum(
+            dim=1
+        )  # [batch, ensemble_size, *value_shape] -> [batch, *value_shape]
+        target = -(value * self.density_calculator.xmap.array.to(torch.float32)).sum(
+            dim=[-3, -2, -1]
+        )
+        # target = ((value - self.density_calculator.xmap.array.to(torch.float32)) ** 2).sum(
+        #     dim=[-3, -2, -1]
+        # )
+        if not compute_derivative:
+            return target
+        dEnergy = -k * target
+        # dEnergy = 2 * k * target  # [batch, n_atoms]
         return target, dEnergy
 
     def compute_gradient(
@@ -852,6 +1035,68 @@ class DensityPotential(Potential):
         value = self.compute_variable(coords, args, index, compute_gradient=False)
         energy = self.compute_function(value, *args)
         return energy
+
+    def compute_ensemble(self, coords, feats, parameters):
+        num_ensembles, ensemble_size = coords.shape[:2]
+        original_shape = coords.shape
+
+        coords_batched = coords.reshape(
+            num_ensembles * ensemble_size, *coords.shape[2:]
+        )
+
+        index, args, com_args = self.compute_args(feats, parameters)
+
+        if index.shape[1] == 0:
+            return torch.zeros((num_ensembles, ensemble_size), device=coords.device)
+
+        expanded_args = {}
+        for key, value in args.items():
+            if isinstance(value, torch.Tensor) and value.shape[0] == 1:
+                expanded_args[key] = value.expand(
+                    num_ensembles * ensemble_size, *value.shape[1:]
+                )
+            else:
+                expanded_args[key] = value
+
+        value = self.compute_variable(
+            coords_batched, expanded_args, index, compute_gradient=False
+        )
+        value = value.reshape(num_ensembles, ensemble_size, *value.shape[1:])
+        energy = self.compute_function_ensemble(value, **expanded_args)
+
+        return energy
+
+    def compute_gradient_ensemble(self, coords, feats, parameters):
+        num_ensembles, ensemble_size = coords.shape[:2]
+        coords_batched = coords.reshape(
+            num_ensembles * ensemble_size, *coords.shape[2:]
+        )
+
+        coords_batched = coords_batched.clone().detach().requires_grad_()
+        index, args, com_args = self.compute_args(feats, parameters)
+
+        expanded_args = {}
+        for key, value in args.items():
+            if isinstance(value, torch.Tensor) and value.shape[0] == 1:
+                expanded_args[key] = value.expand(
+                    num_ensembles * ensemble_size, *value.shape[1:]
+                )
+            else:
+                expanded_args[key] = value
+
+        value, _ = self.compute_variable(
+            coords_batched, expanded_args, index, compute_gradient=True
+        )
+        value = value.reshape(num_ensembles, ensemble_size, *value.shape[1:])
+        energy = self.compute_function_ensemble(
+            value, **expanded_args, compute_derivative=False
+        )
+
+        energy.backward(torch.ones_like(energy))
+        grad_atom = coords_batched.grad.clone()
+        coords_batched.grad.zero_()
+
+        return grad_atom.reshape(num_ensembles, ensemble_size, *grad_atom.shape[1:])
 
     def interpolate_density_at_positions(
         self, positions: torch.Tensor, mode: str = "tricubic"
@@ -985,9 +1230,9 @@ def get_potentials():
         PoseBustersPotential(
             parameters={
                 "guidance_interval": 1,
-                "guidance_weight": 0.2,
-                "resampling_weight": 0.1,
-                "bond_buffer": 0.20,
+                "guidance_weight": 0.75,
+                "resampling_weight": 0.5,
+                "bond_buffer": 0.15,
                 "angle_buffer": 0.20,
                 "clash_buffer": 0.15,
             }
