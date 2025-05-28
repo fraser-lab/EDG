@@ -248,7 +248,7 @@ packages:
 - pypi: .
   name: adp3d
   version: 0.1.0
-  sha256: 50bb6e71251d9a34a1065e0d82facccb640f760fa44f82b543d394aeefd633f4
+  sha256: cb592a53b975bfcdc8c15c63cccefb9f5559c7ddf05881097b66a6db0d1dd3e5
   requires_dist:
   - setuptools
   - numpy>=1.26.4,<2

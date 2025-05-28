@@ -23,6 +23,7 @@ boltz = { path = "../boltz", editable = true }
 [tool.pixi.tasks]
 mac1_synthetic = "python ./_notebooks/run_mac1.py"
 aaawaaa = "python ./_notebooks/run_AAAWAAA.py"
+more_awa = "python ./_notebooks/run_more_AWA.py"
 cuda_density_test = "python ./tests/test_density.py"
 
 [tool.pixi.dependencies]
