@@ -32,24 +32,24 @@ from adp3d.utils.utility import try_gpu
 
 class SyntheticDensityGenerator:
     """Generate synthetic electron density maps from atomic structures.
-    
+
     This class provides functionality to create synthetic electron density maps
-    from atomic structures (Structure or Ensemble objects) with optional 
-    experimental parameters. It supports both X-ray crystallography and electron 
+    from atomic structures (Structure or Ensemble objects) with optional
+    experimental parameters. It supports both X-ray crystallography and electron
     microscopy scattering factors.
     """
-    
+
     def __init__(
         self,
         structure: Union[str, Structure, Ensemble],
         reference_map_file: Optional[str] = None,
         resolution: Optional[float] = None,
         unit_cell: Optional[NamedTuple] = None,
-        em_mode: Optional[bool] = False,  
+        em_mode: Optional[bool] = False,
         device: Optional[Union[str, torch.device]] = None,
     ):
         """Initialize the synthetic density generator.
-        
+
         Parameters
         ----------
         structure : Union[str, Structure, Ensemble]
@@ -71,7 +71,7 @@ class SyntheticDensityGenerator:
             self.device = torch.device(device)
         else:
             self.device = device
-        
+
         # Load structure
         if isinstance(structure, str):
             self.structure = Structure.fromfile(structure)
@@ -83,25 +83,27 @@ class SyntheticDensityGenerator:
             self.structure = structure
             self.is_ensemble = True
         else:
-            raise TypeError("Structure must be a file path, Structure object, or Ensemble object")
-        
+            raise TypeError(
+                "Structure must be a file path, Structure object, or Ensemble object"
+            )
+
         self.em_mode = em_mode
         self.resolution = resolution
-        
+
         self.scattering_factors = (
             ELECTRON_SCATTERING_FACTORS if em_mode else ATOM_STRUCTURE_FACTORS
         )
-        
+
         if reference_map_file is not None:
             self._setup_from_reference(reference_map_file)
         elif resolution is not None:
             self._setup_from_parameters(resolution, unit_cell)
         else:
             raise ValueError("Either reference_map_file or resolution must be provided")
-    
+
     def _setup_from_reference(self, reference_map_file: str) -> None:
         """Set up the generator using a reference map file.
-        
+
         Parameters
         ----------
         reference_map_file : str
@@ -110,7 +112,7 @@ class SyntheticDensityGenerator:
         extension = os.path.splitext(reference_map_file)[1]
         if extension not in (".ccp4", ".mrc", ".map", ".mtz"):
             raise ValueError("Reference map must be a CCP4, MRC, MAP, or MTZ file.")
-        
+
         if extension in (".mtz"):
             try:
                 ref_map = XMap.fromfile(reference_map_file)
@@ -119,10 +121,12 @@ class SyntheticDensityGenerator:
                     reference_map_file, label="2FOFCWT,PH2FOFCWT"
                 )  # try 2FO-FC map if initial fails
         else:
-            if not hasattr(self, 'resolution') or self.resolution is None:
-                raise ValueError("Resolution must be provided for CCP4, MRC, or MAP files.")
+            if not hasattr(self, "resolution") or self.resolution is None:
+                raise ValueError(
+                    "Resolution must be provided for CCP4, MRC, or MAP files."
+                )
             ref_map = XMap.fromfile(reference_map_file, resolution=self.resolution)
-        
+
         self.xmap = XMap_torch(ref_map, device=self.device)
         self._setup_scattering_params()
         self.density_calculator = DifferentiableTransformer(
@@ -132,10 +136,12 @@ class SyntheticDensityGenerator:
             device=self.device,
             use_cuda_kernels=True,
         )
-    
-    def _setup_from_parameters(self, resolution: float, unit_cell: NamedTuple = None) -> None:
+
+    def _setup_from_parameters(
+        self, resolution: float, unit_cell: NamedTuple = None
+    ) -> None:
         """Set up the generator using specified parameters.
-        
+
         Parameters
         ----------
         resolution : float
@@ -143,11 +149,11 @@ class SyntheticDensityGenerator:
         """
         self.resolution = resolution
         voxelspacing = resolution / 4.0
-        
+
         # Get the unit cell from the first structure if using an ensemble
         structure_ref = self.structure[0] if self.is_ensemble else self.structure
         unit_cell = structure_ref.unit_cell if unit_cell is None else unit_cell
-        
+
         # Create an appropriately-sized grid based on resolution
         grid_a = int(np.ceil(unit_cell.a / resolution * 4.0))
         grid_b = int(np.ceil(unit_cell.b / resolution * 4.0))
@@ -159,12 +165,14 @@ class SyntheticDensityGenerator:
 
         # Cartesian coordinate of grid index (0,0,0)
         # This centers the defined unit_cell within the actual grid extent
-        map_origin_cartesian = np.array([
-            (unit_cell.a - actual_extent_a) / 2.0,
-            (unit_cell.b - actual_extent_b) / 2.0,
-            (unit_cell.c - actual_extent_c) / 2.0,
-        ])
-        
+        map_origin_cartesian = np.array(
+            [
+                (unit_cell.a - actual_extent_a) / 2.0,
+                (unit_cell.b - actual_extent_b) / 2.0,
+                (unit_cell.c - actual_extent_c) / 2.0,
+            ]
+        )
+
         empty_array = np.zeros((grid_a, grid_b, grid_c), dtype=np.float32)
         # original atom coordinates are at 0, 0, 0 for AF3 predictions, need to offset by half the unit cell
         self.center = (
@@ -175,12 +183,14 @@ class SyntheticDensityGenerator:
 
         ref_map = XMap(
             empty_array,
-            grid_parameters=GridParameters(voxelspacing=voxelspacing), # , offset=offset
+            grid_parameters=GridParameters(
+                voxelspacing=voxelspacing
+            ),  # , offset=offset
             resolution=Resolution(high=resolution, low=1000.0),
             unit_cell=unit_cell,
             origin=map_origin_cartesian,
         )
-        
+
         self.xmap = XMap_torch(ref_map, device=self.device)
         self._setup_scattering_params()
         self.density_calculator = DifferentiableTransformer(
@@ -190,13 +200,13 @@ class SyntheticDensityGenerator:
             device=self.device,
             use_cuda_kernels=True,
         )
-    
+
     def _setup_scattering_params(self) -> None:
         """Set up scattering parameters for density calculation."""
         # Get elements from the first structure if using an ensemble
         structure_ref = self.structure[0] if self.is_ensemble else self.structure
         unique_elements = set(structure_ref.e)
-        
+
         # Normalize element names according to DensityGuidedDiffusion approach
         unique_elements = sorted(
             set(
@@ -210,41 +220,48 @@ class SyntheticDensityGenerator:
                 ]
             )
         )
-        
+
         # Map elements to atomic numbers using the ATOMIC_NUM_TO_ELEMENT list
         atomic_num_dict = {
             elem: ATOMIC_NUM_TO_ELEMENT.index(elem) for elem in unique_elements
         }
-        
+
         max_atomic_num = max(atomic_num_dict.values())
         # Use the max atomic number found in the structure for tensor size
         n_coeffs = len(self.scattering_factors["C"][0])
         dense_size = torch.Size([max_atomic_num + 1, n_coeffs, 2])
-        scattering_dense_tensor = torch.zeros(dense_size, dtype=torch.float32, device=self.device)
-        
+        scattering_dense_tensor = torch.zeros(
+            dense_size, dtype=torch.float32, device=self.device
+        )
+
         for elem in unique_elements:
             atomic_num = atomic_num_dict[elem]
-            
+
             if elem in self.scattering_factors:
                 factor = self.scattering_factors[elem]
             else:
-                print(f"Warning: Scattering factors for {elem} not found, using C instead")
+                print(
+                    f"Warning: Scattering factors for {elem} not found, using C instead"
+                )
                 factor = self.scattering_factors["C"]
-            
-            factor = torch.tensor(factor, dtype=torch.float32, device=self.device).T  # (2, range) -> (range, 2)
+
+            factor = torch.tensor(
+                factor, dtype=torch.float32, device=self.device
+            ).T  # (2, range) -> (range, 2)
             scattering_dense_tensor[atomic_num, :, :] = factor
-        
+
         self.scattering_params = scattering_dense_tensor
         self.atomic_num_dict = atomic_num_dict
-    
+
     def generate_map_from_structure(
-        self, 
+        self,
         structure: Structure,
         b_factor_scale: float = 1.0,
         occupancy_scale: float = 1.0,
+        shift: bool = True,
     ) -> torch.Tensor:
         """Generate a synthetic density map from a single structure.
-        
+
         Parameters
         ----------
         structure : Structure
@@ -253,23 +270,30 @@ class SyntheticDensityGenerator:
             Scale factor for B-factors.
         occupancy_scale : float, optional
             Scale factor for occupancies.
-            
+        shift : bool, optional
+            Whether to shift the coordinates to center in the unit cell.
+
         Returns
         -------
         torch.Tensor
             Generated density map.
         """
-        coords, elements, b_factors, occupancies, active, _ = structure_to_density_input(structure)
+        coords, elements, b_factors, occupancies, active, _ = (
+            structure_to_density_input(structure)
+        )
 
         # move coords to center of unit cell (0, 0, 0) is 0 A, 0 A, 0 A
-        coords = coords - torch.tensor(self.center, dtype=coords.dtype, device=coords.device)
-    
+        if shift:
+            coords = coords - torch.tensor(
+                self.center, dtype=coords.dtype, device=coords.device
+            )
+
         coords = coords.to(self.device).float().unsqueeze(0)  # Add batch dim
         elements = elements.to(self.device).long().unsqueeze(0)  # Add batch dim
         b_factors = b_factors.to(self.device).float().unsqueeze(0) * b_factor_scale
         occupancies = occupancies.to(self.device).float().unsqueeze(0) * occupancy_scale
         active = active.to(self.device).bool().unsqueeze(0)
-        
+
         with torch.no_grad():
             density_map = self.density_calculator(
                 coords,
@@ -278,23 +302,26 @@ class SyntheticDensityGenerator:
                 occupancies,
                 active,
             )
-        
+
         return density_map.squeeze(0)  # Remove batch dimension
-    
+
     def generate_map(
-        self, 
+        self,
         b_factor_scale: float = 1.0,
         occupancy_scale: float = 1.0,
+        shift: bool = True,
     ) -> torch.Tensor:
         """Generate a synthetic density map from the structure or ensemble.
-        
+
         Parameters
         ----------
         b_factor_scale : float, optional
             Scale factor for B-factors.
         occupancy_scale : float, optional
             Scale factor for occupancies.
-            
+        shift : bool, optional
+            Whether to shift the coordinates to center in the unit cell.
+
         Returns
         -------
         torch.Tensor
@@ -305,38 +332,38 @@ class SyntheticDensityGenerator:
             ensemble_map = None
             for structure in self.structure:
                 structure_map = self.generate_map_from_structure(
-                    structure, 
-                    b_factor_scale, 
-                    occupancy_scale / len(self.structure)  # Scale occupancy by ensemble size
+                    structure,
+                    b_factor_scale,
+                    occupancy_scale
+                    / len(self.structure),  # Scale occupancy by ensemble size
                     # TODO: improve to use occupancies from the ensemble
+                    shift=shift,
                 )
-                
+
                 if ensemble_map is None:
                     ensemble_map = structure_map
                 else:
                     ensemble_map += structure_map
-            
+
             self.last_density_map = ensemble_map
             return ensemble_map
         else:
             # Generate map from a single structure
             density_map = self.generate_map_from_structure(
-                self.structure, 
-                b_factor_scale, 
-                occupancy_scale
+                self.structure, b_factor_scale, occupancy_scale, shift=shift
             )
-            
+
             self.last_density_map = density_map
             return density_map
-    
+
     def save_map(
-        self, 
-        output_file: str, 
+        self,
+        output_file: str,
         density_map: Optional[torch.Tensor] = None,
         downsample_to: Optional[float] = None,
     ) -> None:
         """Save the generated density map to a file.
-        
+
         Parameters
         ----------
         output_file : str
@@ -347,10 +374,10 @@ class SyntheticDensityGenerator:
             Downsample the density map to this resolution, by default None.
         """
         if density_map is None:
-            if not hasattr(self, 'last_density_map'):
+            if not hasattr(self, "last_density_map"):
                 raise ValueError("No density map available to save.")
             density_map = self.last_density_map
-        
+
         # Create directory if it doesn't exist
         os.makedirs(os.path.dirname(os.path.abspath(output_file)), exist_ok=True)
 
@@ -360,7 +387,7 @@ class SyntheticDensityGenerator:
         # Downsample the density map if requested
         if downsample_to is not None:
             xmap = xmap.downsample_to_resolution(downsample_to, apply_filter=True)
-        
+
         xmap.tofile(output_file)
         print(f"Saved density map to {output_file}")
 
@@ -381,26 +408,67 @@ if __name__ == "__main__":
     # density_generator.save_map("/home/kchrispens/adp-replicate/tests/resources/mac1_synthetic/5sop_5soq_5sq8.ccp4", density)
 
     # generate synthetic AAAWAAA data
-    pdb = Structure.fromfile("/home/kchrispens/adp-replicate/tests/resources/AAAWAAA/AAAWAAA_Waltconf.mmcif")
+    pdb = Structure.fromfile(
+        "/home/kchrispens/adp-replicate/tests/resources/unfold/unfold_altconf.cif"
+    )
 
-    unit_cell = UnitCell(30.0, 30.0, 30.0)
+    unit_cell = UnitCell(40.0, 40.0, 40.0)
 
-    density_generator = SyntheticDensityGenerator(structure=pdb, resolution=8.0, unit_cell=unit_cell, em_mode=False)
-    density = density_generator.generate_map(b_factor_scale=1.0, occupancy_scale=1.0)
-    density_generator.save_map("/home/kchrispens/adp-replicate/tests/resources/AAAWAAA/AAAWAAA_Waltconf_8.ccp4", density)
+    density_generator = SyntheticDensityGenerator(
+        structure=pdb, resolution=8.0, unit_cell=unit_cell, em_mode=False
+    )
+    density = density_generator.generate_map(
+        b_factor_scale=1.0, occupancy_scale=1.0, shift=False
+    )
+    density_generator.save_map(
+        "/home/kchrispens/adp-replicate/tests/resources/unfold/unfold_altconf_8.ccp4",
+        density,
+    )
 
-    density_generator = SyntheticDensityGenerator(structure=pdb, resolution=4.0, unit_cell=unit_cell, em_mode=False)
-    density = density_generator.generate_map(b_factor_scale=1.0, occupancy_scale=1.0)
-    density_generator.save_map("/home/kchrispens/adp-replicate/tests/resources/AAAWAAA/AAAWAAA_Waltconf_4.ccp4", density)
+    density_generator = SyntheticDensityGenerator(
+        structure=pdb, resolution=4.0, unit_cell=unit_cell, em_mode=False
+    )
+    density = density_generator.generate_map(
+        b_factor_scale=1.0, occupancy_scale=1.0, shift=False
+    )
+    density_generator.save_map(
+        "/home/kchrispens/adp-replicate/tests/resources/unfold/unfold_altconf_4.ccp4",
+        density,
+    )
 
-    density_generator = SyntheticDensityGenerator(structure=pdb, resolution=2.0, unit_cell=unit_cell, em_mode=False)
-    density = density_generator.generate_map(b_factor_scale=1.0, occupancy_scale=1.0)
-    density_generator.save_map("/home/kchrispens/adp-replicate/tests/resources/AAAWAAA/AAAWAAA_Waltconf_2.ccp4", density)
+    density_generator = SyntheticDensityGenerator(
+        structure=pdb, resolution=2.0, unit_cell=unit_cell, em_mode=False
+    )
+    density = density_generator.generate_map(
+        b_factor_scale=1.0, occupancy_scale=1.0, shift=False
+    )
+    density_generator.save_map(
+        "/home/kchrispens/adp-replicate/tests/resources/unfold/unfold_altconf_2.ccp4",
+        density,
+    )
 
-    density_generator = SyntheticDensityGenerator(structure=pdb, resolution=1.0, unit_cell=unit_cell, em_mode=False)
-    density = density_generator.generate_map(b_factor_scale=1.0, occupancy_scale=1.0)
-    density_generator.save_map("/home/kchrispens/adp-replicate/tests/resources/AAAWAAA/AAAWAAA_Waltconf_1.ccp4", density)
+    density_generator = SyntheticDensityGenerator(
+        structure=pdb, resolution=1.0, unit_cell=unit_cell, em_mode=False
+    )
+    density = density_generator.generate_map(
+        b_factor_scale=1.0, occupancy_scale=1.0, shift=False
+    )
+    density_generator.save_map(
+        "/home/kchrispens/adp-replicate/tests/resources/unfold/unfold_altconf_1.ccp4",
+        density,
+    )
 
-    density_generator = SyntheticDensityGenerator(structure=pdb, resolution=1.0, unit_cell=unit_cell, em_mode=False)
-    density = density_generator.generate_map(b_factor_scale=1.0, occupancy_scale=1.0)
-    density_generator.save_map("/home/kchrispens/adp-replicate/tests/resources/AAAWAAA/AAAWAAA_Waltconf_4_downsampled_from_1_brickwall_filtered.ccp4", density, downsample_to=4.0)
+    density_generator = SyntheticDensityGenerator(
+        structure=pdb, resolution=1.0, unit_cell=unit_cell, em_mode=False
+    )
+    density = density_generator.generate_map(
+        b_factor_scale=1.0, occupancy_scale=1.0, shift=False
+    )
+    density_generator.save_map(
+        "/home/kchrispens/adp-replicate/tests/resources/unfold/unfold_altconf_4_downsampled_from_1_brickwall_filtered.ccp4",
+        density,
+        downsample_to=4.0,
+    )
+
+    # pdb.coor = pdb.coor - density_generator.center
+    # pdb.tofile("/home/kchrispens/adp-replicate/tests/resources/unfold/unfold_altconf_shifted.cif")
