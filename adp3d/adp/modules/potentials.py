@@ -58,7 +58,7 @@ class Potential(ABC):
         coords_flat = coords.reshape(-1, *coords.shape[2:])
 
         energy_flat = self.compute(coords_flat, feats, parameters)
-        return energy_flat.reshape(num_ensembles, ensemble_size)
+        return energy_flat.reshape(num_ensembles, ensemble_size).sum(dim=1)
 
     def compute_gradient(self, coords, feats, parameters):
         index, args, com_args = self.compute_args(feats, parameters)
@@ -319,6 +319,14 @@ class BondPotential(HarmonicPotential, DistancePotential):
         paired_aa = torch.empty_like(pair_index)
         paired_rna = torch.empty_like(pair_index)
         paired_dna = torch.empty_like(pair_index)
+        lower_bounds = torch.empty(
+            0, dtype=torch.float, device=feats["atom_pad_mask"].device
+        )
+        upper_bounds = torch.empty(
+            0, dtype=torch.float, device=feats["atom_pad_mask"].device
+        )
+        lower_value = 1 - parameters["buffer"]
+        upper_value = 1 + parameters["buffer"]
 
         atom_chain_id = (
             torch.bmm(
@@ -349,45 +357,92 @@ class BondPotential(HarmonicPotential, DistancePotential):
 
         for chain in feats["asym_id"].unique():
             in_chain = torch.where(atom_chain_id[C_index] == chain)[0]
+            n_aa_in_chain = len(CA_index[in_chain])
+            # n_rna_in_chain = len(C1_rna_index[in_chain])
+            # n_dna_in_chain = len(C1_dna_index[in_chain])
 
-            if len(CA_index > 1):
+            if n_aa_in_chain > 1:
                 C_to_pair_in_chain = C_index[in_chain][:-1].clone()
                 N_to_pair_in_chain = N_index[in_chain][1:].clone()
                 paired_aa = torch.stack((C_to_pair_in_chain, N_to_pair_in_chain))
-
-            if len(C1_rna_index > 1):
-                O3_rna_to_pair_in_chain = O3_rna_index[in_chain][:-1].clone()
-                P_rna_to_pair_in_chain = P_rna_index[in_chain][1:].clone()
-                paired_rna = torch.stack(
-                    (O3_rna_to_pair_in_chain, P_rna_to_pair_in_chain)
+                lower_bounds = torch.cat(
+                    (
+                        lower_bounds,
+                        torch.tensor(
+                            [parameters["aa_bond_length"] * lower_value]
+                            * (n_aa_in_chain - 1),
+                            device=lower_bounds.device,
+                        ),
+                    )
+                )
+                upper_bounds = torch.cat(
+                    (
+                        upper_bounds,
+                        torch.tensor(
+                            [parameters["aa_bond_length"] * upper_value]
+                            * (n_aa_in_chain - 1),
+                            device=upper_bounds.device,
+                        ),
+                    )
                 )
 
-            if len(C1_dna_index > 1):
-                O3_dna_to_pair_in_chain = O3_dna_index[in_chain][:-1].clone()
-                P_dna_to_pair_in_chain = P_dna_index[in_chain][1:].clone()
-                paired_dna = torch.stack(
-                    (O3_dna_to_pair_in_chain, P_dna_to_pair_in_chain)
-                )
+            # if n_rna_in_chain > 1:
+            #     O3_rna_to_pair_in_chain = O3_rna_index[in_chain][:-1].clone()
+            #     P_rna_to_pair_in_chain = P_rna_index[in_chain][1:].clone()
+            #     paired_rna = torch.stack(
+            #         (O3_rna_to_pair_in_chain, P_rna_to_pair_in_chain)
+            #     )
+            #     lower_bounds = torch.cat(
+            #         (
+            #             lower_bounds,
+            #             torch.tensor(
+            #                 [parameters["nucleotide_bond_length"] * lower_value]
+            #                 * (n_rna_in_chain - 1),
+            #                 device=lower_bounds.device,
+            #             ),
+            #         )
+            #     )
+            #     upper_bounds = torch.cat(
+            #         (
+            #            upper_bounds,
+            #             torch.tensor(
+            #                 [parameters["nucleotide_bond_length"] * upper_value]
+            #                 * (n_rna_in_chain - 1),
+            #                 device=upper_bounds.device,
+            #             ),
+            #         )
+            #     ) 
+
+            # if n_dna_in_chain > 1:
+            #     O3_dna_to_pair_in_chain = O3_dna_index[in_chain][:-1].clone()
+            #     P_dna_to_pair_in_chain = P_dna_index[in_chain][1:].clone()
+            #     paired_dna = torch.stack(
+            #         (O3_dna_to_pair_in_chain, P_dna_to_pair_in_chain)
+            #     )
+            #     lower_bounds = torch.cat(
+            #         (
+            #             lower_bounds,
+            #             torch.tensor(
+            #                 [parameters["nucleotide_bond_length"] * lower_value]
+            #                 * (n_dna_in_chain - 1),
+            #                 device=lower_bounds.device,
+            #             ),
+            #         )
+            #     )
+            #     upper_bounds = torch.cat(
+            #         (
+            #            upper_bounds,
+            #             torch.tensor(
+            #                 [parameters["nucleotide_bond_length"] * upper_value]
+            #                 * (n_dna_in_chain - 1),
+            #                 device=upper_bounds.device,
+            #             ),
+            #         )
+            #     ) 
 
             pair_index = torch.cat(
                 (pair_index, paired_aa, paired_rna, paired_dna), dim=1
             )
-
-        lower_bounds = torch.zeros(pair_index.shape[1], device=pair_index.device)
-        upper_bounds = torch.zeros(pair_index.shape[1], device=pair_index.device)
-
-        lower_bounds[is_aa_mask * ~is_dna_mask * ~is_rna_mask] = parameters[
-            "aa_bond_length"
-        ] * (1.0 - parameters["buffer"])
-        upper_bounds[is_aa_mask * ~is_dna_mask * ~is_rna_mask] = parameters[
-            "aa_bond_length"
-        ] * (1.0 + parameters["buffer"])
-        lower_bounds[is_dna_mask * ~is_rna_mask * ~is_aa_mask] = parameters[
-            "nucleotide_bond_length"
-        ] * (1.0 - parameters["buffer"])
-        upper_bounds[is_dna_mask * ~is_rna_mask * ~is_aa_mask] = parameters[
-            "nucleotide_bond_length"
-        ] * (1.0 + parameters["buffer"])
 
         k = torch.ones_like(lower_bounds)
 
@@ -1230,9 +1285,9 @@ def get_potentials():
         PoseBustersPotential(
             parameters={
                 "guidance_interval": 1,
-                "guidance_weight": 0.75,
-                "resampling_weight": 0.5,
-                "bond_buffer": 0.15,
+                "guidance_weight": 0.05,
+                "resampling_weight": 0.1,
+                "bond_buffer": 0.20,
                 "angle_buffer": 0.20,
                 "clash_buffer": 0.15,
             }
@@ -1259,6 +1314,16 @@ def get_potentials():
                 "guidance_weight": 0.05,
                 "resampling_weight": 1.0,
                 "buffer": 0.26180,
+            }
+        ),
+        BondPotential(
+            parameters={
+                "guidance_interval": 1,
+                "guidance_weight": 0.05,
+                "resampling_weight": 0.01,
+                "buffer": 0.2,
+                "aa_bond_length": 1.32,  # Angstroms
+                "nucleotide_bond_length": 1.60,  # Angstroms
             }
         ),
     ]
