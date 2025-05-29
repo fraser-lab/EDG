@@ -16,7 +16,7 @@ from adp3d.data import Structure
 from adp3d.data.structure import Ensemble
 from adp3d.qfit.volume import XMap, Resolution, GetSpaceGroup, GridParameters
 from adp3d.qfit.unitcell import UnitCell
-from adp3d.adp.modules.density import (
+from adp3d.adp.modules.density.density import (
     DifferentiableTransformer,
     XMap_torch,
     DensityParameters,

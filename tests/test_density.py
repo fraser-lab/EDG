@@ -15,7 +15,7 @@ from adp3d.data.sf import (
     ATOMIC_NUM_TO_ELEMENT,
 )
 
-from adp3d.adp.modules.density import (
+from adp3d.adp.modules.density.density import (
     DifferentiableTransformer,
     XMap_torch,
     DensityParameters,
