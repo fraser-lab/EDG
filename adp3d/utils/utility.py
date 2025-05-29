@@ -47,8 +47,8 @@ def try_gpu():
         if available_gpus is not None:
             available_gpus = [int(gpu) for gpu in available_gpus.split(',')]
             if idx not in available_gpus:
-                print(f"Selected GPU {idx} is not in CUDA_VISIBLE_DEVICES: {available_gpus}. Selecting first available GPU.")
-                return torch.device(available_gpus[0])
+                print(f"Selected GPU {idx} is not in CUDA_VISIBLE_DEVICES: {available_gpus}. Selecting first available GPU: {available_gpus[0]}.")
+                return torch.device("cuda:0")
             
         print('Returning GPU{} with {} free MiB'.format(idx, gpu_df.iloc[idx]['memory.free']))
         
