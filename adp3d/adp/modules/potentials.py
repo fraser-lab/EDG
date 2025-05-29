@@ -18,7 +18,7 @@ from adp3d.utils.interpolation import (
     tricubic_interpolation_torch,
 )
 
-from .density import XMap_torch, DifferentiableTransformer
+from .density.density import XMap_torch, DifferentiableTransformer
 
 
 class Potential(ABC):
@@ -961,12 +961,12 @@ class DensityPotential(Potential):
         value = value.sum(
             dim=1
         )  # [batch, ensemble_size, *value_shape] -> [batch, *value_shape]
-        target = -(value * self.density_calculator.xmap.array.to(torch.float32)).sum(
-            dim=[-3, -2, -1]
-        )
-        # target = ((value - self.density_calculator.xmap.array.to(torch.float32)) ** 2).sum(
+        # target = -(value * self.density_calculator.xmap.array.to(torch.float32)).sum(
         #     dim=[-3, -2, -1]
         # )
+        target = ((value - self.density_calculator.xmap.array.to(torch.float32)) ** 2).sum(
+            dim=[-3, -2, -1]
+        )
         if not compute_derivative:
             return target
         dEnergy = -k * target
@@ -1095,6 +1095,14 @@ class DensityPotential(Potential):
         coords_batched.grad.zero_()
 
         return grad_atom.reshape(num_ensembles, ensemble_size, *grad_atom.shape[1:])
+    
+    def density_kl_loss(self, pred, temperature=1.0):
+        pred_soft = torch.nn.functional.softmax(pred.flatten() / temperature, dim=0)
+        target_soft = torch.nn.functional.softmax(self.density_calculator.xmap.array.flatten() / temperature, dim=0)
+        
+        return torch.nn.functional.kl_div(
+            pred_soft.log(), target_soft, reduction='sum'
+        )
 
     def interpolate_density_at_positions(
         self, positions: torch.Tensor, mode: str = "tricubic"
@@ -1230,7 +1238,7 @@ def get_potentials():
                 "guidance_interval": 1,
                 "guidance_weight": 0.05,
                 "resampling_weight": 0.1,
-                "bond_buffer": 0.20,
+                "bond_buffer": ExponentialInterpolation(start=0.05, end=0.5, alpha=-2.0),
                 "angle_buffer": 0.20,
                 "clash_buffer": 0.15,
             }
@@ -1264,7 +1272,7 @@ def get_potentials():
                 "guidance_interval": 1,
                 "guidance_weight": 0.05,
                 "resampling_weight": 0.1,
-                "buffer": ExponentialInterpolation(start=0.1, end=0.5, alpha=-2.0),
+                "buffer": ExponentialInterpolation(start=0.05, end=0.5, alpha=-2.0),
                 "aa_bond_length": 1.32,  # Angstroms
                 "nucleotide_bond_length": 1.60,  # Angstroms
             }

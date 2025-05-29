@@ -10,13 +10,14 @@ from boltz.main import (
     PairformerArgs,
     MSAModuleArgs,
 )
-from boltz.model.potentials.potentials import get_potentials
+# from boltz.model.potentials.potentials import get_potentials
 from boltz.model.modules.utils import default, center_random_augmentation
 from boltz.model.loss.diffusion import weighted_rigid_align
 from dataclasses import asdict, dataclass
 
 from adp3d.utils.utility import try_gpu
 from adp3d.data.structure import Structure
+from adp3d.adp.modules.potentials import get_potentials
 from boltz.main import check_inputs, process_inputs, BoltzProcessedInput
 from boltz.data.module.inference import BoltzInferenceDataModule
 from boltz.data.types import Manifest
@@ -162,6 +163,9 @@ class DiffusionStepper:
             manifest=Manifest.load(processed_dir / "manifest.json"),
             targets_dir=processed_dir / "structures",
             msa_dir=processed_dir / "msa",
+            constraints_dir=(processed_dir / "constraints")
+            if (processed_dir / "constraints").exists()
+            else None,
         )
 
         # Create data module
@@ -170,6 +174,7 @@ class DiffusionStepper:
             target_dir=processed.targets_dir,
             msa_dir=processed.msa_dir,
             num_workers=2,  # NOTE: default in Boltz1
+            constraints_dir=processed.constraints_dir,
         )
 
         return data_module
@@ -254,7 +259,7 @@ class DiffusionStepper:
 
     def initialize_diffusion(
         self,
-        num_samples: Optional[int] = None,
+        ensemble_size: Optional[int] = None,
         sampling_steps: Optional[int] = None,
         init_coords: Optional[torch.Tensor] = None,
         extra_potentials: Optional[list] = None,
@@ -263,7 +268,7 @@ class DiffusionStepper:
 
         Parameters
         ----------
-        num_samples : Optional[int], optional
+        ensemble_size : Optional[int], optional
             Number of samples to generate, by default the number from predict_args in initialization
         sampling_steps : Optional[int], optional
             Number of sampling steps, by default the number from predict_args in initialization
@@ -280,7 +285,7 @@ class DiffusionStepper:
             sampling_steps, self.model.structure_module.num_sampling_steps
         )
         diffusion_samples = default(
-            num_samples, self.model.predict_args["diffusion_samples"]
+            ensemble_size, self.model.predict_args["diffusion_samples"]
         )
         atom_mask = self.cached_representations["feats"]["atom_pad_mask"]
 
@@ -292,11 +297,10 @@ class DiffusionStepper:
                 potentials.extend(extra_potentials)
                 # reverse the ordering so substructure and density come before physicality potentials
                 potentials.reverse()
-
-            diffusion_samples = self.model.steering_args["num_particles"]
-            energy_traj = torch.empty((diffusion_samples, 0), device=self.device)
+            num_particles = self.model.steering_args["num_particles"]
+            energy_traj = torch.empty((num_particles, 0), device=self.device)
             resample_weights = torch.ones(
-                diffusion_samples, device=self.device
+                num_particles, device=self.device
             ).reshape(-1, self.model.steering_args["num_particles"])
             steering_vars["energy_traj"] = energy_traj
             steering_vars["resample_weights"] = resample_weights
@@ -304,13 +308,13 @@ class DiffusionStepper:
 
         if self.model.steering_args["guidance_update"]:
             scaled_guidance_update = torch.zeros(
-                (diffusion_samples, *atom_mask.shape[1:], 3),
+                (diffusion_samples * num_particles, *atom_mask.shape[1:], 3),
                 dtype=torch.float32,
                 device=self.device,
             )
             steering_vars["scaled_guidance_update"] = scaled_guidance_update
 
-        atom_mask = atom_mask.repeat_interleave(diffusion_samples, 0)
+        atom_mask = atom_mask.repeat_interleave(diffusion_samples * num_particles, 0)
         shape = (*atom_mask.shape, 3)
 
         # get the schedule, which is returned as (sigma, gamma) tuple, and pair up with the next sigma and gamma
@@ -345,7 +349,7 @@ class DiffusionStepper:
         self,
         structure: Union[Structure, torch.Tensor],
         noising_steps: int = 0,
-        num_samples: Optional[int] = None,
+        ensemble_size: Optional[int] = None,
         sampling_steps: Optional[int] = None,
         selector: NDArray[np.bool_] = None,
         extra_potentials: Optional[list] = None,
@@ -361,7 +365,7 @@ class DiffusionStepper:
             have an attribute (e.g. `coords`) that contains the coordinates.
         noising_steps : int, optional
             Number of noising steps.
-        num_samples : Optional[int], optional
+        ensemble_size : Optional[int], optional
             Number of samples to generate (used to determine diffusion multiplicity),
             by default the value from predict_args.
         sampling_steps : Optional[int], optional
@@ -381,7 +385,7 @@ class DiffusionStepper:
             sampling_steps, self.model.structure_module.num_sampling_steps
         )
         diffusion_samples = default(
-            num_samples, self.model.predict_args["diffusion_samples"]
+            ensemble_size, self.model.predict_args["diffusion_samples"]
         )
 
         if noising_steps < 0 or num_sampling_steps - noising_steps <= 0:
@@ -401,10 +405,10 @@ class DiffusionStepper:
                 potentials.extend(extra_potentials)
                 # reverse the ordering so substructure and density come before physicality potentials
                 potentials.reverse()
-            diffusion_samples = self.model.steering_args["num_particles"]
-            energy_traj = torch.empty((diffusion_samples, 0), device=self.device)
+            num_particles = self.model.steering_args["num_particles"]
+            energy_traj = torch.empty((num_particles, 0), device=self.device)
             resample_weights = torch.ones(
-                diffusion_samples, device=self.device
+                num_particles, device=self.device
             ).reshape(-1, self.model.steering_args["num_particles"])
             steering_vars["energy_traj"] = energy_traj
             steering_vars["resample_weights"] = resample_weights
@@ -412,13 +416,13 @@ class DiffusionStepper:
 
         if self.model.steering_args["guidance_update"]:
             scaled_guidance_update = torch.zeros(
-                (diffusion_samples, *atom_mask.shape[1:], 3),
+                (diffusion_samples * num_particles, *atom_mask.shape[1:], 3),
                 dtype=torch.float32,
                 device=self.device,
             )
             steering_vars["scaled_guidance_update"] = scaled_guidance_update
 
-        atom_mask = atom_mask.repeat_interleave(diffusion_samples, 0)
+        atom_mask = atom_mask.repeat_interleave(diffusion_samples * num_particles, 0)
 
         shape = (*atom_mask.shape, 3)
 
@@ -437,10 +441,10 @@ class DiffusionStepper:
                 torch.tensor(structure.coor, device=self.device)
                 .float()
                 .unsqueeze(0)
-                .repeat(diffusion_samples, 1, 1)
+                .repeat(diffusion_samples * num_particles, 1, 1)
             )
         elif isinstance(structure, torch.Tensor):
-            atom_coords = structure  # NOTE: should be handled in optimizer
+            atom_coords = structure.reshape(-1, structure.shape[-2], 3)  # NOTE: should be handled in optimizer
 
         atom_coords = pad_dim(atom_coords, 1, shape[1] - atom_coords.shape[1])
         init_coords = atom_coords.clone()
@@ -471,7 +475,7 @@ class DiffusionStepper:
         self,
         structure: Union[Structure, torch.Tensor],
         selection: NDArray[np.int_],
-        num_samples: Optional[int] = None,
+        ensemble_size: Optional[int] = None,
         sampling_steps: Optional[int] = None,
         invert: bool = False,
         extra_potentials: Optional[list] = None,
@@ -489,7 +493,7 @@ class DiffusionStepper:
             Initial structure or set of atomic coordinates.
         selection : NDArray[np.int_]
             Selector indices for atoms in structure.
-        num_samples : Optional[int], optional
+        ensemble_size : Optional[int], optional
             Number of samples to generate, by default None.
         sampling_steps : Optional[int], optional
             Total number of sampling steps in the diffusion process, by default None.
@@ -508,7 +512,7 @@ class DiffusionStepper:
             sampling_steps, self.model.structure_module.num_sampling_steps
         )
         diffusion_samples = default(
-            num_samples, self.model.predict_args["diffusion_samples"]
+            ensemble_size, self.model.predict_args["diffusion_samples"]
         )
 
         atom_mask = self.cached_representations["feats"]["atom_pad_mask"]
@@ -522,10 +526,10 @@ class DiffusionStepper:
                 potentials.extend(extra_potentials)
                 # reverse the ordering so substructure and density come before physicality potentials
                 potentials.reverse()
-            diffusion_samples = self.model.steering_args["num_particles"]
-            energy_traj = torch.empty((diffusion_samples, 0), device=self.device)
+            num_particles = self.model.steering_args["num_particles"]
+            energy_traj = torch.empty((num_particles, 0), device=self.device)
             resample_weights = torch.ones(
-                diffusion_samples, device=self.device
+                num_particles, device=self.device
             ).reshape(-1, self.model.steering_args["num_particles"])
             steering_vars["energy_traj"] = energy_traj
             steering_vars["resample_weights"] = resample_weights
@@ -533,13 +537,13 @@ class DiffusionStepper:
 
         if self.model.steering_args["guidance_update"]:
             scaled_guidance_update = torch.zeros(
-                (diffusion_samples, *atom_mask.shape[1:], 3),
+                (diffusion_samples * num_particles, *atom_mask.shape[1:], 3),
                 dtype=torch.float32,
                 device=self.device,
             )
             steering_vars["scaled_guidance_update"] = scaled_guidance_update
 
-        atom_mask = atom_mask.repeat_interleave(diffusion_samples, 0)
+        atom_mask = atom_mask.repeat_interleave(diffusion_samples * num_particles, 0)
 
         shape = (*atom_mask.shape, 3)
 
@@ -561,10 +565,10 @@ class DiffusionStepper:
                 torch.tensor(structure.coor, device=self.device)
                 .float()
                 .unsqueeze(0)
-                .repeat(diffusion_samples, 1, 1)
+                .repeat(diffusion_samples * num_particles, 1, 1)
             )
         elif isinstance(structure, torch.Tensor):
-            init_coords = structure  # NOTE: should be handled in optimizer
+            init_coords = structure.reshape(-1, structure.shape[-2], 3)  # NOTE: should be handled in optimizer
 
         init_coords = pad_dim(init_coords, 1, shape[1] - init_coords.shape[1])
 
