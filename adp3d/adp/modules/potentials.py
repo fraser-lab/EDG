@@ -19,6 +19,7 @@ from adp3d.utils.interpolation import (
 )
 
 from .density.density import XMap_torch, DifferentiableTransformer
+from .density.loss import batched_hybrid_loss, batched_squared_error
 
 
 class Potential(ABC):
@@ -342,53 +343,55 @@ class BondPotential(HarmonicPotential, DistancePotential):
             return pair_index, (k, lower_bounds, upper_bounds), None
 
         rep_atoms = torch.where(feats["r_set_to_rep_atom"][0])[1]
-        
+
         atom_offsets = torch.zeros_like(res_token_indices, dtype=torch.long)
         bond_lengths = torch.zeros_like(res_token_indices, dtype=torch.float)
-        
+
         atom_offsets[is_aa_mask] = 1
         atom_offsets[is_rna_mask] = -3
         atom_offsets[is_dna_mask] = -2
-        
+
         partner_offsets = torch.zeros_like(res_token_indices, dtype=torch.long)
         partner_offsets[is_aa_mask] = -1
         partner_offsets[is_rna_mask] = -11
         partner_offsets[is_dna_mask] = -10
-        
+
         bond_lengths[is_aa_mask] = parameters["aa_bond_length"]
         bond_lengths[is_rna_mask | is_dna_mask] = parameters["nucleotide_bond_length"]
-        
+
         atom_indices = rep_atoms + atom_offsets
         partner_indices = rep_atoms + partner_offsets
-        
+
         chain_ids = atom_chain_id[atom_indices[any_biomol]]
         unique_chains, inverse_indices = chain_ids.unique(return_inverse=True)
-        
+
         is_chain_start = torch.zeros(any_biomol.sum(), dtype=torch.bool, device=device)
         is_chain_start[0] = True
         is_chain_start[1:] = chain_ids[1:] != chain_ids[:-1]
-        
+
         valid_pairs = ~is_chain_start
-        
+
         if not valid_pairs.any():
             return pair_index, (k, lower_bounds, upper_bounds), None
-        
+
         biomol_indices = torch.where(any_biomol)[0]
         valid_biomol_indices = biomol_indices[valid_pairs]
-        
-        pair_index = torch.stack([
-            atom_indices[valid_biomol_indices - 1],
-            partner_indices[valid_biomol_indices]
-        ])
-        
+
+        pair_index = torch.stack(
+            [
+                atom_indices[valid_biomol_indices - 1],
+                partner_indices[valid_biomol_indices],
+            ]
+        )
+
         bond_lengths_selected = bond_lengths[valid_biomol_indices]
         lower_value = 1 - parameters["buffer"]
         upper_value = 1 + parameters["buffer"]
-        
+
         lower_bounds = bond_lengths_selected * lower_value
         upper_bounds = bond_lengths_selected * upper_value
         k = torch.ones_like(lower_bounds)
-        
+
         return pair_index, (k, lower_bounds, upper_bounds), None
 
 
@@ -888,9 +891,8 @@ class DensityPotential(Potential):
         b_factors: torch.Tensor,
         occupancies: torch.Tensor,
         k: float = 1.0,
-        compute_derivative: bool = False,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
-        """Compute the energy function from the interpolated density.
+        """Compute the energy function from the density.
 
         Parameters
         ----------
@@ -909,23 +911,22 @@ class DensityPotential(Potential):
 
         Returns
         -------
-        Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]
-            Energy values, and optionally derivatives
+        torch.Tensor
+            Energy values
         """
         # target = -(value * self.density_calculator.xmap.array.to(torch.float32)).sum(
         #     dim=[-3, -2, -1]
         # )
-        target = (
-            (value - self.density_calculator.xmap.array.to(torch.float32)) ** 2
-        ).sum(dim=[-3, -2, -1])
+        # target = (
+        #     (value - self.density_calculator.xmap.array.to(torch.float32)) ** 2
+        # ).sum(dim=[-3, -2, -1])
+        target = self.density_calculator.xmap.array.float().expand(value.shape[0], -1, -1, -1)
+        # energy = batched_hybrid_loss(
+        #     value, target, alpha=0.7
+        # ).squeeze()
+        energy = batched_squared_error(value, target)
 
-        if not compute_derivative:
-            return target
-
-        # dEnergy = -k * target
-        dEnergy = 2 * k * target  # [batch, n_atoms]
-
-        return target, dEnergy
+        return energy
 
     def compute_function_ensemble(
         self,
@@ -934,7 +935,6 @@ class DensityPotential(Potential):
         b_factors: torch.Tensor,
         occupancies: torch.Tensor,
         k: float = 1.0,
-        compute_derivative: bool = False,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         """Compute the energy function from the interpolated density.
 
@@ -950,13 +950,11 @@ class DensityPotential(Potential):
             Occupancies for the atoms, shape [batch, n_atoms]
         k : float, optional
             Scaling factor for the energy, by default 1.0
-        compute_derivative : bool, optional
-            Whether to compute derivatives, by default False
 
         Returns
         -------
-        Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]
-            Energy values, and optionally derivatives
+        torch.Tensor
+            Energy values
         """
         value = value.sum(
             dim=1
@@ -964,14 +962,13 @@ class DensityPotential(Potential):
         # target = -(value * self.density_calculator.xmap.array.to(torch.float32)).sum(
         #     dim=[-3, -2, -1]
         # )
-        target = ((value - self.density_calculator.xmap.array.to(torch.float32)) ** 2).sum(
-            dim=[-3, -2, -1]
-        )
-        if not compute_derivative:
-            return target
-        dEnergy = -k * target
-        # dEnergy = 2 * k * target  # [batch, n_atoms]
-        return target, dEnergy
+        target = self.density_calculator.xmap.array.float().expand(value.shape[0], -1, -1, -1)
+        # energy = batched_hybrid_loss(
+        #     value, target, alpha=0.7
+        # )
+        energy = batched_squared_error(value, target)
+
+        return energy
 
     def compute_gradient(
         self,
@@ -1002,7 +999,6 @@ class DensityPotential(Potential):
         energy = self.compute_function(
             value,
             **args,
-            compute_derivative=False,
         )
 
         energy.backward(torch.ones_like(energy))
@@ -1086,23 +1082,13 @@ class DensityPotential(Potential):
             coords_batched, expanded_args, index, compute_gradient=True
         )
         value = value.reshape(num_ensembles, ensemble_size, *value.shape[1:])
-        energy = self.compute_function_ensemble(
-            value, **expanded_args, compute_derivative=False
-        )
+        energy = self.compute_function_ensemble(value, **expanded_args)
 
         energy.backward(torch.ones_like(energy))
         grad_atom = coords_batched.grad.clone()
         coords_batched.grad.zero_()
 
         return grad_atom.reshape(num_ensembles, ensemble_size, *grad_atom.shape[1:])
-    
-    def density_kl_loss(self, pred, temperature=1.0):
-        pred_soft = torch.nn.functional.softmax(pred.flatten() / temperature, dim=0)
-        target_soft = torch.nn.functional.softmax(self.density_calculator.xmap.array.flatten() / temperature, dim=0)
-        
-        return torch.nn.functional.kl_div(
-            pred_soft.log(), target_soft, reduction='sum'
-        )
 
     def interpolate_density_at_positions(
         self, positions: torch.Tensor, mode: str = "tricubic"
@@ -1236,9 +1222,19 @@ def get_potentials():
         PoseBustersPotential(
             parameters={
                 "guidance_interval": 1,
-                "guidance_weight": 0.05,
+                "guidance_weight": Ramp(
+                    base=0.05,
+                    start_t=0.05,
+                    end_t=0.25,
+                    ramps=[
+                        {"target": 0.3, "alpha": -2},
+                    ]
+                    * 3,
+                ),
                 "resampling_weight": 0.1,
-                "bond_buffer": ExponentialInterpolation(start=0.05, end=0.5, alpha=-2.0),
+                "bond_buffer": ExponentialInterpolation(
+                    start=0.05, end=0.5, alpha=-2.0
+                ),
                 "angle_buffer": 0.20,
                 "clash_buffer": 0.15,
             }
@@ -1270,7 +1266,15 @@ def get_potentials():
         BondPotential(
             parameters={
                 "guidance_interval": 1,
-                "guidance_weight": 0.05,
+                "guidance_weight": Ramp(
+                    base=0.05,
+                    start_t=0.05,
+                    end_t=0.25,
+                    ramps=[
+                        {"target": 0.3, "alpha": -2},
+                    ]
+                    * 3,
+                ),
                 "resampling_weight": 0.1,
                 "buffer": ExponentialInterpolation(start=0.05, end=0.5, alpha=-2.0),
                 "aa_bond_length": 1.32,  # Angstroms

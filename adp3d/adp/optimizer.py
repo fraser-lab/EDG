@@ -26,7 +26,7 @@ from boltz.model.model import Boltz1
 from boltz.data.feature.pad import pad_dim
 from boltz.model.potentials.schedules import (
     PiecewiseStepFunction,
-    PiecewiseStepComposer,
+    PiecewiseSchedule,
     ExponentialInterpolation,
     ExponentialInterpolationWithBounds,
     ResolutionScaling,
@@ -308,18 +308,23 @@ class DensityGuidedDiffusion:
         resolution_scale = ExponentialInterpolationWithBounds(
             start=resolution, end=8.0, alpha=0.0, start_t=0.1, end_t=0.75
         )
+        density_schedule = ExponentialInterpolationWithBounds(
+            start=0., end=0.2, alpha=-2.0, start_t=0.05, end_t=0.3
+        )
 
         density_potential = DensityPotential(
             xmap=self.density_calculator.xmap,
             parameters={
                 "guidance_interval": 1,
                 "guidance_weight": ResolutionScaling(
-                    resolution_scale, resolution, base=0.01
+                    resolution_scale, resolution, base=density_schedule # NOTE: for L2
+                    # resolution_scale, resolution, base=0.5 # NOTE: for hybrid
                 ),
                 "resolution": resolution_scale,
                 # "resampling_weight": 0.0,
                 "resampling_weight": PiecewiseStepFunction(
-                    [0.25, 0.5, 0.75], [0.01, 0.01, 0.1, 1.0]
+                    [0.25, 0.75], [0.01, 0.1, 1.0] # NOTE: for L2
+                    # [0.25, 0.75], [1., 5., 10.]  # NOTE: for hybrid
                 ),
                 "elements": elements,
                 "b_factors": b_factors,
