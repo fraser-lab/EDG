@@ -2,20 +2,12 @@
 Guiding sampling of conformational ensembles with density information.
 
 ## Installation
-Install using conda or mamba:
+Install using [pixi](https://pixi.sh/v0.47.0/).
 
-conda:
 ```bash
-conda env create -n EDG
-conda install python=3.10.*
-pip install boltz
-pip install -e .
-```
-
-mamba:
-```bash
-mamba env create -n EDG
-mamba install python=3.10.*
-pip install boltz
-pip install -e .
+# install pixi
+curl -fsSL https://pixi.sh/install.sh | sh
+git clone git@github.com:fraser-lab/EDG.git
+cd EDG
+pixi install
 ```
