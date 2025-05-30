@@ -350,17 +350,17 @@ class XMap_torch:
             f_density = to_f_density(self.array)
 
             shape = torch.tensor(f_density.shape, device=device)
-            grid_z, grid_y, grid_x = torch.meshgrid(
+            grid_x, grid_y, grid_z = torch.meshgrid(
                 [torch.arange(-(s // 2), -(s // 2) + s, device=device) for s in shape],
                 indexing="ij",
             )
 
             # Calculate physical frequencies based on voxel spacing
-            freq_z = grid_z / (shape[0] * self.voxelspacing[0])
+            freq_x = grid_x / (shape[0] * self.voxelspacing[0])
             freq_y = grid_y / (shape[1] * self.voxelspacing[1])
-            freq_x = grid_x / (shape[2] * self.voxelspacing[2])
+            freq_z = grid_z / (shape[2] * self.voxelspacing[2])
 
-            radial_freq = torch.sqrt(freq_z**2 + freq_y**2 + freq_x**2)
+            radial_freq = torch.sqrt(freq_x**2 + freq_y**2 + freq_z**2)
             cutoff_freq = 1.0 / target_resolution
 
             if filter_type == "hamming":
@@ -378,13 +378,13 @@ class XMap_torch:
 
         original_shape = torch.tensor(self.shape, device=device, dtype=torch.float32)
 
-        z_norm = (
+        x_norm = (
             torch.arange(new_shape[0], device=device, dtype=torch.float32)
         ) / new_shape[0].float()
         y_norm = (
             torch.arange(new_shape[1], device=device, dtype=torch.float32)
         ) / new_shape[1].float()
-        x_norm = (
+        z_norm = (
             torch.arange(new_shape[2], device=device, dtype=torch.float32)
         ) / new_shape[2].float()
 
