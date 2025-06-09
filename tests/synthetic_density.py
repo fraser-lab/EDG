@@ -12,22 +12,22 @@ from typing import Optional, Union, Tuple, List, NamedTuple
 import torch
 import numpy as np
 
-from adp3d.data import Structure
-from adp3d.data.structure import Ensemble
-from adp3d.qfit.volume import XMap, Resolution, GetSpaceGroup, GridParameters
-from adp3d.qfit.unitcell import UnitCell
-from adp3d.adp.modules.density.density import (
+from edg.data import Structure
+from edg.data.structure import Ensemble
+from edg.qfit.volume import XMap, Resolution, GetSpaceGroup, GridParameters
+from edg.qfit.unitcell import UnitCell
+from edg.edg.modules.density.density import (
     DifferentiableTransformer,
     XMap_torch,
     DensityParameters,
 )
-from adp3d.data.io import structure_to_density_input
-from adp3d.data.sf import (
+from edg.data.io import structure_to_density_input
+from edg.data.sf import (
     ATOM_STRUCTURE_FACTORS,
     ELECTRON_SCATTERING_FACTORS,
     ATOMIC_NUM_TO_ELEMENT,
 )
-from adp3d.utils.utility import try_gpu
+from edg.utils.utility import try_gpu
 
 
 class SyntheticDensityGenerator:
@@ -397,78 +397,81 @@ if __name__ == "__main__":
     # pdb_5sop = Structure.fromfile("/home/kchrispens/adp-replicate/tests/resources/mac1_synthetic/5SOP_modified.pdb")
     # pdb_5soq = Structure.fromfile("/home/kchrispens/adp-replicate/tests/resources/mac1_synthetic/5SOQ_modified.pdb")
     # pdb_5sq8 = Structure.fromfile("/home/kchrispens/adp-replicate/tests/resources/mac1_synthetic/5SQ8_modified.pdb")
+    pdb = Structure.fromfile("/home/kchrispens/adp-replicate/_notebooks/testing_more_AWA/boltz_results_test_more_AWA/predictions/test_more_AWA/boltz_out_more_AWA.cif")
 
     # ensemble = Ensemble([pdb_5sop, pdb_5soq, pdb_5sq8])
-    # ref_map_file = "/home/kchrispens/adp-replication/tests/resources/mac1_synthetic/5soq-sf.mtz"
+    # ref_map_file = "/home/kchrispens/adp-replicate/tests/resources/mac1_synthetic/5soq-sf.mtz"
+    ref_map_file = "/home/kchrispens/adp-replicate/tests/resources/more_AWA/rfree_2A_Waltconf_1.ccp4"
 
     # density_generator = SyntheticDensityGenerator(ensemble, ref_map_file)
+    density_generator = SyntheticDensityGenerator(pdb, ref_map_file, resolution=2.)
 
-    # density = density_generator.generate_map()
+    density = density_generator.generate_map(shift=False)
 
-    # density_generator.save_map("/home/kchrispens/adp-replicate/tests/resources/mac1_synthetic/5sop_5soq_5sq8.ccp4", density)
+    density_generator.save_map("/home/kchrispens/adp-replicate/tests/resources/more_AWA/boltz_out.ccp4", density)
 
     # generate synthetic AAAWAAA data
-    pdb = Structure.fromfile(
-        "/home/kchrispens/adp-replicate/tests/resources/unfold/unfold_altconf.cif"
-    )
+    # pdb = Structure.fromfile(
+    #     "/home/kchrispens/adp-replicate/tests/resources/unfold/unfold_altconf.cif"
+    # )
 
-    unit_cell = UnitCell(40.0, 40.0, 40.0)
+    # unit_cell = UnitCell(40.0, 40.0, 40.0)
 
-    density_generator = SyntheticDensityGenerator(
-        structure=pdb, resolution=8.0, unit_cell=unit_cell, em_mode=False
-    )
-    density = density_generator.generate_map(
-        b_factor_scale=1.0, occupancy_scale=1.0, shift=False
-    )
-    density_generator.save_map(
-        "/home/kchrispens/adp-replicate/tests/resources/unfold/unfold_altconf_8.ccp4",
-        density,
-    )
+    # density_generator = SyntheticDensityGenerator(
+    #     structure=pdb, resolution=8.0, unit_cell=unit_cell, em_mode=False
+    # )
+    # density = density_generator.generate_map(
+    #     b_factor_scale=1.0, occupancy_scale=1.0, shift=False
+    # )
+    # density_generator.save_map(
+    #     "/home/kchrispens/adp-replicate/tests/resources/unfold/unfold_altconf_8.ccp4",
+    #     density,
+    # )
 
-    density_generator = SyntheticDensityGenerator(
-        structure=pdb, resolution=4.0, unit_cell=unit_cell, em_mode=False
-    )
-    density = density_generator.generate_map(
-        b_factor_scale=1.0, occupancy_scale=1.0, shift=False
-    )
-    density_generator.save_map(
-        "/home/kchrispens/adp-replicate/tests/resources/unfold/unfold_altconf_4.ccp4",
-        density,
-    )
+    # density_generator = SyntheticDensityGenerator(
+    #     structure=pdb, resolution=4.0, unit_cell=unit_cell, em_mode=False
+    # )
+    # density = density_generator.generate_map(
+    #     b_factor_scale=1.0, occupancy_scale=1.0, shift=False
+    # )
+    # density_generator.save_map(
+    #     "/home/kchrispens/adp-replicate/tests/resources/unfold/unfold_altconf_4.ccp4",
+    #     density,
+    # )
 
-    density_generator = SyntheticDensityGenerator(
-        structure=pdb, resolution=2.0, unit_cell=unit_cell, em_mode=False
-    )
-    density = density_generator.generate_map(
-        b_factor_scale=1.0, occupancy_scale=1.0, shift=False
-    )
-    density_generator.save_map(
-        "/home/kchrispens/adp-replicate/tests/resources/unfold/unfold_altconf_2.ccp4",
-        density,
-    )
+    # density_generator = SyntheticDensityGenerator(
+    #     structure=pdb, resolution=2.0, unit_cell=unit_cell, em_mode=False
+    # )
+    # density = density_generator.generate_map(
+    #     b_factor_scale=1.0, occupancy_scale=1.0, shift=False
+    # )
+    # density_generator.save_map(
+    #     "/home/kchrispens/adp-replicate/tests/resources/unfold/unfold_altconf_2.ccp4",
+    #     density,
+    # )
 
-    density_generator = SyntheticDensityGenerator(
-        structure=pdb, resolution=1.0, unit_cell=unit_cell, em_mode=False
-    )
-    density = density_generator.generate_map(
-        b_factor_scale=1.0, occupancy_scale=1.0, shift=False
-    )
-    density_generator.save_map(
-        "/home/kchrispens/adp-replicate/tests/resources/unfold/unfold_altconf_1.ccp4",
-        density,
-    )
+    # density_generator = SyntheticDensityGenerator(
+    #     structure=pdb, resolution=1.0, unit_cell=unit_cell, em_mode=False
+    # )
+    # density = density_generator.generate_map(
+    #     b_factor_scale=1.0, occupancy_scale=1.0, shift=False
+    # )
+    # density_generator.save_map(
+    #     "/home/kchrispens/adp-replicate/tests/resources/unfold/unfold_altconf_1.ccp4",
+    #     density,
+    # )
 
-    density_generator = SyntheticDensityGenerator(
-        structure=pdb, resolution=1.0, unit_cell=unit_cell, em_mode=False
-    )
-    density = density_generator.generate_map(
-        b_factor_scale=1.0, occupancy_scale=1.0, shift=False
-    )
-    density_generator.save_map(
-        "/home/kchrispens/adp-replicate/tests/resources/unfold/unfold_altconf_4_downsampled_from_1_brickwall_filtered.ccp4",
-        density,
-        downsample_to=4.0,
-    )
+    # density_generator = SyntheticDensityGenerator(
+    #     structure=pdb, resolution=1.0, unit_cell=unit_cell, em_mode=False
+    # )
+    # density = density_generator.generate_map(
+    #     b_factor_scale=1.0, occupancy_scale=1.0, shift=False
+    # )
+    # density_generator.save_map(
+    #     "/home/kchrispens/adp-replicate/tests/resources/unfold/unfold_altconf_4_downsampled_from_1_brickwall_filtered.ccp4",
+    #     density,
+    #     downsample_to=4.0,
+    # )
 
-    # pdb.coor = pdb.coor - density_generator.center
-    # pdb.tofile("/home/kchrispens/adp-replicate/tests/resources/unfold/unfold_altconf_shifted.cif")
+    # # pdb.coor = pdb.coor - density_generator.center
+    # # pdb.tofile("/home/kchrispens/adp-replicate/tests/resources/unfold/unfold_altconf_shifted.cif")

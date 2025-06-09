@@ -5,17 +5,17 @@ from pathlib import Path
 from scipy.stats import pearsonr
 import numpy as np
 
-from adp3d.qfit.volume import XMap, Resolution, GridParameters, UnitCell, GetSpaceGroup
+from edg.qfit.volume import XMap, Resolution, GridParameters, UnitCell, GetSpaceGroup
 
-from adp3d import Structure
+from edg import Structure
 
-from adp3d.data.sf import (
+from edg.data.sf import (
     ATOM_STRUCTURE_FACTORS,
     ELECTRON_SCATTERING_FACTORS,
     ATOMIC_NUM_TO_ELEMENT,
 )
 
-from adp3d.adp.modules.density.density import (
+from edg.edg.modules.density.density import (
     DifferentiableTransformer,
     XMap_torch,
     DensityParameters,
@@ -23,14 +23,14 @@ from adp3d.adp.modules.density.density import (
 )
 
 # Import the new CUDA implementation
-from adp3d.adp.modules.ops.dilate_points_cuda import (
+from edg.edg.modules.ops.dilate_points_cuda import (
     dilate_atom_centric,
     DilateAtomCentricCUDA,
 )
 
-from adp3d.data.io import structure_to_density_input
+from edg.data.io import structure_to_density_input
 
-from adp3d.utils.utility import try_gpu
+from edg.utils.utility import try_gpu
 
 
 class TestAtomDensityCUDA:

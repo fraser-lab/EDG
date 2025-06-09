@@ -32,26 +32,26 @@ from boltz.model.potentials.schedules import (
     ResolutionScaling,
 )
 
-from adp3d.data import Structure
-from adp3d.adp.modules.density.density import (
+from edg.data import Structure
+from edg.edg.modules.density.density import (
     DifferentiableTransformer,
     XMap_torch,
     normalize,
     to_f_density,
     scale_map,
 )
-from adp3d.data.structure import Ensemble
-from adp3d.qfit.volume import XMap
-from adp3d.data.io import structure_to_density_input
-from adp3d.data.sf import (
+from edg.data.structure import Ensemble
+from edg.qfit.volume import XMap
+from edg.data.io import structure_to_density_input
+from edg.data.sf import (
     ATOM_STRUCTURE_FACTORS,
     ELECTRON_SCATTERING_FACTORS,
     ATOMIC_NUM_TO_ELEMENT,
 )
-from adp3d.adp.modules.diffusion import DiffusionStepper
-from adp3d.adp.modules.guided_diffusion import DensityGuidedDiffusionStepper
-from adp3d.utils.utility import try_gpu
-from adp3d.adp.modules.potentials import SubstructurePotential, DensityPotential
+from edg.edg.modules.diffusion import DiffusionStepper
+from edg.edg.modules.guided_diffusion import DensityGuidedDiffusionStepper
+from edg.utils.utility import try_gpu
+from edg.edg.modules.potentials import SubstructurePotential, DensityPotential
 
 
 @torch.jit.script
@@ -201,9 +201,10 @@ class DensityGuidedDiffusion:
             mask = self.density_calculator.create_mask(coords.squeeze(0), 5.0)
 
         self.y = scale_map(self.y, initial_model_map, mask)
+        self.density_calculator.xmap.array = self.y # set array to appropriate level
 
         scaled_map_path = self.output_path / "scaled_experimental_map.ccp4"
-        self.density_calculator.xmap.tofile(str(scaled_map_path), density=self.y)
+        self.density_calculator.xmap.tofile(str(scaled_map_path))
         print(f"Saved scaled experimental map to {scaled_map_path}")
 
         diffusion_args = BoltzDiffusionParams(step_scale=step_scale)
@@ -309,21 +310,24 @@ class DensityGuidedDiffusion:
             start=resolution, end=8.0, alpha=0.0, start_t=0.1, end_t=0.75
         )
         density_schedule = ExponentialInterpolationWithBounds(
-            start=0., end=0.2, alpha=-2.0, start_t=0.05, end_t=0.3
+            start=0., end=0.3, alpha=-2.0, start_t=0.05, end_t=0.3
         )
 
         density_potential = DensityPotential(
             xmap=self.density_calculator.xmap,
             parameters={
                 "guidance_interval": 1,
-                "guidance_weight": ResolutionScaling(
-                    resolution_scale, resolution, base=density_schedule # NOTE: for L2
-                    # resolution_scale, resolution, base=0.5 # NOTE: for hybrid
+                # "guidance_weight": ResolutionScaling(
+                #     resolution_scale, resolution, base=density_schedule # NOTE: for L2
+                #     # resolution_scale, resolution, base=0.5 # NOTE: for hybrid
+                # ),
+                "guidance_weight": PiecewiseSchedule(
+                    [0,(1-125/200)], [0, 0.1, 0]
                 ),
                 "resolution": resolution_scale,
                 # "resampling_weight": 0.0,
                 "resampling_weight": PiecewiseStepFunction(
-                    [0.25, 0.75], [0.01, 0.1, 1.0] # NOTE: for L2
+                    [0.05, 0.75], [0.1, 1.0, 10.0] # NOTE: for L2
                     # [0.25, 0.75], [1., 5., 10.]  # NOTE: for hybrid
                 ),
                 "elements": elements,

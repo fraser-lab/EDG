@@ -221,8 +221,8 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/f4/24/2a3e3df732393fed8b3ebf2ec078f05546de641fe1b667ee316ec1dcf3b7/webencodings-0.5.1-py2.py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/5a/84/44687a29792a70e111c5c477230a72c4b957d88d16141199bf9acb7537a3/websocket_client-1.8.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/8b/fd/10fcf7d86f49b1a11096d6846257485ef32e3d3d322e8a7fdea5b127880c/yarl-1.20.0-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
-      - pypi: .
-      - pypi: ../boltz
+      - pypi: ../boltz-1
+      - pypi: ./
 packages:
 - conda: https://conda.anaconda.org/conda-forge/linux-64/_libgcc_mutex-0.1-conda_forge.tar.bz2
   sha256: fe51de6107f9edc7aa4f786a70f4a883943bc9d39b3bb7307c04c41410990726
@@ -245,10 +245,10 @@ packages:
   purls: []
   size: 23621
   timestamp: 1650670423406
-- pypi: .
+- pypi: ./
   name: adp3d
   version: 0.1.0
-  sha256: cb592a53b975bfcdc8c15c63cccefb9f5559c7ddf05881097b66a6db0d1dd3e5
+  sha256: b4dc546c7d1ad229b5be4d6d8f339c0dab87c556a6bdc8e4dfc07a508078432d
   requires_dist:
   - setuptools
   - numpy>=1.26.4,<2
@@ -511,7 +511,7 @@ packages:
   - webencodings
   - tinycss2>=1.1.0,<1.5 ; extra == 'css'
   requires_python: '>=3.9'
-- pypi: ../boltz
+- pypi: ../boltz-1
   name: boltz
   version: 1.0.0
   sha256: 1ca2d4fd2d0cc70fcfdc008537d9af321d11842b6e8364f2d29d438a2ef826cf

@@ -1,24 +1,24 @@
 import pytest
-import adp3d
+import edg
 import gemmi
 import numpy as np
 import torch
 
-from adp3d import DensityGuidedDiffusion
+from edg import DensityGuidedDiffusion
 from pathlib import Path
-from adp3d.utils.utility import try_gpu
-from adp3d.adp.modules.density.density import downsample_fft, to_density
-from adp3d.data.io import structure_to_density_input
+from edg.utils.utility import try_gpu
+from edg.edg.modules.density.density import downsample_fft, to_density
+from edg.data.io import structure_to_density_input
 from einops import rearrange, repeat
 
 @pytest.fixture(scope="class")
 def sim_data_7pzt():
     file = str(
-        Path(Path(adp3d.__file__).parent.parent, "tests", "resources", "7pzt_sim.cif")
+        Path(Path(edg.__file__).parent.parent, "tests", "resources", "7pzt_sim.cif")
     )
     map = str(
         Path(
-            Path(adp3d.__file__).parent.parent,
+            Path(edg.__file__).parent.parent,
             "tests",
             "resources",
             "7pzt_sim_map.ccp4",
@@ -35,7 +35,7 @@ class TestOptimizationsWithSetup:
         coords, elements, resolution = structure_to_density_input(sim_data_7pzt[0])
         self.coords = coords.to(device)
         self.elements = elements.to(device)
-        self.adp = adp3d.ADP3D(
+        self.adp = edg.ADP3D(
             y=sim_data_7pzt[1],
             structure=sim_data_7pzt[0],
             all_atom=True,

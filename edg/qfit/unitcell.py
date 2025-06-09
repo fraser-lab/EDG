@@ -5,7 +5,7 @@ from itertools import product
 import numpy as np
 import numpy.linalg as la
 
-from adp3d.qfit import spacegroups
+from edg.qfit import spacegroups
 
 
 class UnitCell:

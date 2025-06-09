@@ -1,1 +1,0 @@
-from adp3d.data.structure import Structure

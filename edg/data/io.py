@@ -10,7 +10,7 @@ import gemmi
 import torch
 import numpy as np
 from typing import Union, Tuple
-from adp3d.utils.utility import DotDict
+from edg.utils.utility import DotDict
 from boltz.data.types import Structure as BoltzStructure
 from .structure import Structure, Ensemble
 from pathlib import Path

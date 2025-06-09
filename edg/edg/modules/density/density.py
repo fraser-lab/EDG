@@ -8,12 +8,12 @@ from numpy.typing import NDArray
 import warnings
 from einops import rearrange
 
-from adp3d.qfit.volume import XMap, GridParameters, Resolution
-from adp3d.qfit.unitcell import UnitCell
-from adp3d.qfit.spacegroups import GetSpaceGroup
-from adp3d.utils.quadrature import GaussLegendreQuadrature
-from adp3d.utils.interpolation import tricubic_interpolation_torch
-from adp3d.adp.modules.ops.dilate_points_cuda import dilate_atom_centric
+from edg.qfit.volume import XMap, GridParameters, Resolution
+from edg.qfit.unitcell import UnitCell
+from edg.qfit.spacegroups import GetSpaceGroup
+from edg.utils.quadrature import GaussLegendreQuadrature
+from edg.utils.interpolation import tricubic_interpolation_torch
+from edg.edg.modules.ops.dilate_points_cuda import dilate_atom_centric
 
 
 @dataclass

@@ -1,0 +1,1 @@
+from edg.data.structure import Structure

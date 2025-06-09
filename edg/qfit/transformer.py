@@ -6,7 +6,7 @@ Date: 16 Feb 2025
 
 import numpy as np
 from numpy.fft import irfftn
-from adp3d.qfit.unitcell import UnitCell
+from edg.qfit.unitcell import UnitCell
 
 class SFTransformer:
     def __init__(

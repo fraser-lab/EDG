@@ -14,7 +14,7 @@ from boltz.model.modules.utils import (
 import numpy as np
 from numpy.typing import NDArray
 
-from adp3d.adp.modules.diffusion import DiffusionStepper
+from edg.edg.modules.diffusion import DiffusionStepper
 
 
 def weighted_rigid_align(
@@ -591,9 +591,9 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
             )
 
         # Clamp to motif
-        # atom_coords_denoised[:, inverse_selector, :] = self.cached_diffusion_init[
-        #     "init_coords"
-        # ][:, inverse_selector, :]
+        atom_coords_denoised[:, inverse_selector, :] = self.cached_diffusion_init[
+            "init_coords"
+        ][:, inverse_selector, :]
 
         atom_coords_denoised_ensemble = atom_coords_denoised.reshape(
             num_ensembles, ensemble_size, n_atoms, 3

@@ -5,7 +5,7 @@ Author: Karson Chrispens (karson.chrispens@ucsf.edu)
 Date: 16 Jan 2024
 """
 
-import adp3d.utils.map as map
+import edg.utils.map as map
 
 config = map.ProcessingConfig(
     output_dir="tests/resources/1AZ5",

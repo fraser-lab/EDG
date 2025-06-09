@@ -1,12 +1,12 @@
 import pytest
-import adp3d
+import edg
 import gemmi
 import numpy as np
 import torch
 
-from adp3d import DensityGuidedDiffusion
+from edg import DensityGuidedDiffusion
 from pathlib import Path
-from adp3d.utils.utility import try_gpu
+from edg.utils.utility import try_gpu
 from einops import rearrange
 
 
@@ -18,7 +18,7 @@ def device():
 @pytest.fixture
 def cif_4yuo():
     file = str(
-        Path(Path(adp3d.__file__).parent.parent, "tests", "resources", "4yuo.cif")
+        Path(Path(edg.__file__).parent.parent, "tests", "resources", "4yuo.cif")
     )
     return file
 
@@ -26,7 +26,7 @@ def cif_4yuo():
 @pytest.fixture
 def cif_7pzt():
     file = str(
-        Path(Path(adp3d.__file__).parent.parent, "tests", "resources", "7pzt.cif")
+        Path(Path(edg.__file__).parent.parent, "tests", "resources", "7pzt.cif")
     )
     return file
 
@@ -34,7 +34,7 @@ def cif_7pzt():
 @pytest.fixture
 def density_4yuo():
     file = str(
-        Path(Path(adp3d.__file__).parent.parent, "tests", "resources", "4yuo.ccp4")
+        Path(Path(edg.__file__).parent.parent, "tests", "resources", "4yuo.ccp4")
     )
     return file
 
@@ -42,7 +42,7 @@ def density_4yuo():
 @pytest.fixture
 def sf_cif_7pzt():
     file = str(
-        Path(Path(adp3d.__file__).parent.parent, "tests", "resources", "7pzt-sf.cif")
+        Path(Path(edg.__file__).parent.parent, "tests", "resources", "7pzt-sf.cif")
     )
     return file
 
@@ -50,11 +50,11 @@ def sf_cif_7pzt():
 @pytest.fixture
 def sim_data_1az5():
     file = str(
-        Path(Path(adp3d.__file__).parent.parent, "tests", "resources", "1az5_sim.cif")
+        Path(Path(edg.__file__).parent.parent, "tests", "resources", "1az5_sim.cif")
     )
     map = str(
         Path(
-            Path(adp3d.__file__).parent.parent,
+            Path(edg.__file__).parent.parent,
             "tests",
             "resources",
             "1az5_sim_map.ccp4",
@@ -66,11 +66,11 @@ def sim_data_1az5():
 @pytest.fixture
 def sim_data_7pzt():
     file = str(
-        Path(Path(adp3d.__file__).parent.parent, "tests", "resources", "7pzt_sim.cif")
+        Path(Path(edg.__file__).parent.parent, "tests", "resources", "7pzt_sim.cif")
     )
     map = str(
         Path(
-            Path(adp3d.__file__).parent.parent,
+            Path(edg.__file__).parent.parent,
             "tests",
             "resources",
             "7pzt_sim_map.ccp4",
@@ -92,14 +92,14 @@ def adp_init(density_4yuo, cif_4yuo, device):
 @pytest.fixture
 def peptides():
     complete_peptide = str(
-        Path(Path(adp3d.__file__).parent.parent, "tests", "resources", "GGG.cif")
+        Path(Path(edg.__file__).parent.parent, "tests", "resources", "GGG.cif")
     )
     incomplete_peptide = str(
-        Path(Path(adp3d.__file__).parent.parent, "tests", "resources", "G_G.cif")
+        Path(Path(edg.__file__).parent.parent, "tests", "resources", "G_G.cif")
     )
     altconf_peptide = str(
         Path(
-            Path(adp3d.__file__).parent.parent, "tests", "resources", "GGG_altconf.pdb"
+            Path(edg.__file__).parent.parent, "tests", "resources", "GGG_altconf.pdb"
         )
     )
     return complete_peptide, incomplete_peptide, altconf_peptide
@@ -136,7 +136,7 @@ def test_gamma(sim_data_1az5, device):
     values = torch.where(mask, flat_X, torch.tensor(float("nan")))
     center_shift = torch.nanmean(values, dim=0)
     X -= center_shift  # centering
-    adp = adp3d.ADP3D(
+    adp = edg.ADP3D(
         y=sim_data_1az5[1], seq=S, structure=sim_data_1az5[0], device=device
     )
 
@@ -164,7 +164,7 @@ def test_gamma(sim_data_1az5, device):
     values = torch.where(mask, flat_X_aa, torch.tensor(float("nan")))
     center_shift = torch.nanmean(values, dim=0)
     X_aa -= center_shift  # centering
-    adp = adp3d.ADP3D(
+    adp = edg.ADP3D(
         y=sim_data_1az5[1],
         seq=S,
         structure=sim_data_1az5[0],
@@ -289,7 +289,7 @@ def test_ll_density_and_grad(sim_data_7pzt, device):
     values = torch.where(mask, flat_X, torch.tensor(float("nan")))
     center_shift = torch.nanmean(values, dim=0)
     X -= center_shift  # centering
-    adp = adp3d.ADP3D(
+    adp = edg.ADP3D(
         y=sim_data_7pzt[1],
         seq=S,
         structure=sim_data_7pzt[0],

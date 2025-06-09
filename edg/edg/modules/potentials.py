@@ -13,7 +13,7 @@ import torch.nn.functional as F
 
 from boltz.data import const
 from boltz.model.potentials.schedules import *
-from adp3d.utils.interpolation import (
+from edg.utils.interpolation import (
     trilinear_interpolation_torch,
     tricubic_interpolation_torch,
 )
@@ -273,8 +273,8 @@ class AbsDihedralPotential(DihedralPotential):
         return phi, grad
 
 
-# class PoseBustersPotential(FlatBottomPotential, DistancePotential):
-class PoseBustersPotential(HarmonicPotential, DistancePotential):
+class PoseBustersPotential(FlatBottomPotential, DistancePotential):
+# class PoseBustersPotential(HarmonicPotential, DistancePotential):
     def compute_args(self, feats, parameters):
         pair_index = feats["rdkit_bounds_index"][0]
         lower_bounds = feats["rdkit_lower_bounds"][0].clone()
@@ -312,7 +312,8 @@ class ConnectionsPotential(FlatBottomPotential, DistancePotential):
         return pair_index, (k, lower_bounds, upper_bounds), None
 
 
-class BondPotential(HarmonicPotential, DistancePotential):
+# class BondPotential(HarmonicPotential, DistancePotential):
+class BondPotential(FlatBottomPotential, DistancePotential):
     def compute_args(self, feats, parameters):
         device = feats["atom_pad_mask"].device
         pair_index = torch.empty(2, 0, dtype=torch.long, device=device)
@@ -1222,15 +1223,16 @@ def get_potentials():
         PoseBustersPotential(
             parameters={
                 "guidance_interval": 1,
-                "guidance_weight": Ramp(
-                    base=0.05,
-                    start_t=0.05,
-                    end_t=0.25,
-                    ramps=[
-                        {"target": 0.3, "alpha": -2},
-                    ]
-                    * 3,
-                ),
+                "guidance_weight": 0.01,
+                # "guidance_weight": Ramp(
+                #     base=0.05,
+                #     start_t=0.00,
+                #     end_t=0.25,
+                #     ramps=[
+                #         {"target": 0.3, "alpha": -2},
+                #     ]
+                #     * 3,
+                # ),
                 "resampling_weight": 0.1,
                 "bond_buffer": ExponentialInterpolation(
                     start=0.05, end=0.5, alpha=-2.0
@@ -1266,15 +1268,16 @@ def get_potentials():
         BondPotential(
             parameters={
                 "guidance_interval": 1,
-                "guidance_weight": Ramp(
-                    base=0.05,
-                    start_t=0.05,
-                    end_t=0.25,
-                    ramps=[
-                        {"target": 0.3, "alpha": -2},
-                    ]
-                    * 3,
-                ),
+                "guidance_weight": 0.01,
+                # "guidance_weight": Ramp(
+                #     base=0.05,
+                #     start_t=0.00,
+                #     end_t=0.25,
+                #     ramps=[
+                #         {"target": 0.3, "alpha": -2},
+                #     ]
+                #     * 3,
+                # ),
                 "resampling_weight": 0.1,
                 "buffer": ExponentialInterpolation(start=0.05, end=0.5, alpha=-2.0),
                 "aa_bond_length": 1.32,  # Angstroms

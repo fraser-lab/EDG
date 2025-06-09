@@ -15,9 +15,9 @@ from boltz.model.modules.utils import default, center_random_augmentation
 from boltz.model.loss.diffusion import weighted_rigid_align
 from dataclasses import asdict, dataclass
 
-from adp3d.utils.utility import try_gpu
-from adp3d.data.structure import Structure
-from adp3d.adp.modules.potentials import get_potentials
+from edg.utils.utility import try_gpu
+from edg.data.structure import Structure
+from edg.edg.modules.potentials import get_potentials
 from boltz.main import check_inputs, process_inputs, BoltzProcessedInput
 from boltz.data.module.inference import BoltzInferenceDataModule
 from boltz.data.types import Manifest
@@ -173,7 +173,7 @@ class DiffusionStepper:
             manifest=processed.manifest,
             target_dir=processed.targets_dir,
             msa_dir=processed.msa_dir,
-            num_workers=2,  # NOTE: default in Boltz1
+            num_workers=8,  # NOTE: default in Boltz1 is 2
             constraints_dir=processed.constraints_dir,
         )
 

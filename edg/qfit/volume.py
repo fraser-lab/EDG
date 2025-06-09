@@ -9,8 +9,8 @@ import io
 import numpy as np
 from scipy.ndimage import map_coordinates
 
-from adp3d.qfit.spacegroups import GetSpaceGroup
-from adp3d.qfit.unitcell import UnitCell
+from edg.qfit.spacegroups import GetSpaceGroup
+from edg.qfit.unitcell import UnitCell
 
 
 logger = logging.getLogger(__name__)
