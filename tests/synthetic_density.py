@@ -397,7 +397,8 @@ if __name__ == "__main__":
     # pdb_5sop = Structure.fromfile("/home/kchrispens/adp-replicate/tests/resources/mac1_synthetic/5SOP_modified.pdb")
     # pdb_5soq = Structure.fromfile("/home/kchrispens/adp-replicate/tests/resources/mac1_synthetic/5SOQ_modified.pdb")
     # pdb_5sq8 = Structure.fromfile("/home/kchrispens/adp-replicate/tests/resources/mac1_synthetic/5SQ8_modified.pdb")
-    pdb = Structure.fromfile("/home/kchrispens/adp-replicate/_notebooks/testing_more_AWA/boltz_results_test_more_AWA/predictions/test_more_AWA/boltz_out_more_AWA.cif")
+    # pdb = Structure.fromfile("/home/kchrispens/adp-replicate/_notebooks/testing_more_AWA/boltz_results_test_more_AWA/predictions/test_more_AWA/boltz_out_more_AWA.cif")
+    pdb = Structure.fromfile("/home/kchrispens/qfit-3.0/tests/more_AWA/multiconformer_model2.pdb")
 
     # ensemble = Ensemble([pdb_5sop, pdb_5soq, pdb_5sq8])
     # ref_map_file = "/home/kchrispens/adp-replicate/tests/resources/mac1_synthetic/5soq-sf.mtz"
@@ -406,9 +407,9 @@ if __name__ == "__main__":
     # density_generator = SyntheticDensityGenerator(ensemble, ref_map_file)
     density_generator = SyntheticDensityGenerator(pdb, ref_map_file, resolution=2.)
 
-    density = density_generator.generate_map(shift=False)
+    density = density_generator.generate_map(shift=False) # , occupancy_scale=0.25)
 
-    density_generator.save_map("/home/kchrispens/adp-replicate/tests/resources/more_AWA/boltz_out.ccp4", density)
+    density_generator.save_map("/home/kchrispens/adp-replicate/tests/resources/more_AWA/qfit_out.ccp4", density)
 
     # generate synthetic AAAWAAA data
     # pdb = Structure.fromfile(

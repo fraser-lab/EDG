@@ -201,7 +201,7 @@ class DensityGuidedDiffusion:
             mask = self.density_calculator.create_mask(coords.squeeze(0), 5.0)
 
         self.y = scale_map(self.y, initial_model_map, mask)
-        self.density_calculator.xmap.array = self.y # set array to appropriate level
+        self.density_calculator.xmap.array = self.y  # set array to appropriate level
 
         scaled_map_path = self.output_path / "scaled_experimental_map.ccp4"
         self.density_calculator.xmap.tofile(str(scaled_map_path))
@@ -307,10 +307,10 @@ class DensityGuidedDiffusion:
         active = active.to(self.device).bool()
 
         resolution_scale = ExponentialInterpolationWithBounds(
-            start=resolution, end=8.0, alpha=0.0, start_t=0.1, end_t=0.75
+            start=resolution, end=8.0, alpha=0.0, start_t=(1-175/200), end_t=(1-150/200)
         )
         density_schedule = ExponentialInterpolationWithBounds(
-            start=0., end=0.3, alpha=-2.0, start_t=0.05, end_t=0.3
+            start=0.0, end=0.4, alpha=-2.0, start_t=(1-175/200), end_t=(1-150/200)
         )
 
         density_potential = DensityPotential(
@@ -322,14 +322,23 @@ class DensityGuidedDiffusion:
                 #     # resolution_scale, resolution, base=0.5 # NOTE: for hybrid
                 # ),
                 "guidance_weight": PiecewiseSchedule(
-                    [0,(1-125/200)], [0, 0.1, 0]
+                    [(1 - 175 / 200), (1 - 150 / 200), (1 - 125 / 200)],
+                    [
+                        0,
+                        ResolutionScaling(
+                            resolution_scale, resolution, base=density_schedule
+                        ),
+                        10,
+                        0,
+                    ],
                 ),
                 "resolution": resolution_scale,
-                # "resampling_weight": 0.0,
-                "resampling_weight": PiecewiseStepFunction(
-                    [0.05, 0.75], [0.1, 1.0, 10.0] # NOTE: for L2
-                    # [0.25, 0.75], [1., 5., 10.]  # NOTE: for hybrid
-                ),
+                "resampling_weight": 0.1,
+                # "resampling_weight": PiecewiseStepFunction(
+                #     [0.05, 0.75],
+                #     [0.1, 1.0, 10.0],  # NOTE: for L2
+                #     # [0.25, 0.75], [1., 5., 10.]  # NOTE: for hybrid
+                # ),
                 "elements": elements,
                 "b_factors": b_factors,
                 "occupancies": occupancies,

@@ -208,3 +208,7 @@ future/
 # pixi environments
 .pixi
 *.egg-info
+
+# Claude Code
+CLAUDE.local.md
+.claude

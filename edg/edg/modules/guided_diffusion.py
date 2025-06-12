@@ -577,11 +577,11 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
         )
 
         if align_to_input:
-            alignment_weights = (
-                alignment_weights.float()
-                if alignment_weights is not None
-                else inverse_selector.float()
-            )
+            if alignment_weights is not None:
+                alignment_weights = alignment_weights.float()
+            else:
+                # Expand inverse_selector to all ensemble members
+                alignment_weights = inverse_selector.float().unsqueeze(0).expand(multiplicity, -1)
 
             atom_coords_denoised = weighted_rigid_align(
                 atom_coords_denoised.float(),
@@ -591,9 +591,9 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
             )
 
         # Clamp to motif
-        atom_coords_denoised[:, inverse_selector, :] = self.cached_diffusion_init[
-            "init_coords"
-        ][:, inverse_selector, :]
+        # atom_coords_denoised[:, inverse_selector, :] = self.cached_diffusion_init[
+        #     "init_coords"
+        # ][:, inverse_selector, :]
 
         atom_coords_denoised_ensemble = atom_coords_denoised.reshape(
             num_ensembles, ensemble_size, n_atoms, 3

@@ -245,29 +245,6 @@ packages:
   purls: []
   size: 23621
   timestamp: 1650670423406
-- pypi: ./
-  name: adp3d
-  version: 0.1.0
-  sha256: b4dc546c7d1ad229b5be4d6d8f339c0dab87c556a6bdc8e4dfc07a508078432d
-  requires_dist:
-  - setuptools
-  - numpy>=1.26.4,<2
-  - torch>=2.7.0,<3
-  - pandas>=2.2.3,<3
-  - scikit-learn>=1.6.1,<2
-  - scipy>=1.13.1,<2
-  - tqdm>=4.67.1,<5
-  - matplotlib>=3.10.3,<4
-  - pytest>=8.3.5,<9
-  - mrcfile>=1.5.4,<2
-  - gemmi>=0.7.1,<0.8
-  - rdkit>=2025.3.2,<2026
-  - einops>=0.8.0,<0.9
-  - biopython>=1.84,<2
-  - opt-einsum>=3.4.0,<4
-  - notebook>=7.4.2,<8
-  requires_python: '>=3.10'
-  editable: true
 - pypi: https://files.pythonhosted.org/packages/0f/15/5bf3b99495fb160b63f95972b81750f18f7f4e02ad051373b669d17d44f2/aiohappyeyeballs-2.6.1-py3-none-any.whl
   name: aiohappyeyeballs
   version: 2.6.1
@@ -658,6 +635,29 @@ packages:
   sha256: 7266112468627868005106ec19cd0d722702d2b7d5912a28e19b826c3d37af49
   requires_dist:
   - six>=1.4.0
+- pypi: ./
+  name: edg
+  version: 0.1.0
+  sha256: 4071897a13e803b1bea33fbca041e3bfd9cb99adeb70de3b5c367f701d6c3c6b
+  requires_dist:
+  - setuptools
+  - numpy>=1.26.4,<2
+  - torch>=2.7.0,<3
+  - pandas>=2.2.3,<3
+  - scikit-learn>=1.6.1,<2
+  - scipy>=1.13.1,<2
+  - tqdm>=4.67.1,<5
+  - matplotlib>=3.10.3,<4
+  - pytest>=8.3.5,<9
+  - mrcfile>=1.5.4,<2
+  - gemmi>=0.7.1,<0.8
+  - rdkit>=2025.3.2,<2026
+  - einops>=0.8.0,<0.9
+  - biopython>=1.84,<2
+  - opt-einsum>=3.4.0,<4
+  - notebook>=7.4.2,<8
+  requires_python: '>=3.10'
+  editable: true
 - pypi: https://files.pythonhosted.org/packages/44/5a/f0b9ad6c0a9017e62d4735daaeb11ba3b6c009d69a26141b258cd37b5588/einops-0.8.0-py3-none-any.whl
   name: einops
   version: 0.8.0
