@@ -580,7 +580,6 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
             if alignment_weights is not None:
                 alignment_weights = alignment_weights.float()
             else:
-                # Expand inverse_selector to all ensemble members
                 alignment_weights = inverse_selector.float().unsqueeze(0).expand(multiplicity, -1)
 
             atom_coords_denoised = weighted_rigid_align(

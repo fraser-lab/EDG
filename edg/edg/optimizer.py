@@ -310,7 +310,7 @@ class DensityGuidedDiffusion:
             start=resolution, end=8.0, alpha=0.0, start_t=(1-175/200), end_t=(1-150/200)
         )
         density_schedule = ExponentialInterpolationWithBounds(
-            start=0.0, end=0.4, alpha=-2.0, start_t=(1-175/200), end_t=(1-150/200)
+            start=0.0, end=1.0, alpha=-2.0, start_t=(1-175/200), end_t=(1-150/200)
         )
 
         density_potential = DensityPotential(
@@ -328,12 +328,12 @@ class DensityGuidedDiffusion:
                         ResolutionScaling(
                             resolution_scale, resolution, base=density_schedule
                         ),
-                        10,
+                        8,
                         0,
                     ],
                 ),
                 "resolution": resolution_scale,
-                "resampling_weight": 0.1,
+                "resampling_weight": 0.5,
                 # "resampling_weight": PiecewiseStepFunction(
                 #     [0.05, 0.75],
                 #     [0.1, 1.0, 10.0],  # NOTE: for L2
@@ -365,7 +365,7 @@ class DensityGuidedDiffusion:
             substructure_potential = SubstructurePotential(
                 parameters={
                     "guidance_interval": 1,
-                    "guidance_weight": 0.01,
+                    "guidance_weight": 0.05,
                     "resampling_weight": 0.0,
                     "buffer": 0.2,
                     "denoising_selection": substructure_conditioning_kwargs.get(

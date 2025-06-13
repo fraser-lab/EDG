@@ -273,8 +273,8 @@ class AbsDihedralPotential(DihedralPotential):
         return phi, grad
 
 
-class PoseBustersPotential(FlatBottomPotential, DistancePotential):
-# class PoseBustersPotential(HarmonicPotential, DistancePotential):
+# class PoseBustersPotential(FlatBottomPotential, DistancePotential):
+class PoseBustersPotential(HarmonicPotential, DistancePotential):
     def compute_args(self, feats, parameters):
         pair_index = feats["rdkit_bounds_index"][0]
         lower_bounds = feats["rdkit_lower_bounds"][0].clone()
@@ -312,8 +312,8 @@ class ConnectionsPotential(FlatBottomPotential, DistancePotential):
         return pair_index, (k, lower_bounds, upper_bounds), None
 
 
-# class BondPotential(HarmonicPotential, DistancePotential):
-class BondPotential(FlatBottomPotential, DistancePotential):
+class BondPotential(HarmonicPotential, DistancePotential):
+# class BondPotential(FlatBottomPotential, DistancePotential):
     def compute_args(self, feats, parameters):
         device = feats["atom_pad_mask"].device
         pair_index = torch.empty(2, 0, dtype=torch.long, device=device)
@@ -600,7 +600,7 @@ class SubstructurePotential(HarmonicPotential):
                 None,
             )
 
-        reference_coords = self.parameters["reference_coords"]  # [n_atoms, 3]
+        reference_coords = self.parameters["reference_coords"]  # [..., n_atoms, 3]
         selection = self.parameters["denoising_selection"]  # [n_segment]
 
         if not isinstance(selection, torch.Tensor):
@@ -614,7 +614,7 @@ class SubstructurePotential(HarmonicPotential):
             inverse_selector[selection] = False
 
         index = torch.where(inverse_selector)[0].unsqueeze(0)
-        n_selected = index.shape[0]
+        n_selected = index.shape[1]
 
         lower_bounds = None
         upper_bounds = torch.full(
@@ -645,11 +645,65 @@ class SubstructurePotential(HarmonicPotential):
             Distances between current and reference coordinates, and optionally gradients
         """
         ref_coords = torch.zeros_like(coords)
-        ref_coords[..., index[0], :] = (
-            self.parameters["reference_coords"][..., index[0], :]
-            .to(dtype=coords.dtype, device=coords.device)
-            .flatten(0, 1)
+        reference_coords = self.parameters["reference_coords"]
+
+        if reference_coords.dim() == 2:
+            ref_coords_source = (
+                reference_coords[index[0], :]
+                .unsqueeze(0)
+                .expand(coords.shape[0], -1, -1)
+            )
+        elif reference_coords.dim() == 3:
+            if reference_coords.shape[0] == coords.shape[0]:
+                ref_coords_source = reference_coords[:, index[0], :]
+            else:
+                ref_coords_source = (
+                    reference_coords[0, index[0], :]
+                    .unsqueeze(0)
+                    .expand(coords.shape[0], -1, -1)
+                )
+        elif reference_coords.dim() == 4:
+            if coords.dim() == 4:
+                # 4D reference coords with 4D coords
+                if (
+                    reference_coords.shape[0] == coords.shape[0]
+                    and reference_coords.shape[1] == coords.shape[1]
+                ):
+                    ref_coords_source = reference_coords[:, :, index[0], :]
+                else:
+                    ref_coords_source = (
+                        reference_coords.expand(
+                            coords.shape[0], coords.shape[1], -1, -1
+                        )
+                    )[:, :, index[0], :]
+            elif coords.dim() == 3:
+                # 4D reference coords with 3D flattened coords (ensemble case)
+                # Flatten the reference coordinates to match the flattened ensemble coords
+                ref_flattened = reference_coords.reshape(
+                    -1, reference_coords.shape[-2], reference_coords.shape[-1]
+                )
+                if ref_flattened.shape[0] == coords.shape[0]:
+                    ref_coords_source = ref_flattened[:, index[0], :]
+                else:
+                    # Use first reference for all structures if shapes don't match
+                    ref_coords_source = (
+                        ref_flattened[0, index[0], :]
+                        .unsqueeze(0)
+                        .expand(coords.shape[0], -1, -1)
+                    )
+            else:
+                raise ValueError(
+                    f"Unsupported combination: {reference_coords.dim()}D reference with {coords.dim()}D coords"
+                )
+        else:
+            raise ValueError(
+                f"Reference coordinates must be 2D, 3D, or 4D, got {reference_coords.dim()}D."
+            )
+
+        ref_coords_source = ref_coords_source.to(
+            dtype=coords.dtype, device=coords.device
         )
+        ref_coords[..., index[0], :] = ref_coords_source
 
         r_ij = coords.index_select(-2, index[0]) - ref_coords.index_select(-2, index[0])
         r_ij_norm = torch.linalg.norm(r_ij, dim=-1)
@@ -660,7 +714,9 @@ class SubstructurePotential(HarmonicPotential):
         r_hat_ij = r_ij / r_ij_norm.unsqueeze(-1)
         r_hat_ij = torch.where(
             torch.isnan(r_hat_ij), torch.zeros_like(r_hat_ij), r_hat_ij
-        )
+        ).unsqueeze(
+            1
+        )  # must add this dimension to match the rest of the potential gradient shapes
 
         return r_ij_norm, r_hat_ij
 
@@ -694,39 +750,6 @@ class SubstructurePotential(HarmonicPotential):
             ).expand(num_ensembles * ensemble_size, -1, -1)
 
         result = super().compute_ensemble(coords, feats, parameters)
-        self.parameters["reference_coords"] = original_ref_coords
-
-        return result
-
-    def compute_gradient_ensemble(self, coords, feats, parameters):
-        """Compute the gradient of the potential for an ensemble of structures.
-        Parameters
-        ----------
-        coords : torch.Tensor
-            Atomic coordinates, shape [batch, n_ensembles, n_atoms, 3]
-        feats : Dict[str, Any]
-            Dictionary of features from network
-        parameters : Dict[str, Any]
-            Dictionary of parameters
-        Returns
-        -------
-        torch.Tensor
-            Gradient of the potential for the ensemble of structures.
-        """
-        num_ensembles, ensemble_size = coords.shape[:2]
-        original_ref_coords = self.parameters["reference_coords"]
-
-        if (
-            original_ref_coords.dim() == 3
-            and original_ref_coords.shape[0] == num_ensembles * ensemble_size
-        ):
-            self.parameters["reference_coords"] = original_ref_coords
-        elif original_ref_coords.dim() == 2:
-            self.parameters["reference_coords"] = original_ref_coords.unsqueeze(
-                0
-            ).expand(num_ensembles * ensemble_size, -1, -1)
-
-        result = super().compute_gradient_ensemble(coords, feats, parameters)
         self.parameters["reference_coords"] = original_ref_coords
 
         return result
@@ -921,7 +944,9 @@ class DensityPotential(Potential):
         # target = (
         #     (value - self.density_calculator.xmap.array.to(torch.float32)) ** 2
         # ).sum(dim=[-3, -2, -1])
-        target = self.density_calculator.xmap.array.float().expand(value.shape[0], -1, -1, -1)
+        target = self.density_calculator.xmap.array.float().expand(
+            value.shape[0], -1, -1, -1
+        )
         # energy = batched_hybrid_loss(
         #     value, target, alpha=0.7
         # ).squeeze()
@@ -963,7 +988,9 @@ class DensityPotential(Potential):
         # target = -(value * self.density_calculator.xmap.array.to(torch.float32)).sum(
         #     dim=[-3, -2, -1]
         # )
-        target = self.density_calculator.xmap.array.float().expand(value.shape[0], -1, -1, -1)
+        target = self.density_calculator.xmap.array.float().expand(
+            value.shape[0], -1, -1, -1
+        )
         # energy = batched_hybrid_loss(
         #     value, target, alpha=0.7
         # )
@@ -1223,7 +1250,7 @@ def get_potentials():
         PoseBustersPotential(
             parameters={
                 "guidance_interval": 1,
-                "guidance_weight": 0.01,
+                "guidance_weight": 0.05,
                 # "guidance_weight": Ramp(
                 #     base=0.05,
                 #     start_t=0.00,
@@ -1268,7 +1295,7 @@ def get_potentials():
         BondPotential(
             parameters={
                 "guidance_interval": 1,
-                "guidance_weight": 0.01,
+                "guidance_weight": 0.05,
                 # "guidance_weight": Ramp(
                 #     base=0.05,
                 #     start_t=0.00,
