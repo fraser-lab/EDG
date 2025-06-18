@@ -224,14 +224,23 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
 
         atom_coords_noisy = atom_coords + eps
 
-        atom_coords_denoised, _ = (
-            self.model.structure_module.preconditioned_network_forward(
-                atom_coords_noisy,
-                t_hat,
-                training=False,
-                network_condition_kwargs=network_condition_kwargs,
+        if self.model_version == "boltz1":
+            atom_coords_denoised, _ = (
+                self.model.structure_module.preconditioned_network_forward(
+                    atom_coords_noisy,
+                    t_hat,
+                    training=False,
+                    network_condition_kwargs=network_condition_kwargs,
+                )
             )
-        )
+        else:  # boltz2
+            atom_coords_denoised = (
+                self.model.structure_module.preconditioned_network_forward(
+                    atom_coords_noisy,
+                    t_hat,
+                    network_condition_kwargs=network_condition_kwargs,
+                )
+            )
 
         if align_to_input:
             alignment_weights = (
@@ -566,14 +575,23 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
 
         atom_coords_noisy = atom_coords + eps
 
-        atom_coords_denoised, _ = (
-            self.model.structure_module.preconditioned_network_forward(
-                atom_coords_noisy,
-                t_hat,
-                training=False,
-                network_condition_kwargs=network_condition_kwargs,
+        if self.model_version == "boltz1":
+            atom_coords_denoised, _ = (
+                self.model.structure_module.preconditioned_network_forward(
+                    atom_coords_noisy,
+                    t_hat,
+                    training=False,
+                    network_condition_kwargs=network_condition_kwargs,
+                )
             )
-        )
+        else:  # boltz2
+            atom_coords_denoised = (
+                self.model.structure_module.preconditioned_network_forward(
+                    atom_coords_noisy,
+                    t_hat,
+                    network_condition_kwargs=network_condition_kwargs,
+                )
+            )
 
         if align_to_input:
             if alignment_weights is not None:

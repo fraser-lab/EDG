@@ -762,21 +762,37 @@ class DiffusionStepper:
         atom_coords_noisy = atom_coords + eps
 
         with torch.no_grad():
-            atom_coords_denoised, _ = (
-                self.model.structure_module.preconditioned_network_forward(
-                    atom_coords_noisy,
-                    t_hat,
-                    training=False,
-                    network_condition_kwargs=dict(
-                        s_trunk=s,
-                        z_trunk=z,
-                        s_inputs=s_inputs,
-                        feats=feats,
-                        relative_position_encoding=relative_position_encoding,
-                        multiplicity=multiplicity,
-                    ),
+            if self.model_version == "boltz1":
+                atom_coords_denoised, _ = (
+                    self.model.structure_module.preconditioned_network_forward(
+                        atom_coords_noisy,
+                        t_hat,
+                        training=False,
+                        network_condition_kwargs=dict(
+                            s_trunk=s,
+                            z_trunk=z,
+                            s_inputs=s_inputs,
+                            feats=feats,
+                            relative_position_encoding=relative_position_encoding,
+                            multiplicity=multiplicity,
+                        ),
+                    )
                 )
-            )
+            else:  # boltz2
+                atom_coords_denoised = (
+                    self.model.structure_module.preconditioned_network_forward(
+                        atom_coords_noisy,
+                        t_hat,
+                        network_condition_kwargs=dict(
+                            s_trunk=s,
+                            z_trunk=z,
+                            s_inputs=s_inputs,
+                            feats=feats,
+                            relative_position_encoding=relative_position_encoding,
+                            multiplicity=multiplicity,
+                        ),
+                    )
+                )
 
         # Alignment reverse diffusion
         if alignment_reverse_diffusion:
