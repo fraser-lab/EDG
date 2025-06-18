@@ -544,7 +544,6 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
 
         eps = sqrt(noise_var) * torch.randn_like(atom_coords)
 
-
         selection = torch.from_numpy(selection).to(self.device)
         inverse_selector = torch.ones(n_atoms, device=self.device).bool()
         inverse_selector[selection] = False
