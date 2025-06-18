@@ -157,9 +157,6 @@ class TestSubstructurePotential:
         # Create identical coordinates for all ensemble members to test equal treatment
         identical_coords = coords[:, :1, :, :].expand(-1, ensemble_size, -1, -1).contiguous()
         
-        # Compute energy
-        energy = potential.compute_ensemble(identical_coords, mock_feats, potential.parameters)
-        
         # Compute gradients using the potential's method
         grad = potential.compute_gradient_ensemble(identical_coords, mock_feats, potential.parameters)
         
@@ -425,7 +422,7 @@ class TestSubstructurePotential:
         grad_mag_2 = torch.linalg.norm(grad[0, 2, 0, :])  # Gradient magnitude for member 2
         
         print(f"Gradient magnitudes: {grad_mag_0:.3f}, {grad_mag_1:.3f}, {grad_mag_2:.3f}")
-        print(f"Expected relationship: grad_mag_2 > grad_mag_1 > grad_mag_0")
+        print("Expected relationship: grad_mag_2 > grad_mag_1 > grad_mag_0")
         
         # For harmonic potential, gradient should increase with distance beyond buffer
         # All members are outside buffer (0.5), so gradients should increase with distance
@@ -474,8 +471,8 @@ class TestSubstructurePotential:
         
         # Member 0 at x=+1.0 should have positive gradient (pointing away from origin)
         # Member 1 at x=-2.0 should have negative gradient (pointing away from origin)
-        print(f"Member 0 (x=+1.0) should have positive gradient (pointing away from origin)")
-        print(f"Member 1 (x=-2.0) should have negative gradient (pointing away from origin)")
+        print("Member 0 (x=+1.0) should have positive gradient (pointing away from origin)")
+        print("Member 1 (x=-2.0) should have negative gradient (pointing away from origin)")
         
         assert grad_0[0] > 0, f"Member 0 gradient should be positive, got {grad_0[0]}"
         assert grad_1[0] < 0, f"Member 1 gradient should be negative, got {grad_1[0]}"
@@ -535,9 +532,9 @@ class TestSubstructurePotential:
         grad_1_x = grad[0, 1, 0, 0]  # Member 1, atom 0, x-component  
         grad_2_x = grad[0, 2, 0, 0]  # Member 2, atom 0, x-component
         
-        print(f"Positions: Member 0 at x=1.0, Member 1 at x=1.5, Member 2 at x=2.0")
-        print(f"Reference at x=0.0, buffer=0.2")
-        print(f"All members should have POSITIVE gradients (pointing away from origin)")
+        print("Positions: Member 0 at x=1.0, Member 1 at x=1.5, Member 2 at x=2.0")
+        print("Reference at x=0.0, buffer=0.2")
+        print("All members should have POSITIVE gradients (pointing away from origin)")
         print(f"Gradient x-components: {grad_0_x:.3f}, {grad_1_x:.3f}, {grad_2_x:.3f}")
         
         # All should be positive (pointing away from reference)
