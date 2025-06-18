@@ -325,10 +325,18 @@ class DensityGuidedDiffusion:
         active = active.to(self.device).bool()
 
         resolution_scale = ExponentialInterpolationWithBounds(
-            start=resolution, end=8.0, alpha=0.0, start_t=(1-175/200), end_t=(1-150/200)
+            start=resolution,
+            end=8.0,
+            alpha=5.0,
+            start_t=(1 - 175 / 200),
+            end_t=(1 - 150 / 200),
         )
         density_schedule = ExponentialInterpolationWithBounds(
-            start=0.0, end=1.0, alpha=-2.0, start_t=(1-175/200), end_t=(1-150/200)
+            start=0.0,
+            end=125,
+            alpha=90,
+            start_t=(1 - 175 / 200),
+            end_t=(1 - 150 / 200),
         )
 
         density_potential = DensityPotential(
@@ -343,20 +351,27 @@ class DensityGuidedDiffusion:
                     [(1 - 175 / 200), (1 - 150 / 200), (1 - 125 / 200)],
                     [
                         0,
-                        ResolutionScaling(
-                            resolution_scale, resolution, base=density_schedule
-                        ),
-                        8,
+                        density_schedule,
+                        125,
                         0,
                     ],
                 ),
                 "resolution": resolution_scale,
-                "resampling_weight": 0.5,
-                # "resampling_weight": PiecewiseStepFunction(
-                #     [0.05, 0.75],
-                #     [0.1, 1.0, 10.0],  # NOTE: for L2
-                #     # [0.25, 0.75], [1., 5., 10.]  # NOTE: for hybrid
-                # ),
+                "resampling_weight": PiecewiseSchedule(
+                    [(1 - 175 / 200), (1 - 150 / 200), (1 - 125 / 200)],
+                    [
+                        0.005,
+                        ExponentialInterpolationWithBounds(
+                            start=0.005,
+                            end=10,
+                            alpha=10,
+                            start_t=(1 - 175 / 200),
+                            end_t=(1 - 150 / 200),
+                        ),
+                        10,
+                        0.,
+                    ],
+                ),
                 "elements": elements,
                 "b_factors": b_factors,
                 "occupancies": occupancies,
@@ -385,7 +400,7 @@ class DensityGuidedDiffusion:
                     "guidance_interval": 1,
                     "guidance_weight": 0.05,
                     "resampling_weight": 0.0,
-                    "buffer": 0.2,
+                    "buffer": 0.5,
                     "denoising_selection": substructure_conditioning_kwargs.get(
                         "selection", np.array([], dtype=int)
                     ),
