@@ -109,7 +109,7 @@ def weighted_rigid_align(
 
 
 class DensityGuidedDiffusionStepper(DiffusionStepper):
-    """Controls fine-grained diffusion steps using the pretrained Boltz1 model and guidance via the diffusion update"""
+    """Controls fine-grained diffusion steps using pretrained Boltz models with density guidance via the diffusion update"""
 
     def step_steering(
         self,

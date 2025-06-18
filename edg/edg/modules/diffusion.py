@@ -3,11 +3,14 @@ import torch
 from math import sqrt
 
 from pathlib import Path
-from boltz.model.model import Boltz1
+from boltz.model.models.boltz1 import Boltz1
+from boltz.model.models.boltz2 import Boltz2
 from boltz.main import (
     BoltzDiffusionParams,
+    Boltz2DiffusionParams,
     BoltzSteeringParams,
     PairformerArgs,
+    PairformerArgsV2,
     MSAModuleArgs,
 )
 # from boltz.model.potentials.potentials import get_potentials
@@ -20,8 +23,9 @@ from edg.data.structure import Structure
 from edg.edg.modules.potentials import get_potentials
 from boltz.main import check_inputs, process_inputs, BoltzProcessedInput
 from boltz.data.module.inference import BoltzInferenceDataModule
+from boltz.data.module.inferencev2 import Boltz2InferenceDataModule
 from boltz.data.types import Manifest
-from boltz.data.feature.pad import pad_dim
+from boltz.data.pad import pad_dim
 import numpy as np
 from numpy.typing import NDArray
 
@@ -41,12 +45,13 @@ class PredictArgs:
 
 
 class DiffusionStepper:
-    """Controls fine-grained diffusion steps using the pretrained Boltz1 model.
+    """Controls fine-grained diffusion steps using pretrained Boltz models.
 
     This class provides granular control over the diffusion process by:
     1. Loading and caching model representations after the pairformer stage
     2. Enabling step-by-step diffusion with custom parameters
     3. Maintaining the original model weights and architecture
+    4. Supporting both Boltz-1 and Boltz-2 models
     """
 
     def __init__(
@@ -54,14 +59,15 @@ class DiffusionStepper:
         checkpoint_path: Union[str, Path],
         data_path: Union[str, Path],
         out_dir: Union[str, Path],
-        model: Optional[Boltz1] = None,
+        model: Optional[Union[Boltz1, Boltz2]] = None,
+        model_version: str = "boltz1",  # "boltz1" or "boltz2"
         use_msa_server: bool = True,
         predict_args: PredictArgs = PredictArgs(),
-        diffusion_args: BoltzDiffusionParams = BoltzDiffusionParams(),
+        diffusion_args: Union[BoltzDiffusionParams, Boltz2DiffusionParams] = None,
         steering_args: BoltzSteeringParams = BoltzSteeringParams(),
         device: Optional[torch.device] = None,
     ) -> None:
-        """Load Boltz-1 pretrained model weights and components from checkpoint.
+        """Load pretrained Boltz model weights and components from checkpoint.
 
         Parameters
         ----------
@@ -71,15 +77,16 @@ class DiffusionStepper:
             Path to the input data (folder of YAML files, FASTA files, or a FASTA or YAML file).
         out_dir : Union[str, Path]
             Path to the output directory.
-        model : Optional[Boltz1], optional
+        model : Optional[Union[Boltz1, Boltz2]], optional
             Preloaded model, by default None.
+        model_version : str, optional
+            Model version ("boltz1" or "boltz2"), by default "boltz1".
         use_msa_server : bool, optional
             Whether to use the MSA server, by default True.
         predict_args : PredictArgs, optional
             Arguments for model prediction, by default PredictArgs().
-        diffusion_args : BoltzDiffusionParams, optional
-            Diffusion parameters, by default BoltzDiffusionParams(). step_scale is most useful,
-            set to a lower value (default 1.638) to get more diversity.
+        diffusion_args : Union[BoltzDiffusionParams, Boltz2DiffusionParams], optional
+            Diffusion parameters, by default None (auto-selected based on model version).
         device : Optional[torch.device], optional
             Device to load the model to, by default None.
 
@@ -92,28 +99,68 @@ class DiffusionStepper:
         self.cache_path = Path(
             checkpoint_path
         ).parent  # NOTE: assumes checkpoint and ccd dictionary get downloaded to the same place
-
-        pairformer_args = PairformerArgs(use_trifast=(device != "cpu"))
-        msa_module_args = MSAModuleArgs(use_trifast=(device != "cpu"))
+        
+        self.model_version = model_version.lower()
+        if self.model_version not in ["boltz1", "boltz2"]:
+            raise ValueError(f"model_version must be 'boltz1' or 'boltz2', got {model_version}")
+        
+        # Set default diffusion args based on model version if not provided
+        if diffusion_args is None:
+            if self.model_version == "boltz1":
+                diffusion_args = BoltzDiffusionParams()
+            else:  # boltz2
+                diffusion_args = Boltz2DiffusionParams()
+        
+        # Set args based on model version
+        if self.model_version == "boltz1":
+            pairformer_args = PairformerArgs()
+        else:  # boltz2
+            pairformer_args = PairformerArgsV2()
+        
+        # MSAModuleArgs with correct parameters based on boltz repo
+        msa_args = MSAModuleArgs(
+            subsample_msa=True,  # Default from boltz repo
+            num_subsampled_msa=1024,  # Default from boltz repo
+            use_paired_feature=(self.model_version == "boltz2")
+        )
 
         if model is not None:
             self.model = model.to(self.device).eval()
         else:
-            self.model = (
-                Boltz1.load_from_checkpoint(
-                    checkpoint_path,
-                    strict=True,
-                    predict_args=asdict(predict_args),
-                    map_location="cpu",
-                    diffusion_process_args=asdict(diffusion_args),
-                    ema=False,
-                    steering_args=asdict(steering_args),
-                    pairformer_args=asdict(pairformer_args),
-                    msa_module_args=asdict(msa_module_args),
+            if self.model_version == "boltz1":
+                self.model = (
+                    Boltz1.load_from_checkpoint(
+                        checkpoint_path,
+                        strict=True,
+                        predict_args=asdict(predict_args),
+                        map_location="cpu",
+                        diffusion_process_args=asdict(diffusion_args),
+                        ema=False,
+                        use_kernels=True,  # Required parameter for Boltz1
+                        pairformer_args=asdict(pairformer_args),
+                        msa_args=asdict(msa_args),  # Correct parameter name
+                        steering_args=asdict(steering_args),
+                    )
+                    .to(self.device)
+                    .eval()
                 )
-                .to(self.device)
-                .eval()
-            )
+            else:  # boltz2
+                self.model = (
+                    Boltz2.load_from_checkpoint(
+                        checkpoint_path,
+                        strict=True,
+                        predict_args=asdict(predict_args),
+                        map_location="cpu",
+                        diffusion_process_args=asdict(diffusion_args),
+                        ema=False,
+                        pairformer_args=asdict(pairformer_args),
+                        msa_args=asdict(msa_args),  # Correct parameter name
+                        steering_args=asdict(steering_args),
+                        # affinity_mw_correction=True,  # Required parameter for Boltz2
+                    )
+                    .to(self.device)
+                    .eval()
+                )
 
         self.data_module = self.setup(
             data_path=data_path, out_dir=out_dir, use_msa_server=use_msa_server
@@ -129,7 +176,8 @@ class DiffusionStepper:
         data_path: Union[str, Path],
         out_dir: Union[str, Path],
         use_msa_server: bool = True,
-    ) -> BoltzInferenceDataModule:
+        method: str = "MD",
+    ) -> Union[BoltzInferenceDataModule, Boltz2InferenceDataModule]:
         """Get BoltzInferenceDataModule set up so the stepper can run on a batch.
 
         Parameters
@@ -139,22 +187,26 @@ class DiffusionStepper:
 
         Returns
         -------
-        BoltzInferenceDataModule
+        Union[BoltzInferenceDataModule, Boltz2InferenceDataModule]
             Data module containing processed inputs.
         """
         input_path = Path(data_path) if isinstance(data_path, str) else data_path
         out_dir = Path(out_dir) if isinstance(out_dir, str) else out_dir
         input_path = input_path.expanduser().resolve()
         ccd_path = self.cache_path / "ccd.pkl"
-        data = check_inputs(input_path, out_dir, False)
+        mol_dir = self.cache_path / "mols"
+        data = check_inputs(input_path)
 
         process_inputs(
             data=data,
             out_dir=out_dir,
             ccd_path=ccd_path,
+            mol_dir=mol_dir,  # Required for Boltz2
             use_msa_server=use_msa_server,
             msa_server_url="https://api.colabfold.com",  # NOTE: this requires internet access on cluster
             msa_pairing_strategy="greedy",
+            boltz2=(self.model_version == "boltz2"),  # Required parameter
+            preprocessing_threads=1,  # Default value
         )
 
         # Load processed data
@@ -166,16 +218,31 @@ class DiffusionStepper:
             constraints_dir=(processed_dir / "constraints")
             if (processed_dir / "constraints").exists()
             else None,
+            template_dir=processed_dir / "templates" if (processed_dir / "templates").exists() else None,
+            extra_mols_dir=processed_dir / "mols" if (processed_dir / "mols").exists() else None,
         )
 
-        # Create data module
-        data_module = BoltzInferenceDataModule(
-            manifest=processed.manifest,
-            target_dir=processed.targets_dir,
-            msa_dir=processed.msa_dir,
-            num_workers=8,  # NOTE: default in Boltz1 is 2
-            constraints_dir=processed.constraints_dir,
-        )
+        # Create data module based on model version
+        if self.model_version == "boltz1":
+            data_module = BoltzInferenceDataModule(
+                manifest=processed.manifest,
+                target_dir=processed.targets_dir,
+                msa_dir=processed.msa_dir,
+                num_workers=2,  # NOTE: default in Boltz1 is 2
+                constraints_dir=processed.constraints_dir,
+            )
+        else:  # boltz2
+            data_module = Boltz2InferenceDataModule(
+                manifest=processed.manifest,
+                target_dir=processed.targets_dir,
+                msa_dir=processed.msa_dir,
+                mol_dir=mol_dir,  # Required for Boltz2
+                num_workers=8,  # NOTE: default in Boltz2 is 8
+                constraints_dir=processed.constraints_dir,
+                template_dir=processed_dir / "templates" if (processed_dir / "templates").exists() else None,
+                extra_mols_dir=processed_dir / "mols" if (processed_dir / "mols").exists() else None,
+                override_method=method,  # Can be set if specific method conditioning is needed
+            )
 
         return data_module
 
@@ -241,12 +308,42 @@ class DiffusionStepper:
                 s = s_init + self.model.s_recycle(self.model.s_norm(s))
                 z = z_init + self.model.z_recycle(self.model.z_norm(z))
 
-                if not self.model.no_msa:
-                    z = z + self.model.msa_module(z, s_inputs, feats)
+                if self.model.use_templates:
+                    if self.model.is_template_compiled:
+                        template_module = self.model.template_module._orig_mod  # noqa: SLF001
+                    else:
+                        template_module = self.model.template_module
 
-                s, z = self.model.pairformer_module(
+                    z = z + template_module(
+                        z, feats, pair_mask, use_kernels=self.model.use_kernels
+                    )
+                
+                if self.model.is_msa_compiled:
+                    msa_module = self.model.msa_module._orig_mod  # noqa: SLF001
+                else:
+                    msa_module = self.model.msa_module
+
+                z = z + msa_module(
+                    z, s_inputs, feats, use_kernels=self.model.use_kernels
+                )
+
+                if self.model.is_pairformer_compiled:
+                    pairformer_module = self.model.pairformer_module._orig_mod  # noqa: SLF001
+                else:
+                    pairformer_module = self.model.pairformer_module
+
+                s, z = pairformer_module(
                     s, z, mask=mask, pair_mask=pair_mask
                 )
+
+            diffusion_conditioning = (
+                self.model.diffusion_conditioning(
+                    s_trunk=s,
+                    z_trunk=z,
+                    relative_position_encoding=relative_position_encoding,
+                    feats=feats,
+                )
+            )
 
             # Cache outputs
             self.cached_representations = {
@@ -255,6 +352,7 @@ class DiffusionStepper:
                 "s_inputs": s_inputs,
                 "relative_position_encoding": relative_position_encoding,
                 "feats": feats,
+                "diffusion_conditioning": diffusion_conditioning,
             }
 
     def initialize_diffusion(
@@ -351,7 +449,6 @@ class DiffusionStepper:
         noising_steps: int = 0,
         ensemble_size: Optional[int] = None,
         sampling_steps: Optional[int] = None,
-        selector: NDArray[np.bool_] = None,
         extra_potentials: Optional[list] = None,
     ) -> None:
         """

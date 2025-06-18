@@ -1,7 +1,7 @@
 """Optimize atomic models using density-guided diffusion.
 
 Implements density-guided diffusion for conformational optimization of atomic models
-using the Boltz-1 diffusion model as a prior and real-space map likelihood.
+using Boltz diffusion models (Boltz-1 or Boltz-2) as a prior and real-space map likelihood.
 
 Author: Karson Chrispens
 Created: 6 Aug 2024
@@ -21,9 +21,10 @@ import torch.nn.functional as F
 from tqdm import tqdm
 from einops import rearrange, repeat
 
-from boltz.main import BoltzDiffusionParams
-from boltz.model.model import Boltz1
-from boltz.data.feature.pad import pad_dim
+from boltz.main import BoltzDiffusionParams, Boltz2DiffusionParams
+from boltz.model.models.boltz1 import Boltz1
+from boltz.model.models.boltz2 import Boltz2
+from boltz.data.pad import pad_dim
 from boltz.model.potentials.schedules import (
     PiecewiseStepFunction,
     PiecewiseSchedule,
@@ -76,7 +77,7 @@ def cos_similarity(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
 class DensityGuidedDiffusion:
     """Density-guided diffusion optimizer.
 
-    Uses Boltz-1 diffusion model as a prior combined with
+    Uses Boltz diffusion models (Boltz-1 or Boltz-2) as a prior combined with
     real-space map likelihood for atomic model optimization.
     """
 
@@ -88,9 +89,10 @@ class DensityGuidedDiffusion:
         output_path: str,
         em: bool = False,
         resolution: Optional[float] = None,
-        step_scale: float = 1.638,  # default step scale, ok results down to 0.8 with higher diversity
+        step_scale: Optional[float] = None,  # Auto-set based on model version if None
         ckpt_path: Path = Path("~/.boltz/boltz1_conf.pkl").expanduser(),
-        model: Optional[Boltz1] = None,
+        model: Optional[Union[Boltz1, Boltz2]] = None,
+        model_version: str = "boltz1",  # "boltz1" or "boltz2"
         ccd_path: Path = Path("~/.boltz/ccd.pkl").expanduser(),
         device: Optional[str] = None,
         **kwargs,
@@ -112,11 +114,13 @@ class DensityGuidedDiffusion:
         resolution : float, optional
             Map resolution in Angstroms, by default None. MTZ files have resolution information, but CCP4, MRC, and MAP files do not.
         step_scale : float, optional
-            Scale factor for diffusion steps, by default 1.638
+            Scale factor for diffusion steps. Auto-set to 1.638 for Boltz-1 or 1.5 for Boltz-2 if None, by default None
         ckpt_path : Path, optional
-            Path to the Boltz1 model checkpoint, by default "~/.boltz/boltz1_conf.pkl"
-        model : Boltz1, optional
-            Pre-loaded Boltz1 model instance, by default None
+            Path to the model checkpoint, by default "~/.boltz/boltz1_conf.pkl"
+        model : Union[Boltz1, Boltz2], optional
+            Pre-loaded model instance, by default None
+        model_version : str, optional
+            Model version to use ("boltz1" or "boltz2"), by default "boltz1"
         ccd_path : Path, optional
             Path to the CCD dictionary file, by default "~/.boltz/ccd.pkl"
         device : str, optional
@@ -144,6 +148,14 @@ class DensityGuidedDiffusion:
             self.device = device
 
         self.em = em
+        self.model_version = model_version.lower()
+        if self.model_version not in ["boltz1", "boltz2"]:
+            raise ValueError(f"model_version must be 'boltz1' or 'boltz2', got {model_version}")
+        
+        # Set default step_scale based on model version if not provided
+        if step_scale is None:
+            step_scale = 1.638 if self.model_version == "boltz1" else 1.5
+        
         self.output_path = Path(output_path)
         os.makedirs(self.output_path, exist_ok=True)
 
@@ -207,12 +219,18 @@ class DensityGuidedDiffusion:
         self.density_calculator.xmap.tofile(str(scaled_map_path))
         print(f"Saved scaled experimental map to {scaled_map_path}")
 
-        diffusion_args = BoltzDiffusionParams(step_scale=step_scale)
+        # Create diffusion args based on model version
+        if self.model_version == "boltz1":
+            diffusion_args = BoltzDiffusionParams(step_scale=step_scale)
+        else:  # boltz2
+            diffusion_args = Boltz2DiffusionParams(step_scale=step_scale)
+        
         self.stepper = DensityGuidedDiffusionStepper(
             checkpoint_path=ckpt_path,
             data_path=input_path,
             out_dir=output_path,
             diffusion_args=diffusion_args,
+            model_version=self.model_version,
             device=self.device,
             model=model,
         )
