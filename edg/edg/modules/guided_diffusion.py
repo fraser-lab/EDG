@@ -184,14 +184,24 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
             ]["resample_weights"]
             score = None
 
-        network_condition_kwargs = dict(
-            s_trunk=s,
-            z_trunk=z,
-            s_inputs=s_inputs,
-            feats=feats,
-            relative_position_encoding=relative_position_encoding,
-            multiplicity=multiplicity,
-        )
+        # Conditionally construct network_condition_kwargs based on model version
+        if self.model_version == "boltz1":
+            network_condition_kwargs = dict(
+                s_trunk=s,
+                z_trunk=z,
+                s_inputs=s_inputs,
+                feats=feats,
+                relative_position_encoding=relative_position_encoding,
+                multiplicity=multiplicity,
+            )
+        else:  # boltz2
+            network_condition_kwargs = dict(
+                multiplicity=multiplicity,
+                s_inputs=s_inputs,
+                s_trunk=s,
+                feats=feats,
+                diffusion_conditioning=self.cached_representations["diffusion_conditioning"],
+            )
 
         steering_t = 1.0 - (self.current_step / num_sampling_steps)
         t_hat = sigma_tm * (1 + gamma)
@@ -538,14 +548,24 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
         ]
         score = None
 
-        network_condition_kwargs = dict(
-            s_trunk=s,
-            z_trunk=z,
-            s_inputs=s_inputs,
-            feats=feats,
-            relative_position_encoding=relative_position_encoding,
-            multiplicity=multiplicity,
-        )
+        # Conditionally construct network_condition_kwargs based on model version
+        if self.model_version == "boltz1":
+            network_condition_kwargs = dict(
+                s_trunk=s,
+                z_trunk=z,
+                s_inputs=s_inputs,
+                feats=feats,
+                relative_position_encoding=relative_position_encoding,
+                multiplicity=multiplicity,
+            )
+        else:  # boltz2
+            network_condition_kwargs = dict(
+                multiplicity=multiplicity,
+                s_inputs=s_inputs,
+                s_trunk=s,
+                feats=feats,
+                diffusion_conditioning=self.cached_representations["diffusion_conditioning"],
+            )
 
         steering_t = 1.0 - (self.current_step / num_sampling_steps)
         t_hat = sigma_tm * (1 + gamma)

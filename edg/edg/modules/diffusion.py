@@ -336,7 +336,7 @@ class DiffusionStepper:
                     s, z, mask=mask, pair_mask=pair_mask
                 )
 
-            diffusion_conditioning = (
+            q, c, to_keys, atom_enc_bias, atom_dec_bias, token_trans_bias = (
                 self.model.diffusion_conditioning(
                     s_trunk=s,
                     z_trunk=z,
@@ -344,6 +344,15 @@ class DiffusionStepper:
                     feats=feats,
                 )
             )
+
+            diffusion_conditioning = {
+                "q": q,
+                "c": c,
+                "to_keys": to_keys,
+                "atom_enc_bias": atom_enc_bias,
+                "atom_dec_bias": atom_dec_bias,
+                "token_trans_bias": token_trans_bias,
+            }
 
             # Cache outputs
             self.cached_representations = {
@@ -784,12 +793,11 @@ class DiffusionStepper:
                         atom_coords_noisy,
                         t_hat,
                         network_condition_kwargs=dict(
-                            s_trunk=s,
-                            z_trunk=z,
-                            s_inputs=s_inputs,
-                            feats=feats,
-                            relative_position_encoding=relative_position_encoding,
                             multiplicity=multiplicity,
+                            s_inputs=s_inputs,
+                            s_trunk=s,
+                            feats=feats,
+                            diffusion_conditioning=self.cached_representations["diffusion_conditioning"],
                         ),
                     )
                 )
