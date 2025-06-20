@@ -13,6 +13,7 @@ from boltz.main import (
     PairformerArgsV2,
     MSAModuleArgs,
 )
+
 # from boltz.model.potentials.potentials import get_potentials
 from boltz.model.modules.utils import default, center_random_augmentation
 from boltz.model.loss.diffusion import weighted_rigid_align
@@ -65,6 +66,7 @@ class DiffusionStepper:
         predict_args: PredictArgs = PredictArgs(),
         diffusion_args: Union[BoltzDiffusionParams, Boltz2DiffusionParams] = None,
         steering_args: BoltzSteeringParams = BoltzSteeringParams(),
+        method: str = None,
         device: Optional[torch.device] = None,
     ) -> None:
         """Load pretrained Boltz model weights and components from checkpoint.
@@ -87,6 +89,10 @@ class DiffusionStepper:
             Arguments for model prediction, by default PredictArgs().
         diffusion_args : Union[BoltzDiffusionParams, Boltz2DiffusionParams], optional
             Diffusion parameters, by default None (auto-selected based on model version).
+        steering_args : BoltzSteeringParams, optional
+            Steering parameters, by default BoltzSteeringParams().
+        method : str, optional
+            Method name for method conditioning, by default None (which is X-ray Diffraction).
         device : Optional[torch.device], optional
             Device to load the model to, by default None.
 
@@ -99,29 +105,31 @@ class DiffusionStepper:
         self.cache_path = Path(
             checkpoint_path
         ).parent  # NOTE: assumes checkpoint and ccd dictionary get downloaded to the same place
-        
+
         self.model_version = model_version.lower()
         if self.model_version not in ["boltz1", "boltz2"]:
-            raise ValueError(f"model_version must be 'boltz1' or 'boltz2', got {model_version}")
-        
+            raise ValueError(
+                f"model_version must be 'boltz1' or 'boltz2', got {model_version}"
+            )
+
         # Set default diffusion args based on model version if not provided
         if diffusion_args is None:
             if self.model_version == "boltz1":
                 diffusion_args = BoltzDiffusionParams()
             else:  # boltz2
                 diffusion_args = Boltz2DiffusionParams()
-        
+
         # Set args based on model version
         if self.model_version == "boltz1":
             pairformer_args = PairformerArgs()
         else:  # boltz2
             pairformer_args = PairformerArgsV2()
-        
+
         # MSAModuleArgs with correct parameters based on boltz repo
         msa_args = MSAModuleArgs(
             subsample_msa=True,  # Default from boltz repo
             num_subsampled_msa=1024,  # Default from boltz repo
-            use_paired_feature=(self.model_version == "boltz2")
+            use_paired_feature=(self.model_version == "boltz2"),
         )
 
         if model is not None:
@@ -163,7 +171,10 @@ class DiffusionStepper:
                 )
 
         self.data_module = self.setup(
-            data_path=data_path, out_dir=out_dir, use_msa_server=use_msa_server
+            data_path=data_path,
+            out_dir=out_dir,
+            use_msa_server=use_msa_server,
+            method=method,
         )
 
         self.cached_representations: Dict[str, torch.Tensor] = {}
@@ -176,7 +187,7 @@ class DiffusionStepper:
         data_path: Union[str, Path],
         out_dir: Union[str, Path],
         use_msa_server: bool = True,
-        method: str = "MD",
+        method: str = None,
     ) -> Union[BoltzInferenceDataModule, Boltz2InferenceDataModule]:
         """Get BoltzInferenceDataModule set up so the stepper can run on a batch.
 
@@ -218,8 +229,12 @@ class DiffusionStepper:
             constraints_dir=(processed_dir / "constraints")
             if (processed_dir / "constraints").exists()
             else None,
-            template_dir=processed_dir / "templates" if (processed_dir / "templates").exists() else None,
-            extra_mols_dir=processed_dir / "mols" if (processed_dir / "mols").exists() else None,
+            template_dir=processed_dir / "templates"
+            if (processed_dir / "templates").exists()
+            else None,
+            extra_mols_dir=processed_dir / "mols"
+            if (processed_dir / "mols").exists()
+            else None,
         )
 
         # Create data module based on model version
@@ -239,8 +254,12 @@ class DiffusionStepper:
                 mol_dir=mol_dir,  # Required for Boltz2
                 num_workers=8,  # NOTE: default in Boltz2 is 8
                 constraints_dir=processed.constraints_dir,
-                template_dir=processed_dir / "templates" if (processed_dir / "templates").exists() else None,
-                extra_mols_dir=processed_dir / "mols" if (processed_dir / "mols").exists() else None,
+                template_dir=processed_dir / "templates"
+                if (processed_dir / "templates").exists()
+                else None,
+                extra_mols_dir=processed_dir / "mols"
+                if (processed_dir / "mols").exists()
+                else None,
                 override_method=method,  # Can be set if specific method conditioning is needed
             )
 
@@ -317,7 +336,7 @@ class DiffusionStepper:
                     z = z + template_module(
                         z, feats, pair_mask, use_kernels=self.model.use_kernels
                     )
-                
+
                 if self.model.is_msa_compiled:
                     msa_module = self.model.msa_module._orig_mod  # noqa: SLF001
                 else:
@@ -332,9 +351,7 @@ class DiffusionStepper:
                 else:
                     pairformer_module = self.model.pairformer_module
 
-                s, z = pairformer_module(
-                    s, z, mask=mask, pair_mask=pair_mask
-                )
+                s, z = pairformer_module(s, z, mask=mask, pair_mask=pair_mask)
 
             q, c, to_keys, atom_enc_bias, atom_dec_bias, token_trans_bias = (
                 self.model.diffusion_conditioning(
@@ -406,9 +423,9 @@ class DiffusionStepper:
                 potentials.reverse()
             num_particles = self.model.steering_args["num_particles"]
             energy_traj = torch.empty((num_particles, 0), device=self.device)
-            resample_weights = torch.ones(
-                num_particles, device=self.device
-            ).reshape(-1, self.model.steering_args["num_particles"])
+            resample_weights = torch.ones(num_particles, device=self.device).reshape(
+                -1, self.model.steering_args["num_particles"]
+            )
             steering_vars["energy_traj"] = energy_traj
             steering_vars["resample_weights"] = resample_weights
             steering_vars["potentials"] = potentials
@@ -513,9 +530,9 @@ class DiffusionStepper:
                 potentials.reverse()
             num_particles = self.model.steering_args["num_particles"]
             energy_traj = torch.empty((num_particles, 0), device=self.device)
-            resample_weights = torch.ones(
-                num_particles, device=self.device
-            ).reshape(-1, self.model.steering_args["num_particles"])
+            resample_weights = torch.ones(num_particles, device=self.device).reshape(
+                -1, self.model.steering_args["num_particles"]
+            )
             steering_vars["energy_traj"] = energy_traj
             steering_vars["resample_weights"] = resample_weights
             steering_vars["potentials"] = potentials
@@ -550,7 +567,9 @@ class DiffusionStepper:
                 .repeat(diffusion_samples * num_particles, 1, 1)
             )
         elif isinstance(structure, torch.Tensor):
-            atom_coords = structure.reshape(-1, structure.shape[-2], 3)  # NOTE: should be handled in optimizer
+            atom_coords = structure.reshape(
+                -1, structure.shape[-2], 3
+            )  # NOTE: should be handled in optimizer
 
         atom_coords = pad_dim(atom_coords, 1, shape[1] - atom_coords.shape[1])
         init_coords = atom_coords.clone()
@@ -634,9 +653,9 @@ class DiffusionStepper:
                 potentials.reverse()
             num_particles = self.model.steering_args["num_particles"]
             energy_traj = torch.empty((num_particles, 0), device=self.device)
-            resample_weights = torch.ones(
-                num_particles, device=self.device
-            ).reshape(-1, self.model.steering_args["num_particles"])
+            resample_weights = torch.ones(num_particles, device=self.device).reshape(
+                -1, self.model.steering_args["num_particles"]
+            )
             steering_vars["energy_traj"] = energy_traj
             steering_vars["resample_weights"] = resample_weights
             steering_vars["potentials"] = potentials
@@ -674,7 +693,9 @@ class DiffusionStepper:
                 .repeat(diffusion_samples * num_particles, 1, 1)
             )
         elif isinstance(structure, torch.Tensor):
-            init_coords = structure.reshape(-1, structure.shape[-2], 3)  # NOTE: should be handled in optimizer
+            init_coords = structure.reshape(
+                -1, structure.shape[-2], 3
+            )  # NOTE: should be handled in optimizer
 
         init_coords = pad_dim(init_coords, 1, shape[1] - init_coords.shape[1])
 
@@ -797,7 +818,9 @@ class DiffusionStepper:
                             s_inputs=s_inputs,
                             s_trunk=s,
                             feats=feats,
-                            diffusion_conditioning=self.cached_representations["diffusion_conditioning"],
+                            diffusion_conditioning=self.cached_representations[
+                                "diffusion_conditioning"
+                            ],
                         ),
                     )
                 )
