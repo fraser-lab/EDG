@@ -233,6 +233,7 @@ class DensityGuidedDiffusion:
             model_version=self.model_version,
             device=self.device,
             model=model,
+            steering_args=kwargs["steering_args"] if "steering_args" in kwargs else None,
         )
 
     def _setup_scattering_params(self, structure_factors: dict):
