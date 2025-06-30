@@ -289,6 +289,7 @@ class DensityGuidedDiffusion:
         steering: bool = False,
         diffusion_kwargs: Optional[dict] = None,
         substructure_conditioning_kwargs: Optional[dict] = None,
+        representation_noise_scale: Optional[float] = None,
     ) -> Structure:
         os.makedirs(output_dir, exist_ok=True)
 
@@ -394,6 +395,7 @@ class DensityGuidedDiffusion:
                 ensemble_size=ensemble_size,
                 sampling_steps=num_steps,
                 extra_potentials=potentials,
+                representation_noise_scale=representation_noise_scale,
                 **diffusion_kwargs,
             )
         elif substructure_conditioning_kwargs is not None:
@@ -419,6 +421,7 @@ class DensityGuidedDiffusion:
                 ),
                 invert=True,
                 extra_potentials=potentials,
+                representation_noise_scale=representation_noise_scale,
             )
         else:
             self.stepper.initialize_diffusion(
@@ -426,6 +429,7 @@ class DensityGuidedDiffusion:
                 sampling_steps=num_steps,
                 init_coords=coords,
                 extra_potentials=potentials,
+                representation_noise_scale=representation_noise_scale,
             )
 
         step_coords = self.stepper.cached_diffusion_init["atom_coords"]
