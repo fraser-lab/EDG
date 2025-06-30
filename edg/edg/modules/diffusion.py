@@ -288,6 +288,7 @@ class DiffusionStepper:
         self,
         feats: Dict[str, torch.Tensor],
         recycling_steps: Optional[int] = None,
+        representation_noise_scale: Optional[float] = None,
     ) -> None:
         """Compute and cache main trunk representations.
 
@@ -297,6 +298,8 @@ class DiffusionStepper:
             Input feats containing model features
         recycling_steps : Optional[int], optional
             Override default number of recycling steps, by default None
+        representation_noise_scale : Optional[float], optional
+            Scale for Gaussian noise added to single and pair representations for diversity, by default None
         """
         recycling_steps = recycling_steps or self.model.predict_args["recycling_steps"]
 
@@ -371,6 +374,13 @@ class DiffusionStepper:
                 "token_trans_bias": token_trans_bias,
             }
 
+            # Add noise to representations for diversity if specified
+            if representation_noise_scale is not None and representation_noise_scale > 0:
+                s_noise = representation_noise_scale * torch.randn_like(s)
+                z_noise = representation_noise_scale * torch.randn_like(z)
+                s = s + s_noise
+                z = z + z_noise
+
             # Cache outputs
             self.cached_representations = {
                 "s": s,
@@ -387,6 +397,7 @@ class DiffusionStepper:
         sampling_steps: Optional[int] = None,
         init_coords: Optional[torch.Tensor] = None,
         extra_potentials: Optional[list] = None,
+        representation_noise_scale: Optional[float] = None,
     ) -> None:
         """Initialize the diffusion process.
 
@@ -398,12 +409,14 @@ class DiffusionStepper:
             Number of sampling steps, by default the number from predict_args in initialization
         init_coords : Optional[torch.Tensor], optional
             Initial coordinates for downstream guidance, by default None
+        representation_noise_scale : Optional[float], optional
+            Scale for Gaussian noise added to representations for diversity, by default None
         """
         self.current_step = 0
         self.diffusion_trajectory = {}
 
         batch = self.prepare_feats_from_datamodule_batch()
-        self.compute_representations(batch)
+        self.compute_representations(batch, representation_noise_scale=representation_noise_scale)
 
         num_sampling_steps = default(
             sampling_steps, self.model.structure_module.num_sampling_steps
@@ -476,6 +489,7 @@ class DiffusionStepper:
         ensemble_size: Optional[int] = None,
         sampling_steps: Optional[int] = None,
         extra_potentials: Optional[list] = None,
+        representation_noise_scale: Optional[float] = None,
     ) -> None:
         """
         Initialize with a partial diffusion setup, starting from some initial set of coordinates. This allows denoising from
@@ -498,11 +512,13 @@ class DiffusionStepper:
             Selector mask for atoms to be noised, by default None (all atoms are noised).
         potentials : Optional[list], optional
             List of potentials for steering, by default None.
+        representation_noise_scale : Optional[float], optional
+            Scale for Gaussian noise added to representations for diversity, by default None.
         """
         self.diffusion_trajectory = {}
 
         batch = self.prepare_feats_from_datamodule_batch()
-        self.compute_representations(batch)
+        self.compute_representations(batch, representation_noise_scale=representation_noise_scale)
 
         num_sampling_steps = default(
             sampling_steps, self.model.structure_module.num_sampling_steps
@@ -604,6 +620,7 @@ class DiffusionStepper:
         sampling_steps: Optional[int] = None,
         invert: bool = False,
         extra_potentials: Optional[list] = None,
+        representation_noise_scale: Optional[float] = None,
     ) -> None:
         """Initialize diffusion with substructure conditioning.
 
@@ -626,12 +643,14 @@ class DiffusionStepper:
             Whether to invert the selection (e.g. if the selection provided is for the motif to be denoised).
         potentials : Optional[list], optional
             List of potentials for steering, by default None.
+        representation_noise_scale : Optional[float], optional
+            Scale for Gaussian noise added to representations for diversity, by default None.
         """
         self.diffusion_trajectory = {}
         self.current_step = 0
 
         batch = self.prepare_feats_from_datamodule_batch()
-        self.compute_representations(batch)
+        self.compute_representations(batch, representation_noise_scale=representation_noise_scale)
 
         num_sampling_steps = default(
             sampling_steps, self.model.structure_module.num_sampling_steps
