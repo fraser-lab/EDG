@@ -356,6 +356,13 @@ class DiffusionStepper:
 
                 s, z = pairformer_module(s, z, mask=mask, pair_mask=pair_mask)
 
+            # Add noise to representations for diversity if specified
+            if representation_noise_scale is not None and representation_noise_scale > 0:
+                s_noise = representation_noise_scale * torch.randn_like(s)
+                z_noise = representation_noise_scale * torch.randn_like(z)
+                s = s + s_noise
+                z = z + z_noise
+
             q, c, to_keys, atom_enc_bias, atom_dec_bias, token_trans_bias = (
                 self.model.diffusion_conditioning(
                     s_trunk=s,
@@ -372,14 +379,7 @@ class DiffusionStepper:
                 "atom_enc_bias": atom_enc_bias,
                 "atom_dec_bias": atom_dec_bias,
                 "token_trans_bias": token_trans_bias,
-            }
-
-            # Add noise to representations for diversity if specified
-            if representation_noise_scale is not None and representation_noise_scale > 0:
-                s_noise = representation_noise_scale * torch.randn_like(s)
-                z_noise = representation_noise_scale * torch.randn_like(z)
-                s = s + s_noise
-                z = z + z_noise
+            }   
 
             # Cache outputs
             self.cached_representations = {
