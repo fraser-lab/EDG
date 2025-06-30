@@ -11,6 +11,7 @@ from boltz.model.modules.utils import (
     center_random_augmentation,
     compute_random_augmentation,
 )
+from boltz.model.potentials.schedules import ParameterSchedule
 import numpy as np
 from numpy.typing import NDArray
 
@@ -321,6 +322,10 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
             self.model.steering_args["guidance_update"]
             # and self.current_step < num_sampling_steps - 1
         ):
+            # Compute original denoising magnitude before guidance
+            original_denoised_over_sigma = (atom_coords_noisy - atom_coords_denoised) / t_hat
+            denoising_magnitude = torch.linalg.norm(original_denoised_over_sigma, dim=(-1, -2), keepdim=True)
+            
             guidance_update = torch.zeros_like(atom_coords_denoised)
             for guidance_step in range(self.model.steering_args["num_gd_steps"]):
                 energy_gradient = torch.zeros_like(atom_coords_denoised)
@@ -338,6 +343,25 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
                             parameters,
                         )
                 guidance_update -= energy_gradient
+            
+            # Scale guidance update relative to denoising magnitude
+            if self.model.steering_args.get("scale_guidance_to_denoising", False):
+                guidance_magnitude = torch.linalg.norm(guidance_update, dim=(-1, -2), keepdim=True)
+                
+                # Compute max allowed ratio using schedule
+                max_ratio_schedule = self.model.steering_args.get("max_guidance_denoising_ratio", 1.0)
+                if isinstance(max_ratio_schedule, ParameterSchedule):
+                    max_ratio_val = max_ratio_schedule.compute(steering_t)
+                    if isinstance(max_ratio_val, torch.Tensor):
+                        max_ratio_val = max_ratio_val.item()
+                else:
+                    max_ratio_val = float(max_ratio_schedule)
+                
+                # Apply clipping
+                guidance_ratio = guidance_magnitude / (denoising_magnitude + 1e-8)
+                scale_factor = torch.minimum(torch.ones_like(guidance_ratio), max_ratio_val / (guidance_ratio + 1e-8))
+                guidance_update = guidance_update * scale_factor
+            
             atom_coords_denoised += guidance_update
             scaled_guidance_update = (
                 guidance_update
@@ -714,6 +738,10 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
             self.model.steering_args["guidance_update"]
             and self.current_step < num_sampling_steps - 1
         ):
+            # Compute original denoising magnitude before guidance
+            original_denoised_over_sigma = (atom_coords_noisy - atom_coords_denoised) / t_hat
+            denoising_magnitude = torch.linalg.norm(original_denoised_over_sigma, dim=(-1, -2), keepdim=True)
+            
             guidance_update = torch.zeros_like(atom_coords_denoised)
 
             for guidance_step in range(self.model.steering_args["num_gd_steps"]):
@@ -742,6 +770,24 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
                         energy_gradient += parameters["guidance_weight"] * grad
 
                 guidance_update -= energy_gradient
+
+            # Scale guidance update relative to denoising magnitude
+            if self.model.steering_args.get("scale_guidance_to_denoising", False):
+                guidance_magnitude = torch.linalg.norm(guidance_update, dim=(-1, -2), keepdim=True)
+                
+                # Compute max allowed ratio using schedule
+                max_ratio_schedule = self.model.steering_args.get("max_guidance_denoising_ratio", 1.0)
+                if isinstance(max_ratio_schedule, ParameterSchedule):
+                    max_ratio_val = max_ratio_schedule.compute(steering_t)
+                    if isinstance(max_ratio_val, torch.Tensor):
+                        max_ratio_val = max_ratio_val.item()
+                else:
+                    max_ratio_val = float(max_ratio_schedule)
+                
+                # Apply clipping
+                guidance_ratio = guidance_magnitude / (denoising_magnitude + 1e-8)
+                scale_factor = torch.minimum(torch.ones_like(guidance_ratio), max_ratio_val / (guidance_ratio + 1e-8))
+                guidance_update = guidance_update * scale_factor
 
             atom_coords_denoised += guidance_update
             scaled_guidance_update = (

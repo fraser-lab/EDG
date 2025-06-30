@@ -334,7 +334,7 @@ class DensityGuidedDiffusion:
         )
         density_schedule = ExponentialInterpolationWithBounds(
             start=0.0,
-            end=125,
+            end=150,
             alpha=90,
             start_t=(1 - 175 / 200),
             end_t=(1 - 150 / 200),
@@ -344,19 +344,20 @@ class DensityGuidedDiffusion:
             xmap=self.density_calculator.xmap,
             parameters={
                 "guidance_interval": 1,
+                "guidance_weight": PiecewiseSchedule([1-175/200], [0, 1.0]),  # NOTE: for L2
                 # "guidance_weight": ResolutionScaling(
                 #     resolution_scale, resolution, base=density_schedule # NOTE: for L2
                 #     # resolution_scale, resolution, base=0.5 # NOTE: for hybrid
                 # ),
-                "guidance_weight": PiecewiseSchedule(
-                    [(1 - 175 / 200), (1 - 150 / 200), (1 - 125 / 200)],
-                    [
-                        0,
-                        density_schedule,
-                        125,
-                        0,
-                    ],
-                ),
+                # "guidance_weight": PiecewiseSchedule(
+                #     [(1 - 175 / 200), (1 - 150 / 200), (1 - 125 / 200)],
+                #     [
+                #         0,
+                #         density_schedule,
+                #         150,
+                #         0,
+                #     ],
+                # ),
                 "resolution": resolution_scale,
                 "resampling_weight": PiecewiseSchedule(
                     [(1 - 175 / 200), (1 - 150 / 200), (1 - 125 / 200)],
@@ -364,12 +365,12 @@ class DensityGuidedDiffusion:
                         0.005,
                         ExponentialInterpolationWithBounds(
                             start=0.005,
-                            end=10,
+                            end=20,
                             alpha=10,
                             start_t=(1 - 175 / 200),
                             end_t=(1 - 150 / 200),
                         ),
-                        10,
+                        20,
                         0.,
                     ],
                 ),
