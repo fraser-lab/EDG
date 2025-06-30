@@ -360,10 +360,10 @@ class BondPotential(HarmonicPotential, DistancePotential):
         bond_lengths[is_aa_mask] = parameters["aa_bond_length"]
         bond_lengths[is_rna_mask | is_dna_mask] = parameters["nucleotide_bond_length"]
 
-        atom_indices = rep_atoms + atom_offsets
-        partner_indices = rep_atoms + partner_offsets
+        atom_indices = rep_atoms + atom_offsets[any_biomol]
+        partner_indices = rep_atoms + partner_offsets[any_biomol]
 
-        chain_ids = atom_chain_id[atom_indices[any_biomol]]
+        chain_ids = atom_chain_id[atom_indices]
         unique_chains, inverse_indices = chain_ids.unique(return_inverse=True)
 
         is_chain_start = torch.zeros(any_biomol.sum(), dtype=torch.bool, device=device)

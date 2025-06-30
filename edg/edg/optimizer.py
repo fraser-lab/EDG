@@ -345,7 +345,7 @@ class DensityGuidedDiffusion:
             xmap=self.density_calculator.xmap,
             parameters={
                 "guidance_interval": 1,
-                "guidance_weight": PiecewiseSchedule([1-175/200], [0, 1.0]),  # NOTE: for L2
+                "guidance_weight": PiecewiseSchedule([1-175/200], [0, 1.0]),  # NOTE: for scaled
                 # "guidance_weight": ResolutionScaling(
                 #     resolution_scale, resolution, base=density_schedule # NOTE: for L2
                 #     # resolution_scale, resolution, base=0.5 # NOTE: for hybrid
