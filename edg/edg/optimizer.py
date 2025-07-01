@@ -150,12 +150,14 @@ class DensityGuidedDiffusion:
         self.em = em
         self.model_version = model_version.lower()
         if self.model_version not in ["boltz1", "boltz2"]:
-            raise ValueError(f"model_version must be 'boltz1' or 'boltz2', got {model_version}")
-        
+            raise ValueError(
+                f"model_version must be 'boltz1' or 'boltz2', got {model_version}"
+            )
+
         # Set default step_scale based on model version if not provided
         if step_scale is None:
             step_scale = 1.638 if self.model_version == "boltz1" else 1.5
-        
+
         self.output_path = Path(output_path)
         os.makedirs(self.output_path, exist_ok=True)
 
@@ -224,7 +226,7 @@ class DensityGuidedDiffusion:
             diffusion_args = BoltzDiffusionParams(step_scale=step_scale)
         else:  # boltz2
             diffusion_args = Boltz2DiffusionParams(step_scale=step_scale)
-        
+
         self.stepper = DensityGuidedDiffusionStepper(
             checkpoint_path=ckpt_path,
             data_path=input_path,
@@ -233,7 +235,9 @@ class DensityGuidedDiffusion:
             model_version=self.model_version,
             device=self.device,
             model=model,
-            steering_args=kwargs["steering_args"] if "steering_args" in kwargs else None,
+            steering_args=kwargs["steering_args"]
+            if "steering_args" in kwargs
+            else None,
         )
 
     def _setup_scattering_params(self, structure_factors: dict):
@@ -343,9 +347,14 @@ class DensityGuidedDiffusion:
 
         density_potential = DensityPotential(
             xmap=self.density_calculator.xmap,
+            atom_selection=substructure_conditioning_kwargs.get(
+                "selection", np.array([], dtype=int)
+            ),
             parameters={
                 "guidance_interval": 1,
-                "guidance_weight": PiecewiseSchedule([1-175/200], [0, 1.0]),  # NOTE: for scaled
+                "guidance_weight": PiecewiseSchedule(
+                    [1 - 175 / 200], [0, 1.0]
+                ),  # NOTE: for scaled
                 # "guidance_weight": ResolutionScaling(
                 #     resolution_scale, resolution, base=density_schedule # NOTE: for L2
                 #     # resolution_scale, resolution, base=0.5 # NOTE: for hybrid
@@ -363,16 +372,16 @@ class DensityGuidedDiffusion:
                 "resampling_weight": PiecewiseSchedule(
                     [(1 - 175 / 200), (1 - 150 / 200), (1 - 125 / 200)],
                     [
-                        0.005,
+                        0.001,
                         ExponentialInterpolationWithBounds(
-                            start=0.005,
-                            end=20,
-                            alpha=10,
+                            start=0.001,
+                            end=0.1,
+                            alpha=120,
                             start_t=(1 - 175 / 200),
                             end_t=(1 - 150 / 200),
                         ),
-                        20,
-                        0.,
+                        0.1,
+                        0.1,
                     ],
                 ),
                 "elements": elements,
@@ -380,6 +389,15 @@ class DensityGuidedDiffusion:
                 "occupancies": occupancies,
                 "scattering_params": self.scattering_params,
                 "em": self.em,
+                "scale_guidance_to_denoising": True,
+                "max_guidance_denoising_ratio": 0.2,
+                # "max_guidance_denoising_ratio": ExponentialInterpolationWithBounds(
+                #     start=1.0,
+                #     end=10,
+                #     alpha=10,
+                #     start_t=(1 - 175 / 200),
+                #     end_t=(1 - 150 / 200),
+                # )
             },
         )
 

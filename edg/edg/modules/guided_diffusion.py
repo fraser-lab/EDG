@@ -201,7 +201,9 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
                 s_inputs=s_inputs,
                 s_trunk=s,
                 feats=feats,
-                diffusion_conditioning=self.cached_representations["diffusion_conditioning"],
+                diffusion_conditioning=self.cached_representations[
+                    "diffusion_conditioning"
+                ],
             )
 
         steering_t = 1.0 - (self.current_step / num_sampling_steps)
@@ -323,9 +325,13 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
             # and self.current_step < num_sampling_steps - 1
         ):
             # Compute original denoising magnitude before guidance
-            original_denoised_over_sigma = (atom_coords_noisy - atom_coords_denoised) / t_hat
-            denoising_magnitude = torch.linalg.norm(original_denoised_over_sigma, dim=(-1, -2), keepdim=True)
-            
+            original_denoised_over_sigma = (
+                atom_coords_noisy - atom_coords_denoised
+            ) / t_hat
+            denoising_magnitude = torch.linalg.norm(
+                original_denoised_over_sigma, dim=(-1, -2), keepdim=True
+            )
+
             guidance_update = torch.zeros_like(atom_coords_denoised)
             for guidance_step in range(self.model.steering_args["num_gd_steps"]):
                 energy_gradient = torch.zeros_like(atom_coords_denoised)
@@ -335,33 +341,43 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
                         parameters["guidance_weight"] > 0
                         and (guidance_step) % parameters["guidance_interval"] == 0
                     ):
-                        energy_gradient += parameters[
-                            "guidance_weight"
-                        ] * potential.compute_gradient(
+                        grad = potential.compute_gradient(
                             atom_coords_denoised + guidance_update,
                             network_condition_kwargs["feats"],
                             parameters,
                         )
+
+                        # Scale guidance update relative to denoising magnitude
+                        if parameters.get("scale_guidance_to_denoising", False):
+                            guidance_magnitude = torch.linalg.norm(
+                                grad, dim=-1, keepdim=True
+                            )
+
+                            # Compute max allowed ratio using schedule
+                            max_ratio_schedule = parameters.get(
+                                "max_guidance_denoising_ratio", 1.0
+                            )
+                            if isinstance(max_ratio_schedule, ParameterSchedule):
+                                max_ratio_val = max_ratio_schedule.compute(steering_t)
+                                if isinstance(max_ratio_val, torch.Tensor):
+                                    max_ratio_val = max_ratio_val.item()
+                            else:
+                                max_ratio_val = float(max_ratio_schedule)
+
+                            # Apply clipping
+                            guidance_ratio = guidance_magnitude / (
+                                denoising_magnitude + 1e-8
+                            )
+                            scale_factor = torch.minimum(
+                                torch.ones_like(guidance_ratio),
+                                max_ratio_val / (guidance_ratio + 1e-8),
+                            )
+                            grad = grad * scale_factor
+
+                        energy_gradient += parameters["guidance_weight"] * grad
+
                 guidance_update -= energy_gradient
-            
-                # Scale guidance update relative to denoising magnitude
-                if self.model.steering_args.get("scale_guidance_to_denoising", False):
-                    guidance_magnitude = torch.linalg.norm(guidance_update, dim=(-1, -2), keepdim=True)
-                    
-                    # Compute max allowed ratio using schedule
-                    max_ratio_schedule = self.model.steering_args.get("max_guidance_denoising_ratio", 1.0)
-                    if isinstance(max_ratio_schedule, ParameterSchedule):
-                        max_ratio_val = max_ratio_schedule.compute(steering_t)
-                        if isinstance(max_ratio_val, torch.Tensor):
-                            max_ratio_val = max_ratio_val.item()
-                    else:
-                        max_ratio_val = float(max_ratio_schedule)
-                    
-                    # Apply clipping
-                    guidance_ratio = guidance_magnitude / (denoising_magnitude + 1e-8)
-                    scale_factor = torch.minimum(torch.ones_like(guidance_ratio), max_ratio_val / (guidance_ratio + 1e-8))
-                    guidance_update = guidance_update * scale_factor
-            
+
             atom_coords_denoised += guidance_update
             scaled_guidance_update = (
                 guidance_update
@@ -487,7 +503,6 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
                 score.mean().item(),
             )  # return minimum energy of ensemble
 
-
     def step_steering_ensemble(
         self,
         atom_coords: torch.Tensor,
@@ -531,9 +546,7 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
         elif atom_coords.ndim == 4:
             num_ensembles, ensemble_size, n_atoms, _ = atom_coords.shape
             multiplicity = num_ensembles * ensemble_size
-            atom_coords = atom_coords.reshape(
-                multiplicity, n_atoms, 3
-            )
+            atom_coords = atom_coords.reshape(multiplicity, n_atoms, 3)
         else:
             raise ValueError(
                 f"atom_coords must be 3D or 4D, but got {atom_coords.ndim}D"
@@ -564,9 +577,9 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
             "energy_traj"
         ]
         potentials: list = self.cached_diffusion_init["steering_vars"]["potentials"]
-        scaled_guidance_update: torch.Tensor = self.cached_diffusion_init["steering_vars"][
-            "scaled_guidance_update"
-        ]
+        scaled_guidance_update: torch.Tensor = self.cached_diffusion_init[
+            "steering_vars"
+        ]["scaled_guidance_update"]
         resample_weights: torch.Tensor = self.cached_diffusion_init["steering_vars"][
             "resample_weights"
         ]
@@ -588,12 +601,16 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
                 s_inputs=s_inputs,
                 s_trunk=s,
                 feats=feats,
-                diffusion_conditioning=self.cached_representations["diffusion_conditioning"],
+                diffusion_conditioning=self.cached_representations[
+                    "diffusion_conditioning"
+                ],
             )
 
         steering_t = 1.0 - (self.current_step / num_sampling_steps)
         t_hat = sigma_tm * (1 + gamma)
-        noise_var = self.model.structure_module.noise_scale**2 * (t_hat**2 - sigma_tm**2)
+        noise_var = self.model.structure_module.noise_scale**2 * (
+            t_hat**2 - sigma_tm**2
+        )
 
         eps = sqrt(noise_var) * torch.randn_like(atom_coords)
 
@@ -605,9 +622,7 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
             random_R, random_tr = compute_random_augmentation(
                 multiplicity, device=atom_coords.device, dtype=atom_coords.dtype
             )
-            atom_coords = atom_coords - atom_coords.mean(
-                dim=-2, keepdims=True
-            )
+            atom_coords = atom_coords - atom_coords.mean(dim=-2, keepdims=True)
             atom_coords = (
                 torch.einsum("bmd,bds->bms", atom_coords, random_R) + random_tr
             )
@@ -641,7 +656,9 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
             if alignment_weights is not None:
                 alignment_weights = alignment_weights.float()
             else:
-                alignment_weights = inverse_selector.float().unsqueeze(0).expand(multiplicity, -1)
+                alignment_weights = (
+                    inverse_selector.float().unsqueeze(0).expand(multiplicity, -1)
+                )
 
             atom_coords_denoised = weighted_rigid_align(
                 atom_coords_denoised.float(),
@@ -700,17 +717,16 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
                     num_ensembles, ensemble_size, n_atoms, 3
                 )
                 ll_difference = (
-                    (eps_ensemble**2 - (eps_ensemble + scaled_guidance_ensemble) ** 2).sum(
-                        dim=(1, 2, 3)
-                    )
-                    / (2 * noise_var)
-                )
+                    eps_ensemble**2 - (eps_ensemble + scaled_guidance_ensemble) ** 2
+                ).sum(dim=(1, 2, 3)) / (2 * noise_var)
             else:
                 ll_difference = torch.zeros_like(energy)
 
-            resample_logits = ll_difference + self.model.steering_args["fk_lambda"] * log_G
+            resample_logits = (
+                ll_difference + self.model.steering_args["fk_lambda"] * log_G
+            )
             resample_weights = F.softmax(resample_logits, dim=0)
-        
+
         if score is None:
             score = torch.zeros(num_ensembles, device=self.device)
             for potential in potentials:
@@ -739,9 +755,13 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
             and self.current_step < num_sampling_steps - 1
         ):
             # Compute original denoising magnitude before guidance
-            original_denoised_over_sigma = (atom_coords_noisy - atom_coords_denoised) / t_hat
-            denoising_magnitude = torch.linalg.norm(original_denoised_over_sigma, dim=(-1, -2), keepdim=True)
-            
+            original_denoised_over_sigma = (
+                atom_coords_noisy - atom_coords_denoised
+            ) / t_hat
+            denoising_magnitude = torch.linalg.norm(
+                original_denoised_over_sigma, dim=-1, keepdim=True
+            )
+
             guidance_update = torch.zeros_like(atom_coords_denoised)
 
             for guidance_step in range(self.model.steering_args["num_gd_steps"]):
@@ -767,27 +787,37 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
                                 network_condition_kwargs["feats"],
                                 parameters,
                             )
+
+                        # Scale guidance update relative to denoising magnitude
+                        if parameters.get("scale_guidance_to_denoising", False):
+                            guidance_magnitude = torch.linalg.norm(
+                                grad, dim=-1, keepdim=True
+                            )
+
+                            # Compute max allowed ratio using schedule
+                            max_ratio_schedule = parameters.get(
+                                "max_guidance_denoising_ratio", 1.0
+                            )
+                            if isinstance(max_ratio_schedule, ParameterSchedule):
+                                max_ratio_val = max_ratio_schedule.compute(steering_t)
+                                if isinstance(max_ratio_val, torch.Tensor):
+                                    max_ratio_val = max_ratio_val.item()
+                            else:
+                                max_ratio_val = float(max_ratio_schedule)
+
+                            # Apply clipping
+                            guidance_ratio = guidance_magnitude / (
+                                denoising_magnitude + 1e-8
+                            )
+                            scale_factor = torch.minimum(
+                                torch.ones_like(guidance_ratio),
+                                max_ratio_val / (guidance_ratio + 1e-8),
+                            )
+                            grad = grad * scale_factor
+
                         energy_gradient += parameters["guidance_weight"] * grad
 
                 guidance_update -= energy_gradient
-
-                # Scale guidance update relative to denoising magnitude
-                if self.model.steering_args.get("scale_guidance_to_denoising", False):
-                    guidance_magnitude = torch.linalg.norm(guidance_update, dim=(-1, -2), keepdim=True)
-                    
-                    # Compute max allowed ratio using schedule
-                    max_ratio_schedule = self.model.steering_args.get("max_guidance_denoising_ratio", 1.0)
-                    if isinstance(max_ratio_schedule, ParameterSchedule):
-                        max_ratio_val = max_ratio_schedule.compute(steering_t)
-                        if isinstance(max_ratio_val, torch.Tensor):
-                            max_ratio_val = max_ratio_val.item()
-                    else:
-                        max_ratio_val = float(max_ratio_schedule)
-                    
-                    # Apply clipping
-                    guidance_ratio = guidance_magnitude / (denoising_magnitude + 1e-8)
-                    scale_factor = torch.minimum(torch.ones_like(guidance_ratio), max_ratio_val / (guidance_ratio + 1e-8))
-                    guidance_update = guidance_update * scale_factor
 
             atom_coords_denoised += guidance_update
             scaled_guidance_update = (
@@ -806,34 +836,24 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
                 resample_weights, num_ensembles, replacement=True
             )
 
-            atom_coords = atom_coords.reshape(
-                num_ensembles, ensemble_size, n_atoms, 3
-            )[resample_indices].reshape(
-                -1, n_atoms, 3
-            )
+            atom_coords = atom_coords.reshape(num_ensembles, ensemble_size, n_atoms, 3)[
+                resample_indices
+            ].reshape(-1, n_atoms, 3)
             atom_coords_noisy = atom_coords_noisy.reshape(
                 num_ensembles, ensemble_size, n_atoms, 3
-            )[resample_indices].reshape(
-                -1, n_atoms, 3
-            )
-            atom_mask = atom_mask.reshape(
-                num_ensembles, ensemble_size, n_atoms
-            )[resample_indices].reshape(
-                -1, n_atoms
-            )
+            )[resample_indices].reshape(-1, n_atoms, 3)
+            atom_mask = atom_mask.reshape(num_ensembles, ensemble_size, n_atoms)[
+                resample_indices
+            ].reshape(-1, n_atoms)
             if atom_coords_denoised is not None:
                 atom_coords_denoised = atom_coords_denoised.reshape(
                     num_ensembles, ensemble_size, n_atoms, 3
-                )[resample_indices].reshape(
-                    -1, n_atoms, 3
-                )
+                )[resample_indices].reshape(-1, n_atoms, 3)
             energy_traj = energy_traj[resample_indices]
             if scaled_guidance_update is not None:
                 scaled_guidance_update = scaled_guidance_update.reshape(
                     num_ensembles, ensemble_size, n_atoms, 3
-                )[resample_indices].reshape(
-                    -1, n_atoms, 3
-                )
+                )[resample_indices].reshape(-1, n_atoms, 3)
 
         steering_vars = {
             "energy_traj": energy_traj,
@@ -875,7 +895,7 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
             "denoised": unpad_coords_denoised.detach().clone(),
         }
 
-        self.current_step += 1   
+        self.current_step += 1
 
         if return_denoised:
             return (
@@ -884,4 +904,7 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
                 score,
             )
         else:
-            return atom_coords_next.detach(), score,
+            return (
+                atom_coords_next.detach(),
+                score,
+            )

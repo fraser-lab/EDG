@@ -8,6 +8,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Optional, Dict, Any, Set, List, Union, Tuple, cast
 from copy import deepcopy
+import numpy as np
 import torch
 import torch.nn.functional as F
 
@@ -313,7 +314,7 @@ class ConnectionsPotential(FlatBottomPotential, DistancePotential):
 
 
 class BondPotential(HarmonicPotential, DistancePotential):
-# class BondPotential(FlatBottomPotential, DistancePotential):
+    # class BondPotential(FlatBottomPotential, DistancePotential):
     def compute_args(self, feats, parameters):
         device = feats["atom_pad_mask"].device
         pair_index = torch.empty(2, 0, dtype=torch.long, device=device)
@@ -773,6 +774,7 @@ class DensityPotential(Potential):
         parameters: Optional[
             Dict[str, Union[ParameterSchedule, float, int, bool, torch.Tensor]]
         ] = None,
+        atom_selection: Optional[Union[torch.Tensor, np.ndarray, List[int]]] = None,
     ) -> None:
         """Initialize the density potential.
 
@@ -782,9 +784,12 @@ class DensityPotential(Potential):
             XMap_torch object containing grid parameters and the experimental map array.
         parameters : Optional[Dict[str, Union[ParameterSchedule, float, int, bool]]], optional
             Dictionary of parameters, by default None
+        atom_selection : Optional[Union[torch.Tensor, np.ndarray, List[int]]], optional
+            Indices of atoms to apply density guidance to. If None, applies to all atoms, by default None
         """
         super().__init__(parameters)
         self.xmap = xmap
+        self.atom_selection = atom_selection
         self._setup_transforms()
 
     def _setup_transforms(self) -> None:
@@ -871,9 +876,25 @@ class DensityPotential(Potential):
         Tuple[Dict[str, torch.Tensor], Tuple, Optional[Tuple[torch.Tensor, torch.Tensor]]]
             Tuple containing (index_dict, args, com_args)
         """
-        indices = torch.where(feats["atom_pad_mask"][0].bool())[0].unsqueeze(
-            0
-        )  # needs to be dim=2
+        # Get all non-padded atoms first
+        all_indices = torch.where(feats["atom_pad_mask"][0].bool())[0]
+
+        # Apply atom selection if provided
+        if self.atom_selection is not None:
+            # Convert selection to tensor if needed
+            if isinstance(self.atom_selection, (list, np.ndarray)):
+                selection = torch.tensor(
+                    self.atom_selection, device=feats["atom_pad_mask"].device
+                )
+            else:
+                selection = self.atom_selection.to(device=feats["atom_pad_mask"].device)
+
+            # Filter to only include atoms that are both in selection and not padded
+            mask = torch.isin(all_indices, selection)
+            indices = all_indices[mask].unsqueeze(0)  # needs to be dim=2
+        else:
+            # Use all non-padded atoms (original behavior)
+            indices = all_indices.unsqueeze(0)  # needs to be dim=2
         elements = parameters["elements"]
         occupancies = parameters["occupancies"]
         b_factors = parameters["b_factors"]
@@ -1250,10 +1271,11 @@ def get_potentials():
         PoseBustersPotential(
             parameters={
                 "guidance_interval": 1,
-                "guidance_weight": PiecewiseSchedule(
-                    thresholds=[1-175/200],
-                    values=[0.05, 0.0],
-                ),
+                "guidance_weight": 0.05,
+                # "guidance_weight": PiecewiseSchedule(
+                #     thresholds=[1 - 175 / 200],
+                #     values=[0.05, 0.0],
+                # ),
                 # "guidance_weight": Ramp(
                 #     base=0.05,
                 #     start_t=0.00,
@@ -1296,10 +1318,11 @@ def get_potentials():
         BondPotential(
             parameters={
                 "guidance_interval": 1,
-                "guidance_weight": PiecewiseSchedule(
-                    thresholds=[1-175/200],
-                    values=[0.05, 0.0],
-                ),
+                "guidance_weight": 0.05,
+                # "guidance_weight": PiecewiseSchedule(
+                #     thresholds=[1 - 175 / 200],
+                #     values=[0.05, 0.0],
+                # ),
                 # "guidance_weight": Ramp(
                 #     base=0.05,
                 #     start_t=0.00,
