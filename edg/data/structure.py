@@ -1411,6 +1411,119 @@ class Ensemble:
         # mmCIFFile.write handles writing multiple models
         mmCIFFile.write(fname, self._structures, use_auth=use_auth)
 
+    @classmethod
+    def fromfile(cls, fname, use_auth=False):
+        """Create an Ensemble from a multi-model mmCIF file.
+        
+        Parameters
+        ----------
+        fname : str
+            Path to the mmCIF file containing multiple models
+        use_auth : bool, optional
+            Use auth_ identifiers instead of label_ identifiers. Default False.
+            
+        Returns
+        -------
+        Ensemble
+            Ensemble containing Structure objects for each model
+            
+        Raises
+        ------
+        ValueError
+            If file format is not supported or no models found
+        """
+        import os
+        from collections import defaultdict
+        
+        extension = os.path.splitext(fname)[1].lower()
+        
+        if extension not in [".cif", ".mmcif"]:
+            raise ValueError(f"Ensemble.fromfile only supports mmCIF format, got: {extension}")
+        
+        # Read the mmCIF file
+        if isinstance(fname, mmCIFFile):
+            pdbfile = fname
+        else:
+            pdbfile = mmCIFFile.read(fname, use_auth=use_auth)
+        
+        # Check if we have model data
+        if "model" not in pdbfile.coor:
+            raise ValueError("No model number data found in mmCIF file")
+        
+        # Group atoms by model number
+        models_data = defaultdict(lambda: defaultdict(list))
+        n_atoms = len(pdbfile.coor["x"])
+        
+        for i in range(n_atoms):
+            model_num = pdbfile.coor["model"][i]
+            for attr, values in pdbfile.coor.items():
+                if attr != "model":  # Don't include model number in individual structures
+                    models_data[model_num][attr].append(values[i])
+        
+        if not models_data:
+            raise ValueError("No models found in mmCIF file")
+        
+        # Create Structure objects for each model
+        structures = []
+        for model_num in sorted(models_data.keys()):
+            model_data = models_data[model_num]
+            
+            # Convert lists to numpy arrays
+            data = {}
+            for attr, values in model_data.items():
+                if attr in "xyz":
+                    continue
+                data[attr] = np.asarray(values)
+            
+            # Handle coordinates
+            coor = np.asarray(list(zip(model_data["x"], model_data["y"], model_data["z"])), dtype=np.float64)
+            data["coor"] = coor
+            
+            # Add active array
+            data["active"] = np.ones(len(model_data["x"]), dtype=bool)
+            
+            # Handle anisotropic displacement parameters if present
+            if pdbfile.anisou:
+                # Find anisou data for this model (if model-specific)
+                natoms = len(data["record"])
+                anisou = np.zeros((natoms, 6), float)
+                anisou_atomid = pdbfile.anisou["atomid"]
+                n = 0
+                us = ["u00", "u11", "u22", "u01", "u02", "u12"]
+                nanisou = len(anisou_atomid)
+                for i, atomid in enumerate(data["atomid"]):
+                    if n < nanisou and atomid == anisou_atomid[n]:
+                        anisou[i] = [pdbfile.anisou[u][n] for u in us]
+                        n += 1
+                for n, key in enumerate(us):
+                    data[key] = anisou[:, n]
+            
+            # Handle link data (shared across models)
+            link_data = {}
+            if pdbfile.link:
+                for attr, array in pdbfile.link.items():
+                    link_data[attr] = np.asarray(array)
+            
+            # Create Structure
+            structure = Structure(
+                data,
+                link_data=link_data,
+                scale=pdbfile.scale,
+                cryst_info=pdbfile.cryst_info,
+                resolution=pdbfile.resolution,
+            )
+            
+            # Set unit cell if available
+            if pdbfile.cryst1:
+                from ..qfit.unitcell import UnitCell
+                c = pdbfile.cryst1
+                values = [c[x] for x in ["a", "b", "c", "alpha", "beta", "gamma", "spg"]]
+                structure.unit_cell = UnitCell(*values)
+            
+            structures.append(structure)
+        
+        return cls(structures)
+
     def __repr__(self):
         return f"Ensemble: {len(self._structures)} structures."
 

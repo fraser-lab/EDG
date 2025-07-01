@@ -903,6 +903,7 @@ class mmCIFFile(list):
             "B_iso_or_equiv": "b",
             "type_symbol": "e",
             "pdbx_formal_charge": "charge",
+            "pdbx_PDB_model_num": "model",
         }
 
         if self.use_auth:
@@ -949,8 +950,10 @@ class mmCIFFile(list):
                 if attr in string_fields and value is None:
                     value = ""
 
-                if attr in ("atomid", "resi"):
+                if attr in ("atomid", "resi", "model"):
                     value = self._try_int(value)
+                    if attr == "model" and value is None:
+                        value = 1  # Default to model 1 if not specified
                 elif attr == "charge":
                     value = self._try_int(value)
                     if value is None:
