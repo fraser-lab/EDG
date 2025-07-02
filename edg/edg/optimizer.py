@@ -352,12 +352,16 @@ class DensityGuidedDiffusion:
         occupancies = occupancies.to(self.device).float()
         active = active.to(self.device).bool()
 
-        resolution_scale = ExponentialInterpolationWithBounds(
-            start=resolution,
-            end=8.0,
-            alpha=2.0,
-            start_t=(1 - 175 / 200),
-            end_t=(1 - 150 / 200),
+        # resolution_scale = ExponentialInterpolationWithBounds(
+        #     start=resolution,
+        #     end=8.0,
+        #     alpha=0.0,
+        #     start_t=(1 - 175 / 200),
+        #     end_t=(1 - 150 / 200),
+        # )
+        resolution_scale = PiecewiseSchedule(
+            [(1 - 150 / 200)],
+            [resolution, 8.0]
         )
         density_schedule = ExponentialInterpolationWithBounds(
             start=0.0,
@@ -375,7 +379,7 @@ class DensityGuidedDiffusion:
             parameters={
                 "guidance_interval": 1,
                 "guidance_weight": PiecewiseSchedule(
-                    [1 - 175 / 200], [0, 1.0]
+                    [1 - 175 / 200, 1 - 125 / 200], [0, 1.0, 0]
                 ),  # NOTE: for scaled
                 # "guidance_weight": ResolutionScaling(
                 #     resolution_scale, resolution, base=density_schedule # NOTE: for L2
@@ -412,7 +416,7 @@ class DensityGuidedDiffusion:
                 "scattering_params": self.scattering_params,
                 "em": self.em,
                 "scale_guidance_to_denoising": True,
-                "max_guidance_denoising_ratio": 0.01,
+                "max_guidance_denoising_ratio": 0.2,
                 # "max_guidance_denoising_ratio": ExponentialInterpolationWithBounds(
                 #     start=0.000001,
                 #     end=1.0,

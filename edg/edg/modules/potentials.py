@@ -1273,7 +1273,7 @@ def get_potentials():
                 "guidance_interval": 1,
                 "guidance_weight": PiecewiseSchedule(
                     thresholds=[1 - 175 / 200],
-                    values=[0.2, 0.0],
+                    values=[0.05, 0.0],
                 ),
                 # "guidance_weight": Ramp(
                 #     base=0.05,
@@ -1319,7 +1319,7 @@ def get_potentials():
                 "guidance_interval": 1,
                 "guidance_weight": PiecewiseSchedule(
                     thresholds=[1 - 175 / 200],
-                    values=[0.2, 0.0],
+                    values=[0.05, 0.0],
                 ),
                 # "guidance_weight": Ramp(
                 #     base=0.05,

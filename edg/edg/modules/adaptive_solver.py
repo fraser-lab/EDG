@@ -6,7 +6,7 @@ sophisticated approaches that can adapt step sizes and handle multiple potential
 scales automatically.
 
 Author: Karson Chrispens
-Created: 2025-01-02
+Created: 6 July 2025
 """
 
 import torch
@@ -46,6 +46,14 @@ class AdaptiveSolverConfig:
         Backtracking factor for line search
     max_line_search_steps : int
         Maximum line search iterations
+    adaptive_line_search : bool
+        Whether to use adaptive backtracking (adjusts factor based on violation degree)
+    adaptive_backtrack_min : float
+        Minimum backtracking factor for adaptive line search
+    adaptive_backtrack_max : float
+        Maximum backtracking factor for adaptive line search
+    violation_scaling : float
+        Controls adaptation aggressiveness based on Armijo violation degree
     """
     learning_rate: float = 0.01
     beta1: float = 0.9
@@ -59,6 +67,10 @@ class AdaptiveSolverConfig:
     line_search_c1: float = 1e-4
     line_search_backtrack: float = 0.5
     max_line_search_steps: int = 5
+    adaptive_line_search: bool = False
+    adaptive_backtrack_min: float = 0.01
+    adaptive_backtrack_max: float = 1.0
+    violation_scaling: float = 0.5
 
 
 class AdaptiveGradientSolver(ABC):
@@ -210,12 +222,20 @@ class AdamGradientSolver(AdaptiveGradientSolver):
             
             # Apply update
             if self.config.line_search:
-                step_size = self._backtracking_line_search(
-                    current_coords, 
-                    update_direction, 
-                    compute_energy_fn,
-                    initial_energy
-                )
+                if self.config.adaptive_line_search:
+                    step_size = self._adaptive_backtracking_line_search(
+                        current_coords, 
+                        update_direction, 
+                        compute_energy_fn,
+                        initial_energy
+                    )
+                else:
+                    step_size = self._backtracking_line_search(
+                        current_coords, 
+                        update_direction, 
+                        compute_energy_fn,
+                        initial_energy
+                    )
             else:
                 step_size = self.config.learning_rate
             
@@ -251,6 +271,60 @@ class AdamGradientSolver(AdaptiveGradientSolver):
             alpha *= self.config.line_search_backtrack
         
         # If line search fails, use small step
+        return alpha
+    
+    def _adaptive_backtracking_line_search(
+        self,
+        coords: torch.Tensor,
+        direction: torch.Tensor,
+        compute_energy_fn: Callable,
+        initial_energy: float,
+    ) -> float:
+        """Perform adaptive backtracking line search that adjusts factor based on violation degree.
+        
+        Based on "Adaptive Backtracking For Faster Optimization" (arXiv:2408.13150).
+        Instead of using a fixed backtracking factor, adapts the factor based on how much
+        the Armijo condition is violated.
+        """
+        
+        alpha = self.config.learning_rate
+        grad_dot_dir = torch.sum(direction * direction).item()  # For descent, this should be positive
+        
+        for step in range(self.config.max_line_search_steps):
+            new_coords = coords - alpha * direction
+            new_energy = compute_energy_fn(new_coords)
+            
+            # Armijo threshold: f(x) + c1*alpha*grad^T*d  
+            armijo_threshold = initial_energy - self.config.line_search_c1 * alpha * grad_dot_dir
+            
+            # Check Armijo condition
+            if new_energy <= armijo_threshold:
+                return alpha
+            
+            # Compute violation degree: how much the condition is violated
+            # Normalize by the threshold to make it scale-invariant
+            if abs(armijo_threshold) > 1e-12:
+                violation_ratio = (new_energy - armijo_threshold) / abs(armijo_threshold)
+            else:
+                violation_ratio = 1.0
+            
+            # Adaptive backtracking factor based on violation degree
+            # Higher violation -> more aggressive backtracking
+            # Lower violation -> less aggressive backtracking
+            adaptive_factor = max(
+                self.config.adaptive_backtrack_min,
+                min(
+                    self.config.adaptive_backtrack_max,
+                    self.config.line_search_backtrack * (1.0 + self.config.violation_scaling * violation_ratio)
+                )
+            )
+            
+            alpha *= adaptive_factor
+            
+            # Prevent alpha from becoming too small
+            if alpha < 1e-10:
+                break
+        
         return alpha
 
 
@@ -326,8 +400,26 @@ class SimpleAdaptiveSolver(AdaptiveGradientSolver):
             if self.config.gradient_clip_norm is not None and grad_norm > self.config.gradient_clip_norm:
                 total_gradient = total_gradient * (self.config.gradient_clip_norm / grad_norm)
             
-            # Simple gradient descent step
-            current_coords = current_coords - self.config.learning_rate * total_gradient
+            # Apply update with optional line search
+            if self.config.line_search:
+                if self.config.adaptive_line_search:
+                    step_size = self._adaptive_backtracking_line_search(
+                        current_coords, 
+                        total_gradient, 
+                        compute_energy_fn,
+                        initial_energy
+                    )
+                else:
+                    step_size = self._backtracking_line_search(
+                        current_coords, 
+                        total_gradient, 
+                        compute_energy_fn,
+                        initial_energy
+                    )
+            else:
+                step_size = self.config.learning_rate
+            
+            current_coords = current_coords - step_size * total_gradient
             stats['iterations'] = iteration + 1
         
         # Compute final energy
@@ -335,6 +427,80 @@ class SimpleAdaptiveSolver(AdaptiveGradientSolver):
         stats['final_energy'] = final_energy.item() if hasattr(final_energy, 'item') else float(final_energy)
         
         return current_coords, stats
+
+    def _backtracking_line_search(
+        self,
+        coords: torch.Tensor,
+        direction: torch.Tensor,
+        compute_energy_fn: Callable,
+        initial_energy: float,
+    ) -> float:
+        """Perform backtracking line search to find good step size."""
+        
+        alpha = self.config.learning_rate
+        grad_dot_dir = torch.sum(direction * direction).item()  # For descent, this should be positive
+        
+        for _ in range(self.config.max_line_search_steps):
+            new_coords = coords - alpha * direction
+            new_energy = compute_energy_fn(new_coords)
+            
+            # Armijo condition: f(x + alpha*d) <= f(x) + c1*alpha*grad^T*d
+            if new_energy <= initial_energy - self.config.line_search_c1 * alpha * grad_dot_dir:
+                return alpha
+            
+            alpha *= self.config.line_search_backtrack
+        
+        # If line search fails, use small step
+        return alpha
+    
+    def _adaptive_backtracking_line_search(
+        self,
+        coords: torch.Tensor,
+        direction: torch.Tensor,
+        compute_energy_fn: Callable,
+        initial_energy: float,
+    ) -> float:
+        """Perform adaptive backtracking line search that adjusts factor based on violation degree."""
+        
+        alpha = self.config.learning_rate
+        grad_dot_dir = torch.sum(direction * direction).item()  # For descent, this should be positive
+        
+        for step in range(self.config.max_line_search_steps):
+            new_coords = coords - alpha * direction
+            new_energy = compute_energy_fn(new_coords)
+            
+            # Armijo threshold: f(x) + c1*alpha*grad^T*d  
+            armijo_threshold = initial_energy - self.config.line_search_c1 * alpha * grad_dot_dir
+            
+            # Check Armijo condition
+            if new_energy <= armijo_threshold:
+                return alpha
+            
+            # Compute violation degree: how much the condition is violated
+            # Normalize by the threshold to make it scale-invariant
+            if abs(armijo_threshold) > 1e-12:
+                violation_ratio = (new_energy - armijo_threshold) / abs(armijo_threshold)
+            else:
+                violation_ratio = 1.0
+            
+            # Adaptive backtracking factor based on violation degree
+            # Higher violation -> more aggressive backtracking
+            # Lower violation -> less aggressive backtracking
+            adaptive_factor = max(
+                self.config.adaptive_backtrack_min,
+                min(
+                    self.config.adaptive_backtrack_max,
+                    self.config.line_search_backtrack * (1.0 + self.config.violation_scaling * violation_ratio)
+                )
+            )
+            
+            alpha *= adaptive_factor
+            
+            # Prevent alpha from becoming too small
+            if alpha < 1e-10:
+                break
+        
+        return alpha
 
 
 def create_adaptive_solver(solver_type: str = "adam", config: Optional[AdaptiveSolverConfig] = None) -> AdaptiveGradientSolver:
