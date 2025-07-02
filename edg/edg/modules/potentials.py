@@ -1271,11 +1271,10 @@ def get_potentials():
         PoseBustersPotential(
             parameters={
                 "guidance_interval": 1,
-                "guidance_weight": 0.05,
-                # "guidance_weight": PiecewiseSchedule(
-                #     thresholds=[1 - 175 / 200],
-                #     values=[0.05, 0.0],
-                # ),
+                "guidance_weight": PiecewiseSchedule(
+                    thresholds=[1 - 175 / 200],
+                    values=[0.2, 0.0],
+                ),
                 # "guidance_weight": Ramp(
                 #     base=0.05,
                 #     start_t=0.00,
@@ -1286,9 +1285,9 @@ def get_potentials():
                 #     * 3,
                 # ),
                 "resampling_weight": 0.1,
-                "bond_buffer": 0.05,
-                "angle_buffer": 0.20,
-                "clash_buffer": 0.15,
+                "bond_buffer": 0.01,
+                "angle_buffer": 0.10,
+                "clash_buffer": 0.05,
             }
         ),
         ChiralAtomPotential(
@@ -1318,11 +1317,10 @@ def get_potentials():
         BondPotential(
             parameters={
                 "guidance_interval": 1,
-                "guidance_weight": 0.05,
-                # "guidance_weight": PiecewiseSchedule(
-                #     thresholds=[1 - 175 / 200],
-                #     values=[0.05, 0.0],
-                # ),
+                "guidance_weight": PiecewiseSchedule(
+                    thresholds=[1 - 175 / 200],
+                    values=[0.2, 0.0],
+                ),
                 # "guidance_weight": Ramp(
                 #     base=0.05,
                 #     start_t=0.00,
@@ -1333,7 +1331,7 @@ def get_potentials():
                 #     * 3,
                 # ),
                 "resampling_weight": 0.1,
-                "buffer": 0.05,
+                "buffer": 0.01,
                 "aa_bond_length": 1.32,  # Angstroms
                 "nucleotide_bond_length": 1.60,  # Angstroms
             }

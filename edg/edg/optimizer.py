@@ -53,6 +53,7 @@ from edg.edg.modules.diffusion import DiffusionStepper
 from edg.edg.modules.guided_diffusion import DensityGuidedDiffusionStepper
 from edg.utils.utility import try_gpu
 from edg.edg.modules.potentials import SubstructurePotential, DensityPotential
+from edg.edg.modules.adaptive_solver import AdaptiveSolverConfig
 
 
 @torch.jit.script
@@ -95,6 +96,8 @@ class DensityGuidedDiffusion:
         model_version: str = "boltz1",  # "boltz1" or "boltz2"
         ccd_path: Path = Path("~/.boltz/ccd.pkl").expanduser(),
         device: Optional[str] = None,
+        adaptive_solver: str = "adam",  # "adam", "simple", or "none"
+        adaptive_solver_config: Optional[AdaptiveSolverConfig] = None,
         **kwargs,
     ):
         """Initialize the density-guided diffusion optimizer.
@@ -125,6 +128,10 @@ class DensityGuidedDiffusion:
             Path to the CCD dictionary file, by default "~/.boltz/ccd.pkl"
         device : str, optional
             Device to run computations on ('cpu', 'cuda', etc.), by default None
+        adaptive_solver : str, optional
+            Type of adaptive gradient solver to use ("adam", "simple", or "none"), by default "adam"
+        adaptive_solver_config : Optional[AdaptiveSolverConfig], optional
+            Configuration for the adaptive solver, by default None (uses defaults)
         **kwargs
             Additional keyword arguments.
 
@@ -161,8 +168,15 @@ class DensityGuidedDiffusion:
         self.output_path = Path(output_path)
         os.makedirs(self.output_path, exist_ok=True)
 
-        st = Structure.fromfile(structure)
-        self.structure = st
+        extension = os.path.splitext(structure)[1]
+        if extension not in (".cif", ".pdb", ".mmcif"):
+            raise ValueError("Structure file must be in mmCIF or PDB format.")
+        if extension in (".pdb",):
+            self.structure = Structure.fromfile(structure)
+        else:
+            self.structure = Ensemble.fromfile(structure)[
+                0
+            ]  # Take first model, this supports multi-model CIFs
 
         extension = os.path.splitext(y)[1]
         if extension not in (".ccp4", ".mrc", ".map", ".mtz"):
@@ -238,6 +252,14 @@ class DensityGuidedDiffusion:
             steering_args=kwargs["steering_args"]
             if "steering_args" in kwargs
             else None,
+            method="MD",
+        )
+
+        # Setup adaptive solver if specified
+        self.stepper.setup_adaptive_solver(
+            solver_type=adaptive_solver,
+            config=adaptive_solver_config,
+            enable=adaptive_solver.lower() != "none",
         )
 
     def _setup_scattering_params(self, structure_factors: dict):
@@ -333,7 +355,7 @@ class DensityGuidedDiffusion:
         resolution_scale = ExponentialInterpolationWithBounds(
             start=resolution,
             end=8.0,
-            alpha=5.0,
+            alpha=2.0,
             start_t=(1 - 175 / 200),
             end_t=(1 - 150 / 200),
         )
@@ -347,9 +369,9 @@ class DensityGuidedDiffusion:
 
         density_potential = DensityPotential(
             xmap=self.density_calculator.xmap,
-            atom_selection=substructure_conditioning_kwargs.get(
-                "selection", np.array([], dtype=int)
-            ),
+            # atom_selection=substructure_conditioning_kwargs.get(
+            #     "selection", np.array([], dtype=int)
+            # ),
             parameters={
                 "guidance_interval": 1,
                 "guidance_weight": PiecewiseSchedule(
@@ -372,16 +394,16 @@ class DensityGuidedDiffusion:
                 "resampling_weight": PiecewiseSchedule(
                     [(1 - 175 / 200), (1 - 150 / 200), (1 - 125 / 200)],
                     [
-                        0.001,
+                        0.01,
                         ExponentialInterpolationWithBounds(
-                            start=0.001,
-                            end=0.1,
-                            alpha=120,
+                            start=0.01,
+                            end=50,
+                            alpha=150,
                             start_t=(1 - 175 / 200),
                             end_t=(1 - 150 / 200),
                         ),
-                        0.1,
-                        0.1,
+                        50,
+                        0.0,
                     ],
                 ),
                 "elements": elements,
@@ -390,11 +412,11 @@ class DensityGuidedDiffusion:
                 "scattering_params": self.scattering_params,
                 "em": self.em,
                 "scale_guidance_to_denoising": True,
-                "max_guidance_denoising_ratio": 0.2,
+                "max_guidance_denoising_ratio": 0.01,
                 # "max_guidance_denoising_ratio": ExponentialInterpolationWithBounds(
-                #     start=1.0,
-                #     end=10,
-                #     alpha=10,
+                #     start=0.000001,
+                #     end=1.0,
+                #     alpha=-10.0,
                 #     start_t=(1 - 175 / 200),
                 #     end_t=(1 - 150 / 200),
                 # )
