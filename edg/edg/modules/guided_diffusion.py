@@ -16,6 +16,11 @@ import numpy as np
 from numpy.typing import NDArray
 
 from edg.edg.modules.diffusion import DiffusionStepper
+from edg.edg.modules.adaptive_solver import (
+    create_adaptive_solver,
+    AdaptiveSolverConfig,
+    AdaptiveGradientSolver,
+)
 
 
 def weighted_rigid_align(
@@ -111,6 +116,311 @@ def weighted_rigid_align(
 
 class DensityGuidedDiffusionStepper(DiffusionStepper):
     """Controls fine-grained diffusion steps using pretrained Boltz models with density guidance via the diffusion update"""
+
+    def __init__(self, *args, **kwargs):
+        """Initialize the density guided diffusion stepper with adaptive solver support."""
+        super().__init__(*args, **kwargs)
+        self.adaptive_solver = None
+        self.adaptive_solver_config = None
+
+    def setup_adaptive_solver(
+        self,
+        solver_type: str = "adam",
+        config: Optional[AdaptiveSolverConfig] = None,
+        enable: bool = True,
+    ):
+        """Setup adaptive gradient solver.
+
+        Parameters
+        ----------
+        solver_type : str
+            Type of adaptive solver ("adam", "simple", or "none" for disabled)
+        config : Optional[AdaptiveSolverConfig]
+            Solver configuration
+        enable : bool
+            Whether to enable adaptive solver
+        """
+        if not enable or solver_type.lower() == "none":
+            self.adaptive_solver = None
+            return
+
+        if config is None:
+            # Create default config
+            config = AdaptiveSolverConfig(
+                learning_rate=0.01,
+                max_iterations=10,
+                convergence_threshold=1e-4,
+                gradient_clip_norm=1.0,
+                per_potential_scaling=True,
+                line_search=False,
+            )
+
+        self.adaptive_solver_config = config
+        self.adaptive_solver = create_adaptive_solver(solver_type, config)
+
+    def _adaptive_guidance_update(
+        self,
+        atom_coords_denoised: torch.Tensor,
+        potentials: list,
+        feats: dict,
+        steering_t: float,
+        denoising_magnitude: torch.Tensor,
+    ) -> torch.Tensor:
+        """Compute guidance update using adaptive solver."""
+
+        def compute_energy(coords):
+            """Compute total energy for current coordinates."""
+            total_energy = 0.0
+            for potential in potentials:
+                parameters = potential.compute_parameters(steering_t)
+                if parameters["guidance_weight"] > 0:
+                    energy = potential.compute(coords, feats, parameters)
+                    total_energy += parameters["guidance_weight"] * energy.sum()
+            return total_energy
+
+        def compute_gradient(potential, coords, feats, parameters):
+            """Compute gradient for a single potential with scaling."""
+            grad = potential.compute_gradient(coords, feats, parameters)
+
+            if parameters.get("scale_guidance_to_denoising", False):
+                guidance_magnitude = torch.linalg.norm(grad, dim=-1, keepdim=True)
+
+                max_ratio_schedule = parameters.get("max_guidance_denoising_ratio", 1.0)
+                if isinstance(max_ratio_schedule, ParameterSchedule):
+                    max_ratio_val = max_ratio_schedule.compute(steering_t)
+                    if isinstance(max_ratio_val, torch.Tensor):
+                        max_ratio_val = max_ratio_val.item()
+                else:
+                    max_ratio_val = float(max_ratio_schedule)
+
+                guidance_ratio = guidance_magnitude / (denoising_magnitude + 1e-8)
+                scale_factor = torch.minimum(
+                    torch.ones_like(guidance_ratio),
+                    max_ratio_val / (guidance_ratio + 1e-8),
+                )
+                grad = grad * scale_factor
+
+            return grad
+
+        updated_coords, stats = self.adaptive_solver.step(
+            atom_coords_denoised,
+            potentials,
+            feats,
+            steering_t,
+            compute_energy,
+            compute_gradient,
+        )
+
+        # Optional: store or log solver statistics for debugging
+        # print(f"Adaptive solver stats: {stats}")
+
+        guidance_update = updated_coords - atom_coords_denoised
+        return guidance_update
+
+    def _fixed_guidance_update(
+        self,
+        atom_coords_denoised: torch.Tensor,
+        potentials: list,
+        feats: dict,
+        steering_t: float,
+        denoising_magnitude: torch.Tensor,
+    ) -> torch.Tensor:
+        """Compute guidance update using original fixed-step approach."""
+
+        guidance_update = torch.zeros_like(atom_coords_denoised)
+        for guidance_step in range(self.model.steering_args["num_gd_steps"]):
+            energy_gradient = torch.zeros_like(atom_coords_denoised)
+            for potential in potentials:
+                parameters = potential.compute_parameters(steering_t)
+                if (
+                    parameters["guidance_weight"] > 0
+                    and (guidance_step) % parameters["guidance_interval"] == 0
+                ):
+                    grad = potential.compute_gradient(
+                        atom_coords_denoised + guidance_update,
+                        feats,
+                        parameters,
+                    )
+
+                    if parameters.get("scale_guidance_to_denoising", False):
+                        guidance_magnitude = torch.linalg.norm(
+                            grad, dim=-1, keepdim=True
+                        )
+
+                        max_ratio_schedule = parameters.get(
+                            "max_guidance_denoising_ratio", 1.0
+                        )
+                        if isinstance(max_ratio_schedule, ParameterSchedule):
+                            max_ratio_val = max_ratio_schedule.compute(steering_t)
+                            if isinstance(max_ratio_val, torch.Tensor):
+                                max_ratio_val = max_ratio_val.item()
+                        else:
+                            max_ratio_val = float(max_ratio_schedule)
+
+                        # Apply clipping
+                        guidance_ratio = guidance_magnitude / (
+                            denoising_magnitude + 1e-8
+                        )
+                        scale_factor = torch.minimum(
+                            torch.ones_like(guidance_ratio),
+                            max_ratio_val / (guidance_ratio + 1e-8),
+                        )
+                        grad = grad * scale_factor
+
+                    energy_gradient += parameters["guidance_weight"] * grad
+
+            guidance_update -= energy_gradient
+
+        return guidance_update
+
+    def _adaptive_guidance_update_ensemble(
+        self,
+        atom_coords_denoised: torch.Tensor,
+        potentials: list,
+        feats: dict,
+        steering_t: float,
+        denoising_magnitude: torch.Tensor,
+        num_ensembles: int,
+        ensemble_size: int,
+        n_atoms: int,
+    ) -> torch.Tensor:
+        """Compute guidance update for ensemble using adaptive solver."""
+
+        def compute_energy(coords):
+            """Compute total energy for current coordinates."""
+            total_energy = 0.0
+            coords_ensemble = coords.reshape(num_ensembles, ensemble_size, n_atoms, 3)
+
+            for potential in potentials:
+                parameters = potential.compute_parameters(steering_t)
+                if parameters["guidance_weight"] > 0:
+                    if hasattr(potential, "compute_ensemble"):
+                        energy = potential.compute_ensemble(
+                            coords_ensemble, feats, parameters
+                        )
+                    else:
+                        energy = potential.compute(coords, feats, parameters)
+                        energy = energy.reshape(num_ensembles, ensemble_size).sum(dim=1)
+                    total_energy += parameters["guidance_weight"] * energy.sum()
+            return total_energy
+
+        def compute_gradient(potential, coords, feats, parameters):
+            """Compute gradient for a single potential with scaling."""
+            if hasattr(potential, "compute_gradient_ensemble"):
+                grad = potential.compute_gradient_ensemble(
+                    coords.reshape(num_ensembles, ensemble_size, n_atoms, 3),
+                    feats,
+                    parameters,
+                ).reshape(-1, n_atoms, 3)
+            else:
+                grad = potential.compute_gradient(coords, feats, parameters)
+
+            if parameters.get("scale_guidance_to_denoising", False):
+                guidance_magnitude = torch.linalg.norm(grad, dim=-1, keepdim=True)
+
+                max_ratio_schedule = parameters.get("max_guidance_denoising_ratio", 1.0)
+                if isinstance(max_ratio_schedule, ParameterSchedule):
+                    max_ratio_val = max_ratio_schedule.compute(steering_t)
+                    if isinstance(max_ratio_val, torch.Tensor):
+                        max_ratio_val = max_ratio_val.item()
+                else:
+                    max_ratio_val = float(max_ratio_schedule)
+
+                guidance_ratio = guidance_magnitude / (denoising_magnitude + 1e-8)
+                scale_factor = torch.minimum(
+                    torch.ones_like(guidance_ratio),
+                    max_ratio_val / (guidance_ratio + 1e-8),
+                )
+                grad = grad * scale_factor
+
+            return grad
+
+        updated_coords, stats = self.adaptive_solver.step(
+            atom_coords_denoised,
+            potentials,
+            feats,
+            steering_t,
+            compute_energy,
+            compute_gradient,
+        )
+
+        # Optional: store or log solver statistics for debugging
+        # print(f"Adaptive solver stats: {stats}")
+
+        guidance_update = updated_coords - atom_coords_denoised
+        return guidance_update
+
+    def _fixed_guidance_update_ensemble(
+        self,
+        atom_coords_denoised: torch.Tensor,
+        potentials: list,
+        feats: dict,
+        steering_t: float,
+        denoising_magnitude: torch.Tensor,
+        num_ensembles: int,
+        ensemble_size: int,
+        n_atoms: int,
+    ) -> torch.Tensor:
+        """Compute guidance update for ensemble using original fixed-step approach."""
+
+        guidance_update = torch.zeros_like(atom_coords_denoised)
+
+        for guidance_step in range(self.model.steering_args["num_gd_steps"]):
+            energy_gradient = torch.zeros_like(atom_coords_denoised)
+
+            for potential in potentials:
+                parameters = potential.compute_parameters(steering_t)
+                if (
+                    parameters["guidance_weight"] > 0
+                    and guidance_step % parameters["guidance_interval"] == 0
+                ):
+                    if hasattr(potential, "compute_gradient_ensemble"):
+                        grad = potential.compute_gradient_ensemble(
+                            (atom_coords_denoised + guidance_update).reshape(
+                                num_ensembles, ensemble_size, n_atoms, 3
+                            ),
+                            feats,
+                            parameters,
+                        ).reshape(-1, n_atoms, 3)
+                    else:
+                        grad = potential.compute_gradient(
+                            atom_coords_denoised + guidance_update,
+                            feats,
+                            parameters,
+                        )
+
+                    # Scale guidance update relative to denoising magnitude
+                    if parameters.get("scale_guidance_to_denoising", False):
+                        guidance_magnitude = torch.linalg.norm(
+                            grad, dim=-1, keepdim=True
+                        )
+
+                        # Compute max allowed ratio using schedule
+                        max_ratio_schedule = parameters.get(
+                            "max_guidance_denoising_ratio", 1.0
+                        )
+                        if isinstance(max_ratio_schedule, ParameterSchedule):
+                            max_ratio_val = max_ratio_schedule.compute(steering_t)
+                            if isinstance(max_ratio_val, torch.Tensor):
+                                max_ratio_val = max_ratio_val.item()
+                        else:
+                            max_ratio_val = float(max_ratio_schedule)
+
+                        # Apply clipping
+                        guidance_ratio = guidance_magnitude / (
+                            denoising_magnitude + 1e-8
+                        )
+                        scale_factor = torch.minimum(
+                            torch.ones_like(guidance_ratio),
+                            max_ratio_val / (guidance_ratio + 1e-8),
+                        )
+                        grad = grad * scale_factor
+
+                    energy_gradient += parameters["guidance_weight"] * grad
+
+            guidance_update -= energy_gradient
+
+        return guidance_update
 
     def step_steering(
         self,
@@ -332,51 +642,22 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
                 original_denoised_over_sigma, dim=(-1, -2), keepdim=True
             )
 
-            guidance_update = torch.zeros_like(atom_coords_denoised)
-            for guidance_step in range(self.model.steering_args["num_gd_steps"]):
-                energy_gradient = torch.zeros_like(atom_coords_denoised)
-                for potential in potentials:
-                    parameters = potential.compute_parameters(steering_t)
-                    if (
-                        parameters["guidance_weight"] > 0
-                        and (guidance_step) % parameters["guidance_interval"] == 0
-                    ):
-                        grad = potential.compute_gradient(
-                            atom_coords_denoised + guidance_update,
-                            network_condition_kwargs["feats"],
-                            parameters,
-                        )
-
-                        # Scale guidance update relative to denoising magnitude
-                        if parameters.get("scale_guidance_to_denoising", False):
-                            guidance_magnitude = torch.linalg.norm(
-                                grad, dim=-1, keepdim=True
-                            )
-
-                            # Compute max allowed ratio using schedule
-                            max_ratio_schedule = parameters.get(
-                                "max_guidance_denoising_ratio", 1.0
-                            )
-                            if isinstance(max_ratio_schedule, ParameterSchedule):
-                                max_ratio_val = max_ratio_schedule.compute(steering_t)
-                                if isinstance(max_ratio_val, torch.Tensor):
-                                    max_ratio_val = max_ratio_val.item()
-                            else:
-                                max_ratio_val = float(max_ratio_schedule)
-
-                            # Apply clipping
-                            guidance_ratio = guidance_magnitude / (
-                                denoising_magnitude + 1e-8
-                            )
-                            scale_factor = torch.minimum(
-                                torch.ones_like(guidance_ratio),
-                                max_ratio_val / (guidance_ratio + 1e-8),
-                            )
-                            grad = grad * scale_factor
-
-                        energy_gradient += parameters["guidance_weight"] * grad
-
-                guidance_update -= energy_gradient
+            if self.adaptive_solver is not None:
+                guidance_update = self._adaptive_guidance_update(
+                    atom_coords_denoised,
+                    potentials,
+                    network_condition_kwargs["feats"],
+                    steering_t,
+                    denoising_magnitude,
+                )
+            else:
+                guidance_update = self._fixed_guidance_update(
+                    atom_coords_denoised,
+                    potentials,
+                    network_condition_kwargs["feats"],
+                    steering_t,
+                    denoising_magnitude,
+                )
 
             atom_coords_denoised += guidance_update
             scaled_guidance_update = (
@@ -762,62 +1043,28 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
                 original_denoised_over_sigma, dim=-1, keepdim=True
             )
 
-            guidance_update = torch.zeros_like(atom_coords_denoised)
-
-            for guidance_step in range(self.model.steering_args["num_gd_steps"]):
-                energy_gradient = torch.zeros_like(atom_coords_denoised)
-
-                for potential in potentials:
-                    parameters = potential.compute_parameters(steering_t)
-                    if (
-                        parameters["guidance_weight"] > 0
-                        and guidance_step % parameters["guidance_interval"] == 0
-                    ):
-                        if hasattr(potential, "compute_gradient_ensemble"):
-                            grad = potential.compute_gradient_ensemble(
-                                (atom_coords_denoised + guidance_update).reshape(
-                                    num_ensembles, ensemble_size, n_atoms, 3
-                                ),
-                                feats,
-                                parameters,
-                            ).reshape(multiplicity, n_atoms, 3)
-                        else:
-                            grad = potential.compute_gradient(
-                                atom_coords_denoised + guidance_update,
-                                network_condition_kwargs["feats"],
-                                parameters,
-                            )
-
-                        # Scale guidance update relative to denoising magnitude
-                        if parameters.get("scale_guidance_to_denoising", False):
-                            guidance_magnitude = torch.linalg.norm(
-                                grad, dim=-1, keepdim=True
-                            )
-
-                            # Compute max allowed ratio using schedule
-                            max_ratio_schedule = parameters.get(
-                                "max_guidance_denoising_ratio", 1.0
-                            )
-                            if isinstance(max_ratio_schedule, ParameterSchedule):
-                                max_ratio_val = max_ratio_schedule.compute(steering_t)
-                                if isinstance(max_ratio_val, torch.Tensor):
-                                    max_ratio_val = max_ratio_val.item()
-                            else:
-                                max_ratio_val = float(max_ratio_schedule)
-
-                            # Apply clipping
-                            guidance_ratio = guidance_magnitude / (
-                                denoising_magnitude + 1e-8
-                            )
-                            scale_factor = torch.minimum(
-                                torch.ones_like(guidance_ratio),
-                                max_ratio_val / (guidance_ratio + 1e-8),
-                            )
-                            grad = grad * scale_factor
-
-                        energy_gradient += parameters["guidance_weight"] * grad
-
-                guidance_update -= energy_gradient
+            if self.adaptive_solver is not None:
+                guidance_update = self._adaptive_guidance_update_ensemble(
+                    atom_coords_denoised,
+                    potentials,
+                    feats,
+                    steering_t,
+                    denoising_magnitude,
+                    num_ensembles,
+                    ensemble_size,
+                    n_atoms,
+                )
+            else:
+                guidance_update = self._fixed_guidance_update_ensemble(
+                    atom_coords_denoised,
+                    potentials,
+                    feats,
+                    steering_t,
+                    denoising_magnitude,
+                    num_ensembles,
+                    ensemble_size,
+                    n_atoms,
+                )
 
             atom_coords_denoised += guidance_update
             scaled_guidance_update = (
