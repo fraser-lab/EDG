@@ -1,11 +1,14 @@
 [project]
 authors = [{name = "Karson Chrispens", email = "karson.chrispens@ucsf.edu"}]
-dependencies = [ "setuptools", "numpy", "torch", "pandas", "scikit-learn", "scipy", "tqdm", "matplotlib", "mrcfile", "gemmi", "rdkit", "einops", "biopython", "opt-einsum", "notebook"]
+dependencies = [ "setuptools", "numpy", "torch", "pandas", "scikit-learn", "scipy", "tqdm", "matplotlib", "mrcfile", "gemmi", "rdkit", "einops", "biopython", "opt-einsum", "notebook", "pyyaml"]
 name = "edg"
 requires-python = ">=3.10"
 version = "0.1.0"
 readme = "README.md"
 description = "EDG: A package for generating ensemble models into density maps"
+
+[project.scripts]
+edg = "edg.cli:main"
 
 [project.optional-dependencies]
 test = ["pytest>=8.3.5,<9"]

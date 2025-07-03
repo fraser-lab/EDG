@@ -1,0 +1,89 @@
+# PTP1B experiment configuration
+# Replicates the functionality of run_ptp1b.py
+
+name: "ptp1b_experiment"
+
+# Structure configuration
+structure:
+  structure_path: "/home/kchrispens/adp-replicate/tests/resources/6b8x/6b8x_synthetic_shifted.cif"
+  clean_structure: true
+  keep_type: "protein"
+  remove_alternative_conformations: true
+  complete_residues: true
+
+# Density map configuration
+density:
+  map_path: "/home/kchrispens/adp-replicate/tests/resources/6b8x/6b8x_2A.ccp4"
+  resolution: 2.0
+  em_mode: false
+
+# Output configuration
+output_dir: "/home/kchrispens/adp-replicate/_notebooks/testing_ptp1b"
+input_data_dir: "/home/kchrispens/adp-replicate/_notebooks/input/test_ptp1b.yaml"
+
+# Model configuration
+model:
+  version: "boltz2"
+  checkpoint_path: "/home/kchrispens/.boltz/boltz2_conf.ckpt"
+
+# Diffusion parameters
+diffusion:
+  num_steps: 200
+
+# Steering configuration
+steering:
+  enabled: true
+  guidance_update: true
+  num_particles: 3
+
+# Adaptive solver configuration
+adaptive_solver:
+  type: "adam"
+  learning_rate: 0.3
+  max_iterations: 20
+  line_search: true
+  adaptive_line_search: true
+
+# Density guidance with complex scheduling
+density_guidance:
+  base_weight:
+    type: "piecewise"
+    breakpoints: [0.125, 0.375]  # 1 - 175/200, 1 - 125/200
+    values: [0, 1.0, 0]
+  guidance_interval: 1
+  resampling_weight:
+    type: "piecewise"
+    breakpoints: [0.125, 0.25, 0.375]  # 1 - 175/200, 1 - 150/200, 1 - 125/200
+    values: 
+      - 0.01
+      - type: "exponential_bounds"
+        start: 0.01
+        end: 50
+        alpha: 150
+        start_t: 0.125
+        end_t: 0.25
+      - 50
+      - 0.0
+  resolution_adaptive: true
+  scale_guidance_to_denoising: true
+  max_guidance_denoising_ratio: 0.2
+
+# Substructure conditioning for residues 175-192
+substructure:
+  enabled: true
+  selection: "chain A and resi 175-192"
+  guidance_weight: 0.05
+  resampling_weight: 0.0
+  buffer: 0.5
+
+# Optimization configuration
+optimization:
+  ensemble_size: 4
+  partial_diffusion: false
+  save_interval: 10
+  save_maps: true
+  save_scores: true
+
+# Potentials configuration
+potentials:
+  use_default_potentials: true

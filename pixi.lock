@@ -1150,7 +1150,7 @@ packages:
 - pypi: ./
   name: edg
   version: 0.1.0
-  sha256: 8862d799339b42e828dec168382c119282e876cf8534cf1243835764039c2219
+  sha256: 8baf1e57a9ef50bc3372e8857174e6c5dc71dd8f8b8fac317d0cbb53973a84de
   requires_dist:
   - setuptools
   - numpy
@@ -1167,6 +1167,7 @@ packages:
   - biopython
   - opt-einsum
   - notebook
+  - pyyaml
   - pytest>=8.3.5,<9 ; extra == 'test'
   - matplotlib ; extra == 'visualization'
   - seaborn ; extra == 'visualization'

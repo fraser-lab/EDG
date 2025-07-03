@@ -1,0 +1,64 @@
+# Simple EDG experiment configuration
+# Uses constant values instead of complex schedules for easier testing
+
+name: "simple_test"
+
+# Structure configuration
+structure:
+  structure_path: "/home/kchrispens/adp-replicate/tests/resources/6b8x/6b8x_synthetic_shifted.cif"
+  clean_structure: true
+  keep_type: "protein"
+  remove_alternative_conformations: true
+  complete_residues: true
+
+# Density map configuration  
+density:
+  map_path: "/home/kchrispens/adp-replicate/tests/resources/6b8x/6b8x_2A.ccp4"
+  resolution: 2.0
+  em_mode: false
+
+# Output configuration
+output_dir: "results/simple_test"
+input_data_dir: "input/simple_test"
+
+# Model configuration
+model:
+  version: "boltz2"
+
+# Diffusion parameters
+diffusion:
+  num_steps: 50  # Shorter for testing
+
+# Steering configuration
+steering:
+  enabled: true
+  guidance_update: true
+  num_particles: 3
+
+# Simple adaptive solver
+adaptive_solver:
+  type: "adam"
+  learning_rate: 0.02
+  max_iterations: 5
+
+# Simple density guidance (constant values)
+density_guidance:
+  base_weight: 0.4
+  guidance_interval: 1
+  resampling_weight: 0.1
+
+# No substructure conditioning
+substructure:
+  enabled: false
+
+# Optimization configuration
+optimization:
+  ensemble_size: 1
+  partial_diffusion: false
+  save_interval: 10
+  save_maps: true
+  save_scores: true
+
+# Potentials configuration
+potentials:
+  use_default_potentials: true

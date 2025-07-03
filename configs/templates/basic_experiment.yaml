@@ -1,0 +1,86 @@
+# Basic EDG experiment template
+# Copy and modify this file for your experiments
+
+name: "my_experiment"
+
+# Structure configuration
+structure:
+  structure_path: "/path/to/structure.cif"
+  clean_structure: true
+  keep_type: "protein"  # "protein", "all"
+  remove_alternative_conformations: true
+  complete_residues: true
+
+# Density map configuration  
+density:
+  map_path: "/path/to/density.ccp4"
+  resolution: 2.0  # Required for CCP4/MRC files
+  em_mode: false  # Set to true for cryo-EM
+
+# Output configuration
+output_dir: "results/my_experiment"
+input_data_dir: "input/my_experiment"
+
+# Model configuration
+model:
+  version: "boltz2"  # "boltz1" or "boltz2"
+  # checkpoint_path: null  # Auto-detect if not specified
+  # device: null  # Auto-detect if not specified
+
+# Diffusion parameters
+diffusion:
+  num_steps: 200
+  step_scale: null  # Auto-set based on model version
+  noise_scale: 1.0
+  gamma_0: 1.0
+  gamma_min: 0.01
+
+# Steering configuration
+steering:
+  enabled: true
+  guidance_update: true
+  num_particles: 3
+  fk_resampling_interval: 1
+  fk_lambda: 0.5
+  num_gd_steps: 10
+
+# Adaptive solver configuration
+adaptive_solver:
+  type: "adam"  # "adam", "simple", or "none"
+  learning_rate: 0.02
+  max_iterations: 10
+  convergence_threshold: 0.0001
+  gradient_clip_norm: 1.0
+  per_potential_scaling: true
+  line_search: false
+
+# Density guidance configuration
+density_guidance:
+  base_weight: 0.4  # Can also be a schedule
+  guidance_interval: 1
+  resampling_weight: 0.1
+  resolution_adaptive: true
+  scale_guidance_to_denoising: true
+  max_guidance_denoising_ratio: 0.2
+
+# Substructure conditioning (optional)
+substructure:
+  enabled: false
+  selection: null  # e.g., "chain A and resi 120-140"
+  guidance_weight: 0.05
+  resampling_weight: 0.0
+  buffer: 0.5
+
+# Optimization configuration
+optimization:
+  ensemble_size: 1
+  partial_diffusion: false
+  # noising_steps: null  # Auto-set to num_steps//4 if partial_diffusion=true
+  # representation_noise_scale: null
+  save_interval: 10
+  save_maps: true
+  save_scores: true
+
+# Potentials configuration
+potentials:
+  use_default_potentials: true
