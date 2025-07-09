@@ -8,6 +8,7 @@ structure:
   structure_path: "/home/kchrispens/adp-replicate/tests/resources/6b8x/6b8x_synthetic_shifted.cif"
   clean_structure: true
   keep_type: "protein"
+  remove_all_ligands: true
   remove_alternative_conformations: true
   complete_residues: true
 
@@ -18,8 +19,10 @@ density:
   em_mode: false
 
 # Output configuration
-output_dir: "/home/kchrispens/adp-replicate/_notebooks/testing_ptp1b"
-input_data_dir: "/home/kchrispens/adp-replicate/_notebooks/input/test_ptp1b.yaml"
+output_dir: "/home/kchrispens/adp-replicate/_notebooks/testing_ptp1b/output"
+input_data_dir: "/home/kchrispens/adp-replicate/_notebooks/input/ptp1b"
+# Optional: Use existing Boltz input YAML instead of generating new one
+boltz_input_yaml: "/home/kchrispens/adp-replicate/_notebooks/input/ptp1b/test_ptp1b.yaml"
 
 # Model configuration
 model:

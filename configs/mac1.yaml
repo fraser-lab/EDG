@@ -20,6 +20,7 @@ density:
 # Output configuration
 output_dir: "/home/kchrispens/adp-replicate/_notebooks/testing_mac1"
 input_data_dir: "/home/kchrispens/adp-replicate/_notebooks/input"
+boltz_input_yaml: "/home/kchrispens/adp-replicate/_notebooks/input/test.yaml"
 
 # Model configuration
 model:

@@ -86,7 +86,7 @@ def create_optimizer_from_config(
     
     # Create optimizer
     optimizer = DensityGuidedDiffusion(
-        input_path=input_yaml_path.parent,
+        input_path=input_yaml_path,
         y=config.density.map_path,
         structure=config.structure.structure_path,
         output_path=config.output_dir,
@@ -129,18 +129,22 @@ def process_structure_from_config(
     if structure_config.remove_alternative_conformations:
         logger.debug("Removing alternative conformations")
         optimizer.structure = optimizer.structure.remove_alternative_conformations()
+        optimizer.structure = optimizer.structure.reorder()
+        optimizer.structure.build_hierarchy()
+
     
     if structure_config.clean_structure:
         logger.debug(f"Cleaning structure (keep_type: {structure_config.keep_type})")
         optimizer.structure = optimizer.structure.clean_structure(keep_type=structure_config.keep_type)
+        optimizer.structure = optimizer.structure.reorder()
+        optimizer.structure.build_hierarchy() 
     
-    # Always reorder and build hierarchy
-    optimizer.structure = optimizer.structure.reorder()
-    optimizer.structure.build_hierarchy()
     
     if structure_config.complete_residues:
         logger.debug("Completing residues")
         optimizer.structure = optimizer.structure.complete_residues()
+        optimizer.structure = optimizer.structure.reorder()
+        optimizer.structure.build_hierarchy()
     
     # Final processing
     optimizer.structure = optimizer.structure.reorder().extract(

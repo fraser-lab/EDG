@@ -20,6 +20,8 @@ density:
 # Output configuration
 output_dir: "results/my_experiment"
 input_data_dir: "input/my_experiment"
+# Optional: Use existing Boltz input YAML instead of auto-generating one
+# boltz_input_yaml: "path/to/existing/boltz_input.yaml"
 
 # Model configuration
 model:

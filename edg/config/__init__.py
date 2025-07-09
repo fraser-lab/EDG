@@ -1,20 +1,7 @@
 """Configuration system for EDG (Ensembles from Density Generator).
 
-This module provides a comprehensive configuration system that supports:
-- YAML-based configuration files
-- Command-line parameter overrides  
-- Complex parameter scheduling
-- Parameter validation and type checking
-- Backward compatibility with existing API
-
-Usage:
-    from edg.config import ExperimentConfig, load_config
-    
-    # Load from YAML file
-    config = load_config("path/to/config.yaml")
-    
-    # Load with CLI overrides
-    config = load_config("path/to/config.yaml", overrides={"num_steps": 300})
+Provides YAML-based configuration with CLI overrides, parameter scheduling, 
+and validation for EDG experiments.
 """
 
 from .config_schema import (

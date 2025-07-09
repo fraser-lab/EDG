@@ -172,9 +172,6 @@ def create_substructure_potential(
     SubstructurePotential
         Configured substructure potential
     """
-    # Parse selection string to get atom indices
-    # For now, we'll pass an empty array and let the potential handle it
-    # In a full implementation, you'd parse the selection string here
     selection_indices = np.array([], dtype=int)
     
     parameters = {

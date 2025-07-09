@@ -7,7 +7,6 @@ that can be serialized to/from YAML and validated for correctness.
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Union, List, Dict, Any
-import torch
 
 from .schedules import ParameterSchedule, ConstantScheduleConfig
 
@@ -114,6 +113,7 @@ class StructureConfig:
     keep_type: str = "protein"  # "protein", "all", etc.
     remove_alternative_conformations: bool = True
     complete_residues: bool = True
+    remove_all_ligands: bool = True  # Remove all non-protein ligands
 
 
 @dataclass
@@ -133,11 +133,7 @@ class OptimizationConfig:
 @dataclass
 class PotentialConfig:
     """Configuration for additional potentials."""
-    # Individual potential configurations can be added here
-    # For now, using default potentials from get_potentials()
     use_default_potentials: bool = True
-    
-    # Custom potential configurations can be added here in the future
     custom_potentials: Optional[Dict[str, Any]] = None
 
 
@@ -152,6 +148,7 @@ class ExperimentConfig:
     # Output configuration  
     output_dir: str
     input_data_dir: str  # Path for temporary input data (YAML file)
+    boltz_input_yaml: Optional[str] = None  # Optional path to existing Boltz input YAML
     
     # Optional configurations with defaults
     model: ModelConfig = field(default_factory=ModelConfig)
@@ -205,57 +202,3 @@ class ExperimentConfig:
         
         return errors
     
-    def to_optimizer_kwargs(self) -> Dict[str, Any]:
-        """Convert config to kwargs for DensityGuidedDiffusion constructor.
-        
-        Returns
-        -------
-        Dict[str, Any]
-            Keyword arguments for optimizer initialization
-        """
-        from boltz.main import BoltzSteeringParams
-        
-        # Create steering args
-        steering_args = BoltzSteeringParams()
-        steering_args.fk_steering = self.steering.enabled
-        steering_args.guidance_update = self.steering.guidance_update  
-        steering_args.num_particles = self.steering.num_particles
-        
-        # Create adaptive solver config
-        from edg.edg.modules.adaptive_solver import AdaptiveSolverConfig as AdaptiveSolverConfigClass
-        
-        adaptive_solver_config = AdaptiveSolverConfigClass(
-            learning_rate=self.adaptive_solver.learning_rate,
-            max_iterations=self.adaptive_solver.max_iterations,
-            convergence_threshold=self.adaptive_solver.convergence_threshold,
-            gradient_clip_norm=self.adaptive_solver.gradient_clip_norm,
-            per_potential_scaling=self.adaptive_solver.per_potential_scaling,
-            line_search=self.adaptive_solver.line_search,
-            beta1=self.adaptive_solver.beta1,
-            beta2=self.adaptive_solver.beta2,
-            eps=self.adaptive_solver.eps,
-            line_search_c1=self.adaptive_solver.line_search_c1,
-            line_search_backtrack=self.adaptive_solver.line_search_backtrack,
-            max_line_search_steps=self.adaptive_solver.max_line_search_steps,
-            adaptive_line_search=self.adaptive_solver.adaptive_line_search,
-            adaptive_backtrack_min=self.adaptive_solver.adaptive_backtrack_min,
-            adaptive_backtrack_max=self.adaptive_solver.adaptive_backtrack_max,
-            violation_scaling=self.adaptive_solver.violation_scaling,
-        )
-        
-        return {
-            "input_path": Path(self.input_data_dir),
-            "y": self.density.map_path,
-            "structure": self.structure.structure_path,
-            "output_path": self.output_dir,
-            "em": self.density.em_mode,
-            "resolution": self.density.resolution,
-            "step_scale": self.diffusion.step_scale,
-            "ckpt_path": Path(self.model.checkpoint_path) if self.model.checkpoint_path else None,
-            "model_version": self.model.version,
-            "ccd_path": Path(self.model.ccd_path) if self.model.ccd_path else None,
-            "device": self.model.device,
-            "adaptive_solver": self.adaptive_solver.type,
-            "adaptive_solver_config": adaptive_solver_config if self.adaptive_solver.type != "none" else None,
-            "steering_args": steering_args,
-        }

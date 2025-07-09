@@ -357,7 +357,10 @@ class DiffusionStepper:
                 s, z = pairformer_module(s, z, mask=mask, pair_mask=pair_mask)
 
             # Add noise to representations for diversity if specified
-            if representation_noise_scale is not None and representation_noise_scale > 0:
+            if (
+                representation_noise_scale is not None
+                and representation_noise_scale > 0
+            ):
                 s_noise = representation_noise_scale * torch.randn_like(s)
                 z_noise = representation_noise_scale * torch.randn_like(z)
                 s = s + s_noise
@@ -379,7 +382,7 @@ class DiffusionStepper:
                 "atom_enc_bias": atom_enc_bias,
                 "atom_dec_bias": atom_dec_bias,
                 "token_trans_bias": token_trans_bias,
-            }   
+            }
 
             # Cache outputs
             self.cached_representations = {
@@ -416,7 +419,9 @@ class DiffusionStepper:
         self.diffusion_trajectory = {}
 
         batch = self.prepare_feats_from_datamodule_batch()
-        self.compute_representations(batch, representation_noise_scale=representation_noise_scale)
+        self.compute_representations(
+            batch, representation_noise_scale=representation_noise_scale
+        )
 
         num_sampling_steps = default(
             sampling_steps, self.model.structure_module.num_sampling_steps
@@ -470,6 +475,8 @@ class DiffusionStepper:
         token_repr = None
         token_a = None
 
+        init_coords = init_coords.reshape(-1, init_coords.shape[-2], 3)
+
         self.cached_diffusion_init = {
             "init_coords": pad_dim(init_coords, 1, shape[1] - init_coords.shape[1]),
             "atom_coords": atom_coords,
@@ -518,7 +525,9 @@ class DiffusionStepper:
         self.diffusion_trajectory = {}
 
         batch = self.prepare_feats_from_datamodule_batch()
-        self.compute_representations(batch, representation_noise_scale=representation_noise_scale)
+        self.compute_representations(
+            batch, representation_noise_scale=representation_noise_scale
+        )
 
         num_sampling_steps = default(
             sampling_steps, self.model.structure_module.num_sampling_steps
@@ -574,7 +583,7 @@ class DiffusionStepper:
         )
         sigmas_and_gammas = list(zip(sigmas[:-1], sigmas[1:], gammas[1:]))
 
-        # atom position is noise at the beginning
+        # atom position is based on the init coords
         if isinstance(structure, Structure):
             atom_coords = (
                 torch.tensor(structure.coor, device=self.device)
@@ -583,9 +592,7 @@ class DiffusionStepper:
                 .repeat(diffusion_samples * num_particles, 1, 1)
             )
         elif isinstance(structure, torch.Tensor):
-            atom_coords = structure.reshape(
-                -1, structure.shape[-2], 3
-            )  # NOTE: should be handled in optimizer
+            atom_coords = structure.reshape(-1, structure.shape[-2], 3)
 
         atom_coords = pad_dim(atom_coords, 1, shape[1] - atom_coords.shape[1])
         init_coords = atom_coords.clone()
@@ -650,7 +657,9 @@ class DiffusionStepper:
         self.current_step = 0
 
         batch = self.prepare_feats_from_datamodule_batch()
-        self.compute_representations(batch, representation_noise_scale=representation_noise_scale)
+        self.compute_representations(
+            batch, representation_noise_scale=representation_noise_scale
+        )
 
         num_sampling_steps = default(
             sampling_steps, self.model.structure_module.num_sampling_steps
@@ -712,9 +721,7 @@ class DiffusionStepper:
                 .repeat(diffusion_samples * num_particles, 1, 1)
             )
         elif isinstance(structure, torch.Tensor):
-            init_coords = structure.reshape(
-                -1, structure.shape[-2], 3
-            )  # NOTE: should be handled in optimizer
+            init_coords = structure.reshape(-1, structure.shape[-2], 3)
 
         init_coords = pad_dim(init_coords, 1, shape[1] - init_coords.shape[1])
 

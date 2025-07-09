@@ -52,7 +52,6 @@ class PiecewiseScheduleConfig(ParameterSchedule):
     values: List[Union[float, int, "ParameterSchedule"]]
     
     def to_schedule(self) -> PiecewiseSchedule:
-        # Convert nested schedules (only convert actual ParameterSchedule objects)
         converted_values = []
         for value in self.values:
             if isinstance(value, ParameterSchedule):

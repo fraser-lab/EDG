@@ -9,13 +9,9 @@ from pathlib import Path
 from typing import Dict, Any, Union, Optional, List
 import yaml
 from dataclasses import fields, is_dataclass, asdict
-import logging
 
 from .config_schema import ExperimentConfig
 from .schedules import ParameterSchedule, parse_schedule_config
-
-
-logger = logging.getLogger(__name__)
 
 
 def load_config(
@@ -330,45 +326,3 @@ def create_experiment_config(config_data: Dict[str, Any]) -> ExperimentConfig:
     return ExperimentConfig(**main_config_data)
 
 
-def create_template_config(
-    name: str,
-    structure_path: str,
-    density_path: str,
-    output_dir: str,
-    input_data_dir: str,
-    **kwargs
-) -> ExperimentConfig:
-    """Create a template configuration with sensible defaults.
-    
-    Parameters
-    ----------
-    name : str
-        Experiment name
-    structure_path : str
-        Path to structure file
-    density_path : str  
-        Path to density map file
-    output_dir : str
-        Output directory path
-    input_data_dir : str
-        Input data directory path
-    **kwargs
-        Additional configuration overrides
-        
-    Returns
-    -------
-    ExperimentConfig
-        Template configuration
-    """
-    from .config_schema import StructureConfig, DensityConfig
-    
-    config_data = {
-        "name": name,
-        "structure": StructureConfig(structure_path=structure_path),
-        "density": DensityConfig(map_path=density_path),
-        "output_dir": output_dir,
-        "input_data_dir": input_data_dir,
-        **kwargs
-    }
-    
-    return ExperimentConfig(**config_data)
