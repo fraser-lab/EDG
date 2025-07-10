@@ -12,38 +12,39 @@ from .config_schema import ExperimentConfig
 from edg.edg.optimizer import DensityGuidedDiffusion
 from edg.utils.utility import try_gpu
 from boltz.main import BoltzSteeringParams
-from edg.edg.modules.adaptive_solver import AdaptiveSolverConfig as AdaptiveSolverConfigClass
+from edg.edg.modules.adaptive_solver import (
+    AdaptiveSolverConfig as AdaptiveSolverConfigClass,
+)
 
 
 logger = logging.getLogger(__name__)
 
 
 def create_optimizer_from_config(
-    config: ExperimentConfig, 
-    input_yaml_path: Path
+    config: ExperimentConfig, input_yaml_path: Path
 ) -> DensityGuidedDiffusion:
     """Create DensityGuidedDiffusion optimizer from configuration.
-    
+
     Parameters
     ----------
     config : ExperimentConfig
         Complete experiment configuration
     input_yaml_path : Path
         Path to input YAML file for the optimizer
-        
+
     Returns
     -------
     DensityGuidedDiffusion
         Configured optimizer instance
     """
     logger.debug(f"Creating optimizer with model version: {config.model.version}")
-    
+
     # Create steering args
     steering_args = BoltzSteeringParams()
     steering_args.fk_steering = config.steering.enabled
     steering_args.guidance_update = config.steering.guidance_update
     steering_args.num_particles = config.steering.num_particles
-    
+
     # Create adaptive solver config if enabled
     adaptive_solver_config = None
     if config.adaptive_solver.type != "none":
@@ -65,7 +66,7 @@ def create_optimizer_from_config(
             adaptive_backtrack_max=config.adaptive_solver.adaptive_backtrack_max,
             violation_scaling=config.adaptive_solver.violation_scaling,
         )
-    
+
     # Set checkpoint path
     checkpoint_path = config.model.checkpoint_path
     if checkpoint_path is None:
@@ -73,17 +74,17 @@ def create_optimizer_from_config(
             checkpoint_path = str(Path("~/.boltz/boltz1_conf.ckpt").expanduser())
         else:
             checkpoint_path = str(Path("~/.boltz/boltz2_conf.ckpt").expanduser())
-    
+
     # Set CCD path
     ccd_path = config.model.ccd_path
     if ccd_path is None:
         ccd_path = str(Path("~/.boltz/ccd.pkl").expanduser())
-    
+
     # Set device
     device = config.model.device
     if device is None:
         device = try_gpu()
-    
+
     # Create optimizer
     optimizer = DensityGuidedDiffusion(
         input_path=input_yaml_path,
@@ -102,30 +103,29 @@ def create_optimizer_from_config(
         steering_args=steering_args,
         config=config,
     )
-    
+
     return optimizer
 
 
 def process_structure_from_config(
-    optimizer: DensityGuidedDiffusion, 
-    config: ExperimentConfig
+    optimizer: DensityGuidedDiffusion, config: ExperimentConfig
 ) -> DensityGuidedDiffusion:
     """Process structure according to configuration.
-    
+
     Parameters
     ----------
     optimizer : DensityGuidedDiffusion
         Optimizer with loaded structure
     config : ExperimentConfig
         Experiment configuration
-        
+
     Returns
     -------
     DensityGuidedDiffusion
         Optimizer with processed structure
     """
     structure_config = config.structure
-    
+
     # Apply structure processing steps
     if structure_config.remove_alternative_conformations:
         logger.debug("Removing alternative conformations")
@@ -133,38 +133,37 @@ def process_structure_from_config(
         optimizer.structure = optimizer.structure.reorder()
         optimizer.structure.build_hierarchy()
 
-    
     if structure_config.clean_structure:
         logger.debug(f"Cleaning structure (keep_type: {structure_config.keep_type})")
-        optimizer.structure = optimizer.structure.clean_structure(keep_type=structure_config.keep_type)
+        optimizer.structure = optimizer.structure.clean_structure(
+            keep_type=structure_config.keep_type,
+            remove_all_ligands=structure_config.remove_all_ligands,
+        )
         optimizer.structure = optimizer.structure.reorder()
-        optimizer.structure.build_hierarchy() 
-    
-    
+        optimizer.structure.build_hierarchy()
+
     if structure_config.complete_residues:
         logger.debug("Completing residues")
         optimizer.structure = optimizer.structure.complete_residues()
         optimizer.structure = optimizer.structure.reorder()
         optimizer.structure.build_hierarchy()
-    
+
     # Final processing
     optimizer.structure = optimizer.structure.reorder().extract(
         optimizer.structure.select("active", True)
     )
-    
+
     num_atoms = optimizer.structure.active.sum()
     logger.info(f"Processed structure: {num_atoms} active atoms")
-    
+
     return optimizer
 
 
 def prepare_optimization_kwargs_from_config(
-    config: ExperimentConfig, 
-    output_dir: Path,
-    optimizer: DensityGuidedDiffusion
+    config: ExperimentConfig, output_dir: Path, optimizer: DensityGuidedDiffusion
 ) -> Dict[str, Any]:
     """Prepare optimization keyword arguments from configuration.
-    
+
     Parameters
     ----------
     config : ExperimentConfig
@@ -173,7 +172,7 @@ def prepare_optimization_kwargs_from_config(
         Output directory for this run
     optimizer : DensityGuidedDiffusion
         Configured optimizer
-        
+
     Returns
     -------
     Dict[str, Any]
@@ -187,7 +186,7 @@ def prepare_optimization_kwargs_from_config(
         "steering": config.steering.enabled,
         "representation_noise_scale": config.optimization.representation_noise_scale,
     }
-    
+
     # Add substructure conditioning if enabled
     if config.substructure.enabled and config.substructure.selection:
         # Parse selection string to get actual atom indices
@@ -196,10 +195,14 @@ def prepare_optimization_kwargs_from_config(
             kwargs["substructure_conditioning_kwargs"] = {
                 "selection": selector,
             }
-            logger.info(f"Enabled substructure conditioning for {config.substructure.selection}")
+            logger.info(
+                f"Enabled substructure conditioning for {config.substructure.selection}"
+            )
         except Exception as e:
-            logger.warning(f"Failed to parse substructure selection '{config.substructure.selection}': {e}")
-    
+            logger.warning(
+                f"Failed to parse substructure selection '{config.substructure.selection}': {e}"
+            )
+
     # Add diffusion kwargs for partial diffusion
     if config.optimization.partial_diffusion:
         diffusion_kwargs = {}
@@ -209,5 +212,5 @@ def prepare_optimization_kwargs_from_config(
             # Auto-set to num_steps//4
             diffusion_kwargs["noising_steps"] = config.diffusion.num_steps // 4
         kwargs["diffusion_kwargs"] = diffusion_kwargs
-    
+
     return kwargs
