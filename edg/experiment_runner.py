@@ -328,12 +328,6 @@ def run_experiment_main_logic(config: ExperimentConfig, input_data_dir: Path, ru
 
             shutil.copy2(input_yaml_path, target_yaml_path)
             input_yaml_path = target_yaml_path
-        else:
-            # Clean up any other YAML files in the directory to avoid conflicts
-            for yaml_file in input_data_dir.glob("*.yaml"):
-                if yaml_file != input_yaml_path:
-                    logger.debug(f"Removing conflicting YAML file: {yaml_file}")
-                    yaml_file.unlink()
 
         # Create optimizer with the validated Boltz YAML
         optimizer = create_optimizer_from_config(config, input_yaml_path)

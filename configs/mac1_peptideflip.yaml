@@ -1,11 +1,11 @@
 # MAC1 experiment configuration
 # Replicates the functionality of run_mac1.py
 
-name: "mac1_peptideflip_experiment"
+name: "mac1_peptideflip_APR_experiment"
 
 # Structure configuration
 structure:
-  structure_path: "/home/kchrispens/adp-replicate/tests/resources/mac1_adpr_peptideflip/mac1_adpr_peptideflip_shifted.cif"
+  structure_path: "/home/kchrispens/adp-replicate/tests/resources/mac1_adpr_peptideflip/mac1_adpr_peptideflip_Bconf_shifted.cif"
   clean_structure: true
   keep_type: "all"
   remove_alternative_conformations: true
@@ -75,7 +75,7 @@ density_guidance:
 # Substructure conditioning for residues 120-140
 substructure:
   enabled: true
-  selection: "chain A and resi 41-47 or chain B" # Selection will be NOT conditioned
+  selection: "chain A and resi 41-47" # Selection will be NOT conditioned
   guidance_weight: 0.05
   resampling_weight: 0.0
   buffer: 0.5

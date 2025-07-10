@@ -1,11 +1,11 @@
 # PTP1B experiment configuration
 # Replicates the functionality of run_ptp1b.py
 
-name: "ptp1b_Aconf_experiment"
+name: "ptp1b_Bconf_experiment"
 
 # Structure configuration
 structure:
-  structure_path: "/home/kchrispens/adp-replicate/tests/resources/6b8x/6b8x_synthetic_Aconf_shifted.cif"
+  structure_path: "/home/kchrispens/adp-replicate/tests/resources/6b8x/6b8x_synthetic_Bconf_shifted.cif"
   clean_structure: true
   keep_type: "protein"
   remove_all_ligands: true
@@ -14,7 +14,7 @@ structure:
 
 # Density map configuration
 density:
-  map_path: "/home/kchrispens/adp-replicate/tests/resources/6b8x/6b8x_Aconf_2A.ccp4"
+  map_path: "/home/kchrispens/adp-replicate/tests/resources/6b8x/6b8x_Bconf_2A.ccp4"
   resolution: 2.0
   em_mode: false
 
@@ -22,7 +22,7 @@ density:
 output_dir: "/home/kchrispens/adp-replicate/_notebooks/testing_ptp1b/output"
 input_data_dir: "/home/kchrispens/adp-replicate/_notebooks/input/ptp1b"
 # Optional: Use existing Boltz input YAML instead of generating new one
-boltz_input_yaml: "/home/kchrispens/adp-replicate/_notebooks/input/ptp1b/test_ptp1b.yaml"
+boltz_input_yaml: "/home/kchrispens/adp-replicate/_notebooks/input/ptp1b/test_ptp1b_B.yaml"
 
 # Model configuration
 model:
