@@ -156,15 +156,22 @@ def map_override_key(key: str) -> str:
         # Guidance parameters
         "guidance_weight": "density_guidance.base_weight",
         "resampling_weight": "density_guidance.resampling_weight",
+        "max_guidance_denoising_ratio": "density_guidance.max_guidance_denoising_ratio",
+        "guidance_interval": "density_guidance.guidance_interval",
         
         # Steering parameters
         "num_particles": "steering.num_particles",
         "guidance_update": "steering.guidance_update",
+        "fk_lambda": "steering.fk_lambda",
+        "fk_resampling_interval": "steering.fk_resampling_interval",
         
         # Solver parameters
         "learning_rate": "adaptive_solver.learning_rate",
         "solver_type": "adaptive_solver.type",
         "max_iterations": "adaptive_solver.max_iterations",
+        "convergence_threshold": "adaptive_solver.convergence_threshold",
+        "gradient_clip_norm": "adaptive_solver.gradient_clip_norm",
+        "line_search": "adaptive_solver.line_search",
         
         # Model parameters
         "model_version": "model.version",

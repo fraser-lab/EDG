@@ -61,7 +61,6 @@ density_guidance:
   base_weight: 0.4  # Can also be a schedule
   guidance_interval: 1
   resampling_weight: 0.1
-  resolution_adaptive: true
   scale_guidance_to_denoising: true
   max_guidance_denoising_ratio: 0.2
 

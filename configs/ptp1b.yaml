@@ -39,7 +39,6 @@ steering:
   guidance_update: true
   num_particles: 3
 
-# Adaptive solver configuration
 adaptive_solver:
   type: "adam"
   learning_rate: 0.3
@@ -47,7 +46,6 @@ adaptive_solver:
   line_search: true
   adaptive_line_search: true
 
-# Density guidance with complex scheduling
 density_guidance:
   base_weight:
     type: "piecewise"
@@ -67,9 +65,12 @@ density_guidance:
         end_t: 0.25
       - 50
       - 0.0
-  resolution_adaptive: true
   scale_guidance_to_denoising: true
-  max_guidance_denoising_ratio: 0.2
+  max_guidance_denoising_ratio: 0.01
+  resolution:
+    type: "piecewise"
+    breakpoints: [0.125]  # 1 - 150/200, 1 - 125/200
+    values: [2.0, 8.0]  # Resolution changes at these points
 
 # Substructure conditioning for residues 175-192
 substructure:

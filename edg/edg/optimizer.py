@@ -55,6 +55,11 @@ from edg.utils.utility import try_gpu
 from edg.edg.modules.potentials import SubstructurePotential, DensityPotential
 from edg.edg.modules.adaptive_solver import AdaptiveSolverConfig
 
+# Import config types (avoid circular import by using TYPE_CHECKING)
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from edg.config import ExperimentConfig
+
 
 @torch.jit.script
 def cos_similarity(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
@@ -98,6 +103,7 @@ class DensityGuidedDiffusion:
         device: Optional[str] = None,
         adaptive_solver: str = "adam",  # "adam", "simple", or "none"
         adaptive_solver_config: Optional[AdaptiveSolverConfig] = None,
+        config: Optional["ExperimentConfig"] = None,
         **kwargs,
     ):
         """Initialize the density-guided diffusion optimizer.
@@ -261,6 +267,9 @@ class DensityGuidedDiffusion:
             config=adaptive_solver_config,
             enable=adaptive_solver.lower() != "none",
         )
+        
+        # Store config for potential creation
+        self.config = config
 
     def _setup_scattering_params(self, structure_factors: dict):
         """Set up scattering parameters for density calculation."""
@@ -352,82 +361,67 @@ class DensityGuidedDiffusion:
         occupancies = occupancies.to(self.device).float()
         active = active.to(self.device).bool()
 
-        # resolution_scale = ExponentialInterpolationWithBounds(
-        #     start=resolution,
-        #     end=8.0,
-        #     alpha=0.0,
-        #     start_t=(1 - 175 / 200),
-        #     end_t=(1 - 150 / 200),
-        # )
-        resolution_scale = PiecewiseSchedule(
-            [(1 - 150 / 200)],
-            [resolution, 8.0]
-        )
-        density_schedule = ExponentialInterpolationWithBounds(
-            start=0.0,
-            end=150,
-            alpha=90,
-            start_t=(1 - 175 / 200),
-            end_t=(1 - 150 / 200),
-        )
-
-        density_potential = DensityPotential(
-            xmap=self.density_calculator.xmap,
-            # atom_selection=substructure_conditioning_kwargs.get(
-            #     "selection", np.array([], dtype=int)
-            # ),
-            parameters={
-                "guidance_interval": 1,
-                "guidance_weight": PiecewiseSchedule(
-                    [1 - 175 / 200, 1 - 125 / 200], [0, 1.0, 0]
-                ),  # NOTE: for scaled
-                # "guidance_weight": ResolutionScaling(
-                #     resolution_scale, resolution, base=density_schedule # NOTE: for L2
-                #     # resolution_scale, resolution, base=0.5 # NOTE: for hybrid
-                # ),
-                # "guidance_weight": PiecewiseSchedule(
-                #     [(1 - 175 / 200), (1 - 150 / 200), (1 - 125 / 200)],
-                #     [
-                #         0,
-                #         density_schedule,
-                #         150,
-                #         0,
-                #     ],
-                # ),
-                "resolution": resolution_scale,
-                "resampling_weight": PiecewiseSchedule(
-                    [(1 - 175 / 200), (1 - 150 / 200), (1 - 125 / 200)],
-                    [
-                        0.01,
-                        ExponentialInterpolationWithBounds(
-                            start=0.01,
-                            end=50,
-                            alpha=150,
-                            start_t=(1 - 175 / 200),
-                            end_t=(1 - 150 / 200),
-                        ),
-                        50,
-                        0.0,
-                    ],
-                ),
-                "elements": elements,
-                "b_factors": b_factors,
-                "occupancies": occupancies,
-                "scattering_params": self.scattering_params,
-                "em": self.em,
-                "scale_guidance_to_denoising": True,
-                "max_guidance_denoising_ratio": 0.2,
-                # "max_guidance_denoising_ratio": ExponentialInterpolationWithBounds(
-                #     start=0.000001,
-                #     end=1.0,
-                #     alpha=-10.0,
-                #     start_t=(1 - 175 / 200),
-                #     end_t=(1 - 150 / 200),
-                # )
-            },
-        )
-
-        potentials = [density_potential]
+        # Create potentials using configuration if available
+        if self.config is not None:
+            # Use config-driven potential creation
+            from edg.config.potential_factory import create_potentials_from_config
+            
+            # Get atom selection if substructure conditioning is enabled
+            atom_selection = None
+            if substructure_conditioning_kwargs is not None:
+                atom_selection = substructure_conditioning_kwargs.get("selection", np.array([], dtype=int))
+            
+            potentials = create_potentials_from_config(
+                config=self.config,
+                xmap=self.density_calculator.xmap,
+                elements=elements,
+                b_factors=b_factors,
+                occupancies=occupancies,
+                scattering_params=self.scattering_params,
+                atom_selection=atom_selection,
+                reference_coords=coords
+            )
+        else:
+            # Fallback to hardcoded potential creation for backward compatibility
+            resolution_scale = PiecewiseSchedule(
+                [(1 - 150 / 200)],
+                [resolution, 8.0]
+            )
+            
+            density_potential = DensityPotential(
+                xmap=self.density_calculator.xmap,
+                parameters={
+                    "guidance_interval": 1,
+                    "guidance_weight": PiecewiseSchedule(
+                        [1 - 175 / 200, 1 - 125 / 200], [0, 1.0, 0]
+                    ),
+                    "resolution": resolution_scale,
+                    "resampling_weight": PiecewiseSchedule(
+                        [(1 - 175 / 200), (1 - 150 / 200), (1 - 125 / 200)],
+                        [
+                            0.01,
+                            ExponentialInterpolationWithBounds(
+                                start=0.01,
+                                end=50,
+                                alpha=150,
+                                start_t=(1 - 175 / 200),
+                                end_t=(1 - 150 / 200),
+                            ),
+                            50,
+                            0.0,
+                        ],
+                    ),
+                    "elements": elements,
+                    "b_factors": b_factors,
+                    "occupancies": occupancies,
+                    "scattering_params": self.scattering_params,
+                    "em": self.em,
+                    "scale_guidance_to_denoising": True,
+                    "max_guidance_denoising_ratio": 0.2,
+                },
+            )
+            
+            potentials = [density_potential]
 
         if partial_diffusion:
             if diffusion_kwargs is None:
@@ -443,19 +437,21 @@ class DensityGuidedDiffusion:
                 **diffusion_kwargs,
             )
         elif substructure_conditioning_kwargs is not None:
-            substructure_potential = SubstructurePotential(
-                parameters={
-                    "guidance_interval": 1,
-                    "guidance_weight": 0.05,
-                    "resampling_weight": 0.0,
-                    "buffer": 0.5,
-                    "denoising_selection": substructure_conditioning_kwargs.get(
-                        "selection", np.array([], dtype=int)
-                    ),
-                    "reference_coords": coords,
-                }
-            )
-            potentials.append(substructure_potential)
+            # Add substructure potential if not already created by config
+            if self.config is None or not self.config.substructure.enabled:
+                substructure_potential = SubstructurePotential(
+                    parameters={
+                        "guidance_interval": 1,
+                        "guidance_weight": 0.05,
+                        "resampling_weight": 0.0,
+                        "buffer": 0.5,
+                        "denoising_selection": substructure_conditioning_kwargs.get(
+                            "selection", np.array([], dtype=int)
+                        ),
+                        "reference_coords": coords,
+                    }
+                )
+                potentials.append(substructure_potential)
             self.stepper.initialize_substructure_conditioned_diffusion(
                 ensemble_size=ensemble_size,
                 sampling_steps=num_steps,

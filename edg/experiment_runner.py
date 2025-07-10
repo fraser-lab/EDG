@@ -69,20 +69,51 @@ def validate_boltz_yaml_compatibility(boltz_yaml_path: Path, structure_path: str
         
         # Check that sequences are properly formatted
         for i, seq_entry in enumerate(yaml_data['sequences']):
-            if not isinstance(seq_entry, dict) or 'protein' not in seq_entry:
-                logger.error(f"Sequence entry {i} must have a 'protein' key")
+            if not isinstance(seq_entry, dict) or ('protein' not in seq_entry and 'ligand' not in seq_entry):
+                logger.error(f"Sequence entry {i} must have a 'protein' or 'ligand' key")
                 return False
                 
-            protein = seq_entry['protein']
-            if not isinstance(protein, dict) or 'id' not in protein or 'sequence' not in protein:
-                logger.error(f"Sequence entry {i} must have 'id' and 'sequence' keys")
-                return False
+            # Handle protein sequences
+            if 'protein' in seq_entry:
+                protein = seq_entry['protein']
+                if not isinstance(protein, dict) or 'id' not in protein or 'sequence' not in protein:
+                    logger.error(f"Protein sequence entry {i} must have 'id' and 'sequence' keys")
+                    return False
+                    
+                if not isinstance(protein['sequence'], str) or len(protein['sequence']) == 0:
+                    logger.error(f"Protein sequence entry {i} must have a non-empty sequence string")
+                    return False
+                    
+            # Handle ligand sequences
+            elif 'ligand' in seq_entry:
+                ligand = seq_entry['ligand']
+                if not isinstance(ligand, dict) or 'id' not in ligand:
+                    logger.error(f"Ligand sequence entry {i} must have 'id' key")
+                    return False
                 
-            if not isinstance(protein['sequence'], str) or len(protein['sequence']) == 0:
-                logger.error(f"Sequence entry {i} must have a non-empty sequence string")
-                return False
+                # Check for either 'ccd' or 'smiles' key
+                if 'ccd' not in ligand and 'smiles' not in ligand:
+                    logger.error(f"Ligand sequence entry {i} must have either 'ccd' or 'smiles' key")
+                    return False
+                
+                # Validate ccd if present
+                if 'ccd' in ligand:
+                    if not isinstance(ligand['ccd'], str) or len(ligand['ccd']) == 0:
+                        logger.error(f"Ligand sequence entry {i} must have a non-empty ccd string")
+                        return False
+                
+                # Validate smiles if present
+                if 'smiles' in ligand:
+                    if not isinstance(ligand['smiles'], str) or len(ligand['smiles']) == 0:
+                        logger.error(f"Ligand sequence entry {i} must have a non-empty smiles string")
+                        return False
         
-        logger.info(f"Boltz YAML format validation passed with {len(yaml_data['sequences'])} sequences")
+        # Count sequence types for logging
+        protein_count = sum(1 for seq in yaml_data['sequences'] if 'protein' in seq)
+        ligand_count = sum(1 for seq in yaml_data['sequences'] if 'ligand' in seq)
+        
+        logger.info(f"Boltz YAML format validation passed with {len(yaml_data['sequences'])} sequences "
+                   f"({protein_count} protein, {ligand_count} ligand)")
             
         return True
         
@@ -113,8 +144,11 @@ def run_experiment(config: ExperimentConfig) -> Dict[str, Any]:
     input_data_dir = Path(config.input_data_dir)
     input_data_dir.mkdir(parents=True, exist_ok=True)
     
-    # Save the final configuration used
-    config_output_path = output_dir / "experiment_config.yaml"
+    # Create output directory for this specific run
+    run_output_dir = create_run_output_dir(config, output_dir)
+    
+    # Save the final configuration used to the run-specific directory
+    config_output_path = run_output_dir / "experiment_config.yaml"
     from edg.config import save_config
     save_config(config, config_output_path)
     logger.info(f"Saved experiment configuration to {config_output_path}")
@@ -198,9 +232,6 @@ def run_experiment(config: ExperimentConfig) -> Dict[str, Any]:
         # Process the structure
         logger.info("Processing input structure...")
         optimizer = process_structure_from_config(optimizer, config)
-    
-    # Create output directory for this specific run
-    run_output_dir = create_run_output_dir(config, output_dir)
     
     # Prepare optimization arguments
     optimize_kwargs = prepare_optimization_kwargs_from_config(config, run_output_dir, optimizer)

@@ -77,7 +77,7 @@ class DensityGuidanceConfig:
     resampling_weight: Union[float, ParameterSchedule] = field(
         default_factory=lambda: ConstantScheduleConfig(0.1)
     )
-    resolution_adaptive: bool = True
+    resolution: Optional[Union[float, ParameterSchedule]] = None
     scale_guidance_to_denoising: bool = True
     max_guidance_denoising_ratio: Union[float, ParameterSchedule] = field(
         default_factory=lambda: ConstantScheduleConfig(0.2)
@@ -100,9 +100,6 @@ class DensityConfig:
     map_path: str
     resolution: Optional[float] = None  # Required for CCP4/MRC files
     em_mode: bool = False  # Use electron scattering factors
-    
-    # Resolution scheduling
-    resolution_schedule: Optional[ParameterSchedule] = None
 
 
 @dataclass

@@ -4,7 +4,7 @@ This module provides utilities to create potential objects with
 proper scheduling from configuration specifications.
 """
 
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union
 import numpy as np
 from pathlib import Path
 
@@ -22,7 +22,8 @@ def create_potentials_from_config(
     b_factors: Any,
     occupancies: Any,
     scattering_params: Any,
-    atom_selection: Optional[np.ndarray] = None
+    atom_selection: Optional[np.ndarray] = None,
+    reference_coords: Optional[Any] = None
 ) -> List[Any]:
     """Create potential objects from experiment configuration.
     
@@ -51,6 +52,13 @@ def create_potentials_from_config(
     potentials = []
     
     # Create density potential
+    # Use resolution from density_guidance if available, otherwise use resolution from density config
+    resolution_param = (
+        config.density_guidance.resolution 
+        if config.density_guidance.resolution is not None 
+        else config.density.resolution
+    )
+    
     density_potential = create_density_potential(
         config.density_guidance,
         xmap,
@@ -59,6 +67,7 @@ def create_potentials_from_config(
         occupancies,
         scattering_params,
         config.density.em_mode,
+        resolution_param,
         atom_selection
     )
     potentials.append(density_potential)
@@ -67,7 +76,8 @@ def create_potentials_from_config(
     if config.substructure.enabled and config.substructure.selection:
         substructure_potential = create_substructure_potential(
             config,
-            atom_selection  # This will be processed to get reference coords
+            reference_coords,  # reference_coords passed from optimizer
+            atom_selection  # selection_indices
         )
         potentials.append(substructure_potential)
     
@@ -87,6 +97,7 @@ def create_density_potential(
     occupancies: Any,
     scattering_params: Any,
     em_mode: bool,
+    resolution: Union[float, ParameterSchedule],
     atom_selection: Optional[np.ndarray] = None
 ) -> DensityPotential:
     """Create density potential from guidance configuration.
@@ -107,6 +118,8 @@ def create_density_potential(
         Scattering parameters
     em_mode : bool
         Whether to use electron microscopy mode
+    resolution : Union[float, ParameterSchedule]
+        Map resolution for density calculation, can be float or ParameterSchedule 
     atom_selection : Optional[np.ndarray]
         Optional atom selection
         
@@ -134,6 +147,12 @@ def create_density_potential(
         else guidance_config.max_guidance_denoising_ratio
     )
     
+    resolution_schedule = (
+        resolution.to_schedule()
+        if isinstance(resolution, ParameterSchedule)
+        else resolution
+    )
+    
     parameters = {
         "guidance_interval": guidance_config.guidance_interval,
         "guidance_weight": guidance_weight,
@@ -143,6 +162,7 @@ def create_density_potential(
         "occupancies": occupancies,
         "scattering_params": scattering_params,
         "em": em_mode,
+        "resolution": resolution_schedule,
         "scale_guidance_to_denoising": guidance_config.scale_guidance_to_denoising,
         "max_guidance_denoising_ratio": max_guidance_denoising_ratio,
     }
@@ -156,7 +176,8 @@ def create_density_potential(
 
 def create_substructure_potential(
     config: ExperimentConfig,
-    reference_coords: Any
+    reference_coords: Any,
+    selection_indices: Optional[np.ndarray] = None
 ) -> SubstructurePotential:
     """Create substructure potential from configuration.
     
@@ -166,13 +187,16 @@ def create_substructure_potential(
         Experiment configuration
     reference_coords : Any
         Reference coordinates for substructure constraint
+    selection_indices : Optional[np.ndarray]
+        Atom selection indices for substructure conditioning
         
     Returns
     -------
     SubstructurePotential
         Configured substructure potential
     """
-    selection_indices = np.array([], dtype=int)
+    if selection_indices is None:
+        selection_indices = np.array([], dtype=int)
     
     parameters = {
         "guidance_interval": 1,

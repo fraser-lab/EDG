@@ -100,6 +100,7 @@ def create_optimizer_from_config(
         adaptive_solver=config.adaptive_solver.type,
         adaptive_solver_config=adaptive_solver_config,
         steering_args=steering_args,
+        config=config,
     )
     
     return optimizer

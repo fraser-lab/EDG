@@ -111,16 +111,23 @@ Common parameters:
     guidance_group = parser.add_argument_group("Guidance Parameters")
     guidance_group.add_argument("--guidance-weight", type=float, help="Density guidance weight")
     guidance_group.add_argument("--resampling-weight", type=float, help="Particle resampling weight")
+    guidance_group.add_argument("--max-guidance-denoising-ratio", type=float, help="Maximum guidance to denoising ratio")
+    guidance_group.add_argument("--guidance-interval", type=int, help="Guidance application interval")
     
     steering_group = parser.add_argument_group("Steering Parameters")
     steering_group.add_argument("--num-particles", type=int, help="Number of steering particles")
     steering_group.add_argument("--guidance-update", action="store_true", help="Enable guidance updates")
     steering_group.add_argument("--no-guidance-update", action="store_true", help="Disable guidance updates")
+    steering_group.add_argument("--fk-lambda", type=float, help="FK lambda parameter for steering")
+    steering_group.add_argument("--fk-resampling-interval", type=int, help="FK resampling interval")
     
     solver_group = parser.add_argument_group("Adaptive Solver Parameters")
     solver_group.add_argument("--learning-rate", type=float, help="Solver learning rate")
     solver_group.add_argument("--solver-type", choices=["adam", "simple", "none"], help="Adaptive solver type")
     solver_group.add_argument("--max-iterations", type=int, help="Maximum solver iterations")
+    solver_group.add_argument("--convergence-threshold", type=float, help="Convergence threshold for early stopping")
+    solver_group.add_argument("--gradient-clip-norm", type=float, help="Gradient clipping norm")
+    solver_group.add_argument("--line-search", action="store_true", help="Enable backtracking line search")
     
     model_group = parser.add_argument_group("Model Parameters")
     model_group.add_argument("--model-version", choices=["boltz1", "boltz2"], help="Model version")
@@ -172,10 +179,17 @@ def parse_overrides(args: argparse.Namespace) -> Dict[str, Any]:
         "structure_path": args.structure_path,
         "guidance_weight": args.guidance_weight,
         "resampling_weight": args.resampling_weight,
+        "max_guidance_denoising_ratio": args.max_guidance_denoising_ratio,
+        "guidance_interval": args.guidance_interval,
         "num_particles": args.num_particles,
+        "fk_lambda": args.fk_lambda,
+        "fk_resampling_interval": args.fk_resampling_interval,
         "learning_rate": args.learning_rate,
         "solver_type": args.solver_type,
         "max_iterations": args.max_iterations,
+        "convergence_threshold": args.convergence_threshold,
+        "gradient_clip_norm": args.gradient_clip_norm,
+        "line_search": args.line_search,
         "model_version": args.model_version,
         "checkpoint_path": args.checkpoint_path,
         "device": args.device,
