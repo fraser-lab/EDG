@@ -41,7 +41,7 @@ steering:
 # Adaptive solver configuration
 adaptive_solver:
   type: "adam"
-  learning_rate: 0.1
+  learning_rate: 0.01
   max_iterations: 20
   line_search: true
   adaptive_line_search: true
@@ -66,7 +66,7 @@ density_guidance:
       - 50
       - 0.0
   scale_guidance_to_denoising: true
-  max_guidance_denoising_ratio: 0.01
+  max_guidance_denoising_ratio: 0.5
   resolution:
     type: "piecewise"
     breakpoints: [0.25]  # 1 - 150/200
@@ -75,7 +75,7 @@ density_guidance:
 # Substructure conditioning for residues 120-140
 substructure:
   enabled: true
-  selection: "chain A and resi 41-47" # Selection will be NOT conditioned
+  selection: "chain A and resi 41-47 or chain B" # Selection will be NOT conditioned
   guidance_weight: 0.05
   resampling_weight: 0.0
   buffer: 0.5

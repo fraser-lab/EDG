@@ -563,6 +563,7 @@ def create_run_output_dir(config: ExperimentConfig, base_output_dir: Path) -> Pa
     """
     # Create descriptive directory name
     dir_name_parts = [
+        config.name,
         config.model.version,
         f"{config.density.resolution}A" if config.density.resolution else "auto_res",
         f"{config.diffusion.num_steps}steps",
