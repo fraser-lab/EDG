@@ -1,1 +1,1 @@
-from edg.edg.optimizer import DensityGuidedDiffusion 
+from edg.edg.optimizer import DensityGuidedDiffusion

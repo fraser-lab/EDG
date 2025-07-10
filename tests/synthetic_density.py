@@ -183,9 +183,7 @@ class SyntheticDensityGenerator:
 
         ref_map = XMap(
             empty_array,
-            grid_parameters=GridParameters(
-                voxelspacing=voxelspacing
-            ),
+            grid_parameters=GridParameters(voxelspacing=voxelspacing),
             resolution=Resolution(high=resolution, low=1000.0),
             unit_cell=unit_cell,
             origin=map_origin_cartesian,
@@ -413,8 +411,12 @@ if __name__ == "__main__":
     # density_generator.save_map("/home/kchrispens/adp-replicate/tests/resources/more_AWA/qfit_out.ccp4", density)
 
     ### PEPTIDE FLIP TEST CASE
-    pdb_7kqp = Structure.fromfile("/home/kchrispens/adp-replicate/tests/resources/mac1_adpr_peptideflip/7kqp.cif")
-    pdb_7tx5 = Structure.fromfile("/home/kchrispens/adp-replicate/tests/resources/mac1_adpr_peptideflip/7tx5.cif")
+    pdb_7kqp = Structure.fromfile(
+        "/home/kchrispens/adp-replicate/tests/resources/mac1_adpr_peptideflip/7kqp.cif"
+    )
+    pdb_7tx5 = Structure.fromfile(
+        "/home/kchrispens/adp-replicate/tests/resources/mac1_adpr_peptideflip/7tx5.cif"
+    )
     pdb_7kqp = pdb_7kqp.extract(pdb_7kqp.select("(chain A and resi 4-169) or chain C"))
     pdb_7tx5 = pdb_7tx5.extract(pdb_7tx5.select("(chain A and resi 3-168) or chain B"))
     pdb_7kqp = pdb_7kqp.reorder()
@@ -433,7 +435,7 @@ if __name__ == "__main__":
     print(pdb_7tx5)
 
     ensemble = Ensemble([pdb_7kqp, pdb_7tx5])
-    pdb_7kqp.coor = pdb_7kqp.coor - pdb_7kqp.coor.mean() - np.array([-17., 7., 5.])
+    pdb_7kqp.coor = pdb_7kqp.coor - pdb_7kqp.coor.mean() - np.array([-17.0, 7.0, 5.0])
     ensemble.align_to_reference(pdb_7kqp)
 
     unit_cell = UnitCell(50.0, 50.0, 50.0)
@@ -449,17 +451,23 @@ if __name__ == "__main__":
         density,
     )
 
-    ensemble.tofile("/home/kchrispens/adp-replicate/tests/resources/mac1_adpr_peptideflip/mac1_adpr_peptideflip.cif")
+    ensemble.tofile(
+        "/home/kchrispens/adp-replicate/tests/resources/mac1_adpr_peptideflip/mac1_adpr_peptideflip.cif"
+    )
     ensemble.coor = ensemble.coor - density_generator.center
-    ensemble.tofile("/home/kchrispens/adp-replicate/tests/resources/mac1_adpr_peptideflip/mac1_adpr_peptideflip_shifted.cif")
+    ensemble.tofile(
+        "/home/kchrispens/adp-replicate/tests/resources/mac1_adpr_peptideflip/mac1_adpr_peptideflip_shifted.cif"
+    )
 
     ### PTP1B TEST CASE
-    pdb = Structure.fromfile("/home/kchrispens/adp-replicate/tests/resources/6b8x/processed/6b8x-sf_single_001.cif")
+    pdb = Structure.fromfile(
+        "/home/kchrispens/adp-replicate/tests/resources/6b8x/processed/6b8x-sf_single_001.cif"
+    )
     pdb = pdb.clean_structure(keep_type="protein")
     pdb = pdb.reorder()
     pdb = pdb.complete_residues()
     pdb = pdb.reorder()
-    pdb.coor = pdb.coor - np.array([48., 18., 0.])
+    pdb.coor = pdb.coor - np.array([48.0, 18.0, 0.0])
     print(pdb)
 
     unit_cell = UnitCell(50.0, 60.0, 70.0)
@@ -477,7 +485,9 @@ if __name__ == "__main__":
 
     pdb.tofile("/home/kchrispens/adp-replicate/tests/resources/6b8x/6b8x_synthetic.cif")
     pdb.coor = pdb.coor - density_generator.center
-    pdb.tofile("/home/kchrispens/adp-replicate/tests/resources/6b8x/6b8x_synthetic_shifted.cif")
+    pdb.tofile(
+        "/home/kchrispens/adp-replicate/tests/resources/6b8x/6b8x_synthetic_shifted.cif"
+    )
 
     ### Synthetic AAAWAAA data
     # pdb = Structure.fromfile(

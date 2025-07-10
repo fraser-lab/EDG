@@ -57,6 +57,7 @@ from edg.edg.modules.adaptive_solver import AdaptiveSolverConfig
 
 # Import config types (avoid circular import by using TYPE_CHECKING)
 from typing import TYPE_CHECKING
+
 if TYPE_CHECKING:
     from edg.config import ExperimentConfig
 
@@ -267,7 +268,7 @@ class DensityGuidedDiffusion:
             config=adaptive_solver_config,
             enable=adaptive_solver.lower() != "none",
         )
-        
+
         # Store config for potential creation
         self.config = config
 
@@ -365,12 +366,14 @@ class DensityGuidedDiffusion:
         if self.config is not None:
             # Use config-driven potential creation
             from edg.config.potential_factory import create_potentials_from_config
-            
+
             # Get atom selection if substructure conditioning is enabled
             atom_selection = None
             if substructure_conditioning_kwargs is not None:
-                atom_selection = substructure_conditioning_kwargs.get("selection", np.array([], dtype=int))
-            
+                atom_selection = substructure_conditioning_kwargs.get(
+                    "selection", np.array([], dtype=int)
+                )
+
             potentials = create_potentials_from_config(
                 config=self.config,
                 xmap=self.density_calculator.xmap,
@@ -379,15 +382,12 @@ class DensityGuidedDiffusion:
                 occupancies=occupancies,
                 scattering_params=self.scattering_params,
                 atom_selection=atom_selection,
-                reference_coords=coords
+                reference_coords=coords,
             )
         else:
             # Fallback to hardcoded potential creation for backward compatibility
-            resolution_scale = PiecewiseSchedule(
-                [(1 - 150 / 200)],
-                [resolution, 8.0]
-            )
-            
+            resolution_scale = PiecewiseSchedule([(1 - 150 / 200)], [resolution, 8.0])
+
             density_potential = DensityPotential(
                 xmap=self.density_calculator.xmap,
                 parameters={
@@ -420,7 +420,7 @@ class DensityGuidedDiffusion:
                     "max_guidance_denoising_ratio": 0.2,
                 },
             )
-            
+
             potentials = [density_potential]
 
         if partial_diffusion:

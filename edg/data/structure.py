@@ -13,6 +13,7 @@ from .modules.math import Rz
 from ..utils.normalize_to_precision import normalize_to_precision
 from .modules.mmciffile import mmCIFFile
 
+
 class Structure(_BaseStructure):
     """Class with access to underlying PDB hierarchy."""
 
@@ -20,7 +21,7 @@ class Structure(_BaseStructure):
         for attr in self.REQUIRED_ATTRIBUTES:
             if attr not in data:
                 raise ValueError(
-                    f"Not all attributes are given to " f"build the structure: {attr}"
+                    f"Not all attributes are given to build the structure: {attr}"
                 )
         super().__init__(data, **kwargs)
         self._chains = []
@@ -516,9 +517,9 @@ class Structure(_BaseStructure):
                         sel_str = f"not ({sel_str})"
                         structure = structure.extract(sel_str)
 
-        non_zero_occ_idx = np.where(structure.data['q'] > 0)[0]
-        structure.data['q'][non_zero_occ_idx] = 1.0
-        structure.data['altloc'][:] = ""
+        non_zero_occ_idx = np.where(structure.data["q"] > 0)[0]
+        structure.data["q"][non_zero_occ_idx] = 1.0
+        structure.data["altloc"][:] = ""
 
         return structure
 
@@ -719,7 +720,9 @@ class Structure(_BaseStructure):
             else:
                 for residue in structure.residues:
                     if not np.all(residue.active[:4]):
-                        print(f"Skipping missing residue {residue.resn[0]} {residue.resi[0]} with missing backbone atoms")
+                        print(
+                            f"Skipping missing residue {residue.resn[0]} {residue.resi[0]} with missing backbone atoms"
+                        )
                         continue
                     if not np.all(residue.active):
                         print(f"Completing residue {residue.resn[0]} {residue.resi[0]}")
@@ -1047,7 +1050,9 @@ class _Conformer(_BaseStructure):
         if not self._residues:
             self.build_residues()
         _ligands = [
-            l for l in self._residues if isinstance(l, _Ligand) and l.natoms > 3 # noqa: E741
+            l
+            for l in self._residues
+            if isinstance(l, _Ligand) and l.natoms > 3  # noqa: E741
         ]
         return _ligands
 
@@ -1203,10 +1208,10 @@ class _Segment(_BaseStructure):
         # TODO: Use .math.gram_schmidt_orthonormal_zx (or something similar)
         #       Note that here, the axes are 1→2, 2→1, 0=1×2.
         system_coor = copy.deepcopy(residue.coor)
-        origin = system_coor[0].copy() 
+        origin = system_coor[0].copy()
         CA = residue.extract("name", "CA").coor[0]
         C = residue.extract("name", "C").coor[0]
-        O = residue.extract("name", "O").coor[0] # noqa: E741
+        O = residue.extract("name", "O").coor[0]  # noqa: E741
         system_coor = np.vstack((CA, C, O))
         system_coor -= origin
         zaxis = system_coor[1] / np.linalg.norm(system_coor[1])
@@ -1256,7 +1261,7 @@ class Ensemble:
         """
         if not all(isinstance(s, Structure) for s in structures):
             raise TypeError("All items in the list must be Structure objects.")
-        
+
         # Deep copy to avoid modifying original structures, which may be all the same object pointer
         self._structures = [copy.deepcopy(s) for s in structures]
 
@@ -1271,12 +1276,12 @@ class Ensemble:
     @property
     def coor(self) -> np.ndarray:
         """Stack coordinates from all structures in the ensemble.
-        
+
         Returns
         -------
         np.ndarray
             Array of shape (n_structures, n_atoms, 3) containing all coordinates
-            
+
         Raises
         ------
         ValueError
@@ -1284,23 +1289,25 @@ class Ensemble:
         """
         if not self._structures:
             raise ValueError("Cannot stack coordinates from an empty ensemble")
-            
+
         n_atoms_ref = self._structures[0].natoms
-        
+
         if not all(s.natoms == n_atoms_ref for s in self._structures):
-            raise ValueError("All structures must have the same number of atoms to stack coordinates")
-        
+            raise ValueError(
+                "All structures must have the same number of atoms to stack coordinates"
+            )
+
         return np.stack([s.coor for s in self._structures])
 
     @coor.setter
     def coor(self, value: np.ndarray):
         """Set coordinates for all structures in the ensemble.
-        
+
         Parameters
         ----------
         value : np.ndarray
             Array of shape (n_structures, n_atoms, 3) containing new coordinates
-            
+
         Raises
         ------
         ValueError
@@ -1308,24 +1315,26 @@ class Ensemble:
         """
         if not self._structures:
             raise ValueError("Cannot set coordinates for an empty ensemble")
-            
+
         n_atoms_ref = self._structures[0].natoms
-        
+
         if value.shape != (len(self._structures), n_atoms_ref, 3):
-            raise ValueError(f"Expected shape {(len(self._structures), n_atoms_ref, 3)}, got {value.shape}")
-        
+            raise ValueError(
+                f"Expected shape {(len(self._structures), n_atoms_ref, 3)}, got {value.shape}"
+            )
+
         for i, structure in enumerate(self._structures):
             structure.__setattr__("coor", value[i])
 
     @property
     def q(self) -> np.ndarray:
         """Stack occupancy values from all structures in the ensemble.
-        
+
         Returns
         -------
         np.ndarray
             Array of shape (n_structures, n_atoms) containing all occupancy values
-            
+
         Raises
         ------
         ValueError
@@ -1333,23 +1342,25 @@ class Ensemble:
         """
         if not self._structures:
             raise ValueError("Cannot stack occupancy values from an empty ensemble")
-            
+
         n_atoms_ref = self._structures[0].natoms
-        
+
         if not all(s.natoms == n_atoms_ref for s in self._structures):
-            raise ValueError("All structures must have the same number of atoms to stack occupancy values")
-        
+            raise ValueError(
+                "All structures must have the same number of atoms to stack occupancy values"
+            )
+
         return np.stack([s.q for s in self._structures])
 
     @property
     def b(self) -> np.ndarray:
         """Stack B-factors from all structures in the ensemble.
-        
+
         Returns
         -------
         np.ndarray
             Array of shape (n_structures, n_atoms) containing all B-factors
-            
+
         Raises
         ------
         ValueError
@@ -1357,23 +1368,25 @@ class Ensemble:
         """
         if not self._structures:
             raise ValueError("Cannot stack B-factors from an empty ensemble")
-            
+
         n_atoms_ref = self._structures[0].natoms
-        
+
         if not all(s.natoms == n_atoms_ref for s in self._structures):
-            raise ValueError("All structures must have the same number of atoms to stack B-factors")
-        
+            raise ValueError(
+                "All structures must have the same number of atoms to stack B-factors"
+            )
+
         return np.stack([s.b for s in self._structures])
 
     @property
     def e(self) -> np.ndarray:
         """Stack element symbols from all structures in the ensemble.
-        
+
         Returns
         -------
         np.ndarray
             Array of shape (n_structures, n_atoms) containing all element symbols
-            
+
         Raises
         ------
         ValueError
@@ -1381,12 +1394,14 @@ class Ensemble:
         """
         if not self._structures:
             raise ValueError("Cannot stack element symbols from an empty ensemble")
-            
+
         n_atoms_ref = self._structures[0].natoms
-        
+
         if not all(s.natoms == n_atoms_ref for s in self._structures):
-            raise ValueError("All structures must have the same number of atoms to stack element symbols")
-        
+            raise ValueError(
+                "All structures must have the same number of atoms to stack element symbols"
+            )
+
         return np.stack([s.e for s in self._structures])
 
     def append(self, structure: Structure):
@@ -1414,19 +1429,19 @@ class Ensemble:
     @classmethod
     def fromfile(cls, fname, use_auth=False):
         """Create an Ensemble from a multi-model mmCIF file.
-        
+
         Parameters
         ----------
         fname : str
             Path to the mmCIF file containing multiple models
         use_auth : bool, optional
             Use auth_ identifiers instead of label_ identifiers. Default False.
-            
+
         Returns
         -------
         Ensemble
             Ensemble containing Structure objects for each model
-            
+
         Raises
         ------
         ValueError
@@ -1434,54 +1449,61 @@ class Ensemble:
         """
         import os
         from collections import defaultdict
-        
+
         extension = os.path.splitext(fname)[1].lower()
-        
+
         if extension not in [".cif", ".mmcif"]:
-            raise ValueError(f"Ensemble.fromfile only supports mmCIF format, got: {extension}")
-        
+            raise ValueError(
+                f"Ensemble.fromfile only supports mmCIF format, got: {extension}"
+            )
+
         # Read the mmCIF file
         if isinstance(fname, mmCIFFile):
             pdbfile = fname
         else:
             pdbfile = mmCIFFile.read(fname, use_auth=use_auth)
-        
+
         # Check if we have model data
         if "model" not in pdbfile.coor:
             raise ValueError("No model number data found in mmCIF file")
-        
+
         # Group atoms by model number
         models_data = defaultdict(lambda: defaultdict(list))
         n_atoms = len(pdbfile.coor["x"])
-        
+
         for i in range(n_atoms):
             model_num = pdbfile.coor["model"][i]
             for attr, values in pdbfile.coor.items():
-                if attr != "model":  # Don't include model number in individual structures
+                if (
+                    attr != "model"
+                ):  # Don't include model number in individual structures
                     models_data[model_num][attr].append(values[i])
-        
+
         if not models_data:
             raise ValueError("No models found in mmCIF file")
-        
+
         # Create Structure objects for each model
         structures = []
         for model_num in sorted(models_data.keys()):
             model_data = models_data[model_num]
-            
+
             # Convert lists to numpy arrays
             data = {}
             for attr, values in model_data.items():
                 if attr in "xyz":
                     continue
                 data[attr] = np.asarray(values)
-            
+
             # Handle coordinates
-            coor = np.asarray(list(zip(model_data["x"], model_data["y"], model_data["z"])), dtype=np.float64)
+            coor = np.asarray(
+                list(zip(model_data["x"], model_data["y"], model_data["z"])),
+                dtype=np.float64,
+            )
             data["coor"] = coor
-            
+
             # Add active array
             data["active"] = np.ones(len(model_data["x"]), dtype=bool)
-            
+
             # Handle anisotropic displacement parameters if present
             if pdbfile.anisou:
                 # Find anisou data for this model (if model-specific)
@@ -1497,13 +1519,13 @@ class Ensemble:
                         n += 1
                 for n, key in enumerate(us):
                     data[key] = anisou[:, n]
-            
+
             # Handle link data (shared across models)
             link_data = {}
             if pdbfile.link:
                 for attr, array in pdbfile.link.items():
                     link_data[attr] = np.asarray(array)
-            
+
             # Create Structure
             structure = Structure(
                 data,
@@ -1512,16 +1534,19 @@ class Ensemble:
                 cryst_info=pdbfile.cryst_info,
                 resolution=pdbfile.resolution,
             )
-            
+
             # Set unit cell if available
             if pdbfile.cryst1:
                 from ..qfit.unitcell import UnitCell
+
                 c = pdbfile.cryst1
-                values = [c[x] for x in ["a", "b", "c", "alpha", "beta", "gamma", "spg"]]
+                values = [
+                    c[x] for x in ["a", "b", "c", "alpha", "beta", "gamma", "spg"]
+                ]
                 structure.unit_cell = UnitCell(*values)
-            
+
             structures.append(structure)
-        
+
         return cls(structures)
 
     def __repr__(self):
@@ -1537,13 +1562,13 @@ class Ensemble:
         """
         n_structures = len(self._structures)
         rmsd_matrix = np.zeros((n_structures, n_structures))
-        
+
         for i in range(n_structures):
-            for j in range(i+1, n_structures):
+            for j in range(i + 1, n_structures):
                 rmsd = calc_rmsd(self._structures[i].coor, self._structures[j].coor)
-                rmsd_matrix[i,j] = rmsd
-                rmsd_matrix[j,i] = rmsd
-                
+                rmsd_matrix[i, j] = rmsd
+                rmsd_matrix[j, i] = rmsd
+
         return rmsd_matrix
 
     def align_to_reference(self, reference: Structure):
@@ -1558,7 +1583,7 @@ class Ensemble:
             in the ensemble will be modified.
         """
         if not self._structures:
-            return # Nothing to align
+            return  # Nothing to align
 
         ref_coords = reference.coor
         if ref_coords is None or ref_coords.size == 0:
@@ -1572,7 +1597,9 @@ class Ensemble:
             mobile_coords = structure.coor
             if mobile_coords is None or mobile_coords.size == 0:
                 # Or raise an error, or skip? Skipping for now.
-                print(f"Warning: Skipping structure {structure} due to missing coordinates.")
+                print(
+                    f"Warning: Skipping structure {structure} due to missing coordinates."
+                )
                 continue
 
             if mobile_coords.shape != ref_coords.shape:
@@ -1594,9 +1621,10 @@ class Ensemble:
             try:
                 U, S, Vt = np.linalg.svd(H)
             except np.linalg.LinAlgError:
-                 print(f"Warning: SVD computation failed for structure {structure}. Skipping alignment.")
-                 continue
-
+                print(
+                    f"Warning: SVD computation failed for structure {structure}. Skipping alignment."
+                )
+                continue
 
             # Calculate rotation matrix
             R = Vt.T @ U.T
@@ -1615,7 +1643,7 @@ class Ensemble:
             # Update structure coordinates in place
             structure.coor = aligned_coords
 
-    def filter_by_rmsd(self, threshold: float, reference: Structure) -> 'Ensemble':
+    def filter_by_rmsd(self, threshold: float, reference: Structure) -> "Ensemble":
         """Filter structures based on RMSD to reference structure.
 
         Parameters
@@ -1629,16 +1657,16 @@ class Ensemble:
         -------
         Ensemble
             New ensemble containing only structures within RMSD threshold
-        """ 
+        """
         filtered_structures = []
         for structure in self._structures:
             rmsd = calc_rmsd(structure.coor, reference.coor)
             if rmsd <= threshold:
                 filtered_structures.append(structure)
-                
+
         return Ensemble(filtered_structures)
 
-    def combine(self, other: 'Ensemble') -> 'Ensemble':
+    def combine(self, other: "Ensemble") -> "Ensemble":
         """Combine this ensemble with another ensemble.
 
         Parameters
@@ -1669,15 +1697,15 @@ class Ensemble:
 
     def normalize_occupancies(self):
         """Normalize occupancies across the ensemble.
-        
+
         Sets the occupancy of each structure to 1/N where N is the number of structures
         in the ensemble. This ensures that the sum of occupancies across all ensemble
         members equals 1.0 for each residue.
         """
         if not self._structures:
             raise ValueError("Cannot normalize occupancies of empty ensemble")
-            
+
         occupancy = 1.0 / len(self._structures)
-        
+
         for structure in self._structures:
             structure.q[:] = occupancy

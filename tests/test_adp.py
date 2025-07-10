@@ -17,17 +17,13 @@ def device():
 
 @pytest.fixture
 def cif_4yuo():
-    file = str(
-        Path(Path(edg.__file__).parent.parent, "tests", "resources", "4yuo.cif")
-    )
+    file = str(Path(Path(edg.__file__).parent.parent, "tests", "resources", "4yuo.cif"))
     return file
 
 
 @pytest.fixture
 def cif_7pzt():
-    file = str(
-        Path(Path(edg.__file__).parent.parent, "tests", "resources", "7pzt.cif")
-    )
+    file = str(Path(Path(edg.__file__).parent.parent, "tests", "resources", "7pzt.cif"))
     return file
 
 
@@ -98,9 +94,7 @@ def peptides():
         Path(Path(edg.__file__).parent.parent, "tests", "resources", "G_G.cif")
     )
     altconf_peptide = str(
-        Path(
-            Path(edg.__file__).parent.parent, "tests", "resources", "GGG_altconf.pdb"
-        )
+        Path(Path(edg.__file__).parent.parent, "tests", "resources", "GGG_altconf.pdb")
     )
     return complete_peptide, incomplete_peptide, altconf_peptide
 
@@ -206,7 +200,6 @@ def test_correlation_matrix(peptides, density_4yuo, device):
 
 
 def test_ll_incomplete_structure(peptides, density_4yuo, device):
-
     complete_peptide, incomplete_peptide, altconf_peptide = peptides
 
     # test simple case: both structures are the same, ll should be 0
@@ -281,7 +274,7 @@ def test_grad_ll_incomplete_structure(peptides, density_4yuo, device):
     assert not torch.allclose(grad_ll, torch.zeros_like(grad_ll), atol=1e-5)
 
 
-def test_ll_density_and_grad(sim_data_7pzt, device): 
+def test_ll_density_and_grad(sim_data_7pzt, device):
     protein = Protein(sim_data_7pzt[0])
     X, _, S = protein.to_XCS(all_atom=True, device=device)  # backbone coordinates
     flat_X = rearrange(X, "b r a c -> b (r a) c").squeeze()

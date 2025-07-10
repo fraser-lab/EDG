@@ -16,6 +16,7 @@ config = map.ProcessingConfig(
 
 # TODO make this scale
 
+
 def process_structures(self, pdb_ids: List[str]) -> Dict[str, bool]:
     """Process multiple structures in parallel.
 
@@ -33,9 +34,7 @@ def process_structures(self, pdb_ids: List[str]) -> Dict[str, bool]:
     results = {}
 
     with self.executor as executor:
-        futures = {
-            executor.submit(process_fn, pdb_id): pdb_id for pdb_id in pdb_ids
-        }
+        futures = {executor.submit(process_fn, pdb_id): pdb_id for pdb_id in pdb_ids}
 
         for future in futures:
             pdb_id = futures[future]
@@ -47,6 +46,7 @@ def process_structures(self, pdb_ids: List[str]) -> Dict[str, bool]:
                 results[pdb_id] = False
 
     return results
+
 
 def process_structure_safe(self, pdb_id: str) -> None:
     """Safely process a single structure with error handling.

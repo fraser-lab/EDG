@@ -109,7 +109,11 @@ class PDBFile:
                         names = ROTAMERS[values["resn"]]["atoms"]
                         n_atoms = len(names)
                         atom_info.update(
-                            {field: value for field, value in values.items() if field in atom_fields}
+                            {
+                                field: value
+                                for field, value in values.items()
+                                if field in atom_fields
+                            }
                         )
                         for attr, value in atom_info.items():
                             for i in range(n_atoms):
@@ -131,7 +135,11 @@ class PDBFile:
                         values = Remark470Record.parse_line(line)
                         names = values["atoms"].split()
                         atom_info.update(
-                            {field: value for field, value in values.items() if field in atom_fields}
+                            {
+                                field: value
+                                for field, value in values.items()
+                                if field in atom_fields
+                            }
                         )
                         for attr, value in atom_info.items():
                             for name in names:
@@ -146,8 +154,9 @@ class PDBFile:
                         logger.error("PDBFile.read: could not parse REMARK 470 data.")
         max_atomid = max(cls.coor["atomid"])
         # NOTE: Slight difference here than with mmciffile, as residues are grabbed before atoms
-        cls.missing_atoms["atomid"] = list(range(max_atomid + 1, 
-                                                max_atomid + 1 + len(cls.missing_atoms["atomid"])))
+        cls.missing_atoms["atomid"] = list(
+            range(max_atomid + 1, max_atomid + 1 + len(cls.missing_atoms["atomid"]))
+        )
         return cls
 
     @staticmethod

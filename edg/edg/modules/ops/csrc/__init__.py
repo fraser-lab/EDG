@@ -12,7 +12,7 @@ try:
             os.path.join(_this_dir, "cuda", "dilate_points_impl.cu"),
             os.path.join(_this_dir, "cuda", "dilate_points_kernel.cu"),
         ],
-        verbose=True
+        verbose=True,
     )
     CUDA_AVAILABLE = True
 except Exception as e:

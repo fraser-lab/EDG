@@ -466,7 +466,7 @@ class Covalent_Ligand(_BaseStructure):
         # self.type = args[0].data["type"]
 
     def __repr__(self):
-        string = f"Covalent Ligand: {self.resn[0]}." f" Number of atoms: {self.natoms}."
+        string = f"Covalent Ligand: {self.resn[0]}. Number of atoms: {self.natoms}."
         return string
 
     @property

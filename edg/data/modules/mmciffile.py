@@ -678,11 +678,11 @@ class mmCIFFile(list):
             structures = [structure]
         else:
             structures = structure
-        
+
         if not structures:
             raise ValueError("No structures provided to write.")
 
-        first_structure = structures[0] # Use first structure for common metadata
+        first_structure = structures[0]  # Use first structure for common metadata
 
         # Create atom_site table
         atom_site = data_block.new_table("atom_site")
@@ -713,10 +713,12 @@ class mmCIFFile(list):
 
         # Add coordinates data for all models
         model_num = 1
-        atom_id_counter = 1 # Ensure unique atom IDs across models. mmCIF standard uses _atom_site.id which should be unique within the file.
+        atom_id_counter = 1  # Ensure unique atom IDs across models. mmCIF standard uses _atom_site.id which should be unique within the file.
         for model_num, current_structure in enumerate(structures):
             record = current_structure.record
-            atomid = current_structure.data.get("atomid", list(range(1, current_structure.natoms + 1)))
+            atomid = current_structure.data.get(
+                "atomid", list(range(1, current_structure.natoms + 1))
+            )
             name = current_structure.name
             altloc = current_structure.altloc
             resn = current_structure.resn
@@ -731,12 +733,10 @@ class mmCIFFile(list):
             for i in range(current_structure.natoms):
                 row = atom_site.new_row()
                 row["group_PDB"] = record[i]
-                row["id"] = str(atom_id_counter) # Use counter ID
+                row["id"] = str(atom_id_counter)  # Use counter ID
                 row["type_symbol"] = e[i]
                 row[f"{auth_or_label}_atom_id"] = name[i]
-                row[f"{auth_or_label}_alt_id"] = (
-                    altloc[i] if altloc[i] else "."
-                )
+                row[f"{auth_or_label}_alt_id"] = altloc[i] if altloc[i] else "."
                 row[f"{auth_or_label}_comp_id"] = resn[i]
                 row[f"{auth_or_label}_asym_id"] = chain[i]
                 row[f"{auth_or_label}_entity_id"] = "1"  # Default entity ID
@@ -816,7 +816,7 @@ class mmCIFFile(list):
 
             for i in range(len(first_structure.link_data["record"])):
                 row = struct_conn.new_row()
-                row["id"] = f"link{i+1}"
+                row["id"] = f"link{i + 1}"
                 row["conn_type_id"] = first_structure.link_data["record"][i]
                 row[f"ptnr1_{auth_or_label}_atom_id"] = (
                     first_structure.link_data["name1"][i] or "?"
@@ -824,28 +824,46 @@ class mmCIFFile(list):
                 row[f"pdbx_ptnr1_{auth_or_label}_alt_id"] = (
                     first_structure.link_data["altloc1"][i] or "."
                 )
-                row[f"ptnr1_{auth_or_label}_comp_id"] = first_structure.link_data["resn1"][i]
-                row[f"ptnr1_{auth_or_label}_asym_id"] = first_structure.link_data["chain1"][i]
+                row[f"ptnr1_{auth_or_label}_comp_id"] = first_structure.link_data[
+                    "resn1"
+                ][i]
+                row[f"ptnr1_{auth_or_label}_asym_id"] = first_structure.link_data[
+                    "chain1"
+                ][i]
                 row[f"ptnr1_{auth_or_label}_seq_id"] = str(
                     first_structure.link_data["resi1"][i]
                 )
-                row["pdbx_ptnr1_PDB_ins_code"] = first_structure.link_data["icode1"][i] or "?"
+                row["pdbx_ptnr1_PDB_ins_code"] = (
+                    first_structure.link_data["icode1"][i] or "?"
+                )
                 row[f"ptnr2_{auth_or_label}_atom_id"] = (
                     first_structure.link_data["name2"][i] or "?"
                 )
                 row["pdbx_ptnr2_label_alt_id"] = (
                     first_structure.link_data["altloc2"][i] or "."
                 )
-                row[f"ptnr2_{auth_or_label}_comp_id"] = first_structure.link_data["resn2"][i]
-                row[f"ptnr2_{auth_or_label}_asym_id"] = first_structure.link_data["chain2"][i]
+                row[f"ptnr2_{auth_or_label}_comp_id"] = first_structure.link_data[
+                    "resn2"
+                ][i]
+                row[f"ptnr2_{auth_or_label}_asym_id"] = first_structure.link_data[
+                    "chain2"
+                ][i]
                 row[f"ptnr2_{auth_or_label}_seq_id"] = str(
                     first_structure.link_data["resi2"][i]
                 )
-                row["pdbx_ptnr2_PDB_ins_code"] = first_structure.link_data["icode2"][i] or "?"
-                row["pdbx_ptnr1_symmetry"] = first_structure.link_data["sym1"][i] or "1_555"
-                row["pdbx_ptnr2_symmetry"] = first_structure.link_data["sym2"][i] or "1_555"
+                row["pdbx_ptnr2_PDB_ins_code"] = (
+                    first_structure.link_data["icode2"][i] or "?"
+                )
+                row["pdbx_ptnr1_symmetry"] = (
+                    first_structure.link_data["sym1"][i] or "1_555"
+                )
+                row["pdbx_ptnr2_symmetry"] = (
+                    first_structure.link_data["sym2"][i] or "1_555"
+                )
                 if first_structure.link_data["length"][i]:
-                    row["pdbx_dist_value"] = f"{first_structure.link_data['length'][i]:.2f}"
+                    row["pdbx_dist_value"] = (
+                        f"{first_structure.link_data['length'][i]:.2f}"
+                    )
                 else:
                     row["pdbx_dist_value"] = "?"
 
@@ -1231,15 +1249,23 @@ class mmCIFFile(list):
                 atomid = max_atomid + 1
                 max_atomid += 1
 
-                atom_info.update({
-                    "atomid": atomid,
-                    "e": atom_info["name"][0] # assume first character of name string is element symbol
-                })
+                atom_info.update(
+                    {
+                        "atomid": atomid,
+                        "e": atom_info["name"][
+                            0
+                        ],  # assume first character of name string is element symbol
+                    }
+                )
 
                 for attr, value in atom_info.items():
                     self.missing_atoms[attr].append(value)
 
-        max_atomid = max(self.missing_atoms["atomid"]) if self.missing_atoms["atomid"] else max_atomid
+        max_atomid = (
+            max(self.missing_atoms["atomid"])
+            if self.missing_atoms["atomid"]
+            else max_atomid
+        )
         # Extract missing residues
         unobs_residues = block.get_table("pdbx_unobs_or_zero_occ_residues")
         if unobs_residues:
@@ -1247,32 +1273,42 @@ class mmCIFFile(list):
 
             for row in unobs_residues:
                 atom_info = copy.deepcopy(atom_fields)
-                atom_info.update({
-                    "chain": self._get_value_from_row(row, f"{auth_or_label}_asym_id"),
-                    "resn": self._get_value_from_row(row, f"{auth_or_label}_comp_id"),
-                    "resi": self._try_int(
-                        self._get_value_from_row(row, f"{auth_or_label}_seq_id")
-                    ),
-                    "icode": self._get_value_from_row(row, "PDB_ins_code") or "",
-                    # "model": self._try_int(
-                    #     self._get_value_from_row(row, "PDB_model_num")
-                    # )
-                    # or 1,
-                    # "occupancy_flag": self._get_value_from_row(row, "occupancy_flag")
-                    # or 0, # NOTE: doesn't seem to be used for anything?
-                })
+                atom_info.update(
+                    {
+                        "chain": self._get_value_from_row(
+                            row, f"{auth_or_label}_asym_id"
+                        ),
+                        "resn": self._get_value_from_row(
+                            row, f"{auth_or_label}_comp_id"
+                        ),
+                        "resi": self._try_int(
+                            self._get_value_from_row(row, f"{auth_or_label}_seq_id")
+                        ),
+                        "icode": self._get_value_from_row(row, "PDB_ins_code") or "",
+                        # "model": self._try_int(
+                        #     self._get_value_from_row(row, "PDB_model_num")
+                        # )
+                        # or 1,
+                        # "occupancy_flag": self._get_value_from_row(row, "occupancy_flag")
+                        # or 0, # NOTE: doesn't seem to be used for anything?
+                    }
+                )
                 # get the number of atoms for the residue
                 names = ROTAMERS[atom_info["resn"]]["atoms"]
-                n_atoms = len(names) # TODO: handle hydrogens
+                n_atoms = len(names)  # TODO: handle hydrogens
                 for attr, value in atom_info.items():
                     for i in range(1, n_atoms + 1):
                         if attr == "atomid":
                             value = max_atomid + i
                         elif attr == "name":
-                            value = names[i - 1] # use the names from the rotamer dictionary
+                            value = names[
+                                i - 1
+                            ]  # use the names from the rotamer dictionary
                         elif attr == "e":
                             value = names[i - 1][0]
-                        self.missing_atoms[attr].append(value) # append the same residue info for each atom in the residue
+                        self.missing_atoms[attr].append(
+                            value
+                        )  # append the same residue info for each atom in the residue
                 max_atomid += n_atoms
 
     def _get_value_from_row(self, row: mmCIFRow, column: str) -> Optional[str]:

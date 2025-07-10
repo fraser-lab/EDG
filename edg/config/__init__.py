@@ -1,6 +1,6 @@
 """Configuration system for EDG (Ensembles from Density Generator).
 
-Provides YAML-based configuration with CLI overrides, parameter scheduling, 
+Provides YAML-based configuration with CLI overrides, parameter scheduling,
 and validation for EDG experiments.
 """
 
@@ -23,7 +23,7 @@ from .schedules import (
 
 __all__ = [
     "ExperimentConfig",
-    "DiffusionConfig", 
+    "DiffusionConfig",
     "DensityConfig",
     "DensityGuidanceConfig",
     "AdaptiveSolverConfig",
@@ -34,6 +34,6 @@ __all__ = [
     "save_config",
     "ParameterSchedule",
     "PiecewiseScheduleConfig",
-    "ExponentialInterpolationConfig", 
+    "ExponentialInterpolationConfig",
     "ResolutionScalingConfig",
 ]

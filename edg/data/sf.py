@@ -4,7 +4,7 @@ f(s) = SUM_i=1^6 a_i * exp[-b_i * s^2]
 
 From https://github.com/ExcitedStates/qfit-3.0.git src/qfit/atomsf.py
 
-NOTE: I believe these are parametrized to remove the constant factor for the structure factors, 
+NOTE: I believe these are parametrized to remove the constant factor for the structure factors,
 as they do not exactly match up with those in the IUCr Vol C tables.
 """
 

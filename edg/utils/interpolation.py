@@ -1,6 +1,7 @@
 import torch
 from typing import Tuple
 
+
 def trilinear_interpolation_torch(
     density_map: torch.Tensor, points_zyx: torch.Tensor
 ) -> torch.Tensor:
@@ -55,7 +56,9 @@ def trilinear_interpolation_torch(
 
     # Store original shape for reshaping the output
     original_shape = points_zyx.shape
-    num_points_total = original_shape[:-1].numel() # Product of all dimensions except the last one
+    num_points_total = original_shape[
+        :-1
+    ].numel()  # Product of all dimensions except the last one
 
     # Reshape points_zyx to [N_total_points, 3] for processing
     points_zyx_flat = points_zyx.reshape(num_points_total, 3)
@@ -119,7 +122,7 @@ def tricubic_interpolation_torch(
 ) -> torch.Tensor:
     """
     Tricubic interpolation on a 3D map.
-    
+
     Parameters:
     ----------
     density_map : torch.Tensor
@@ -131,14 +134,16 @@ def tricubic_interpolation_torch(
         batch dimensions. Each innermost [N_points, 3] slice represents
         a set of points, with each point having (z, y, x) coordinates
         in grid units.
-        
+
     Returns:
     -------
     torch.Tensor
         A tensor of shape [..., N_points] containing the interpolated values,
         matching the leading dimensions of `points_zyx`.
     """
-    if not isinstance(density_map, torch.Tensor) or not isinstance(points_zyx, torch.Tensor):
+    if not isinstance(density_map, torch.Tensor) or not isinstance(
+        points_zyx, torch.Tensor
+    ):
         raise TypeError("Inputs must be torch.Tensors.")
     if density_map.ndim != 3:
         raise ValueError(f"Density map must be 3D, got shape {density_map.shape}.")
@@ -151,7 +156,7 @@ def tricubic_interpolation_torch(
 
     original_shape = points_zyx.shape
     num_points_total = original_shape[:-1].numel()
-    
+
     points_zyx_flat = points_zyx.reshape(num_points_total, 3)
     points_zyx_flat = points_zyx_flat.to(device=device, dtype=dtype)
 
@@ -161,7 +166,7 @@ def tricubic_interpolation_torch(
     nz = torch.floor(z).long()
     ny = torch.floor(y).long()
     nx = torch.floor(x).long()
-    
+
     # Calculate fractional coordinates within the unit cube
     xd = x - nx.to(dtype)
     yd = y - ny.to(dtype)
@@ -172,20 +177,22 @@ def tricubic_interpolation_torch(
     for i in range(-1, 3):
         for j in range(-1, 3):
             for k in range(-1, 3):
-                indices.append((
-                    torch.remainder(nz + i, Mz),
-                    torch.remainder(ny + j, My),
-                    torch.remainder(nx + k, Mx)
-                ))
-    
+                indices.append(
+                    (
+                        torch.remainder(nz + i, Mz),
+                        torch.remainder(ny + j, My),
+                        torch.remainder(nx + k, Mx),
+                    )
+                )
+
     # Function to compute the cubic polynomial coefficients
     def compute_cubic_coefficients(f_m1, f_0, f_1, f_2):
         a0 = f_0
         a1 = 0.5 * (f_1 - f_m1)
-        a2 = 0.5 * (-f_2 + 4*f_1 - 5*f_0 + 2*f_m1)
-        a3 = 0.5 * (f_2 - 3*f_1 + 3*f_0 - f_m1)
+        a2 = 0.5 * (-f_2 + 4 * f_1 - 5 * f_0 + 2 * f_m1)
+        a3 = 0.5 * (f_2 - 3 * f_1 + 3 * f_0 - f_m1)
         return a0, a1, a2, a3
-    
+
     # Extract function values at grid points surrounding each query point
     values = {}
     for di in range(-1, 3):
@@ -195,7 +202,7 @@ def tricubic_interpolation_torch(
                 idx_y = torch.remainder(ny + dj, My)
                 idx_x = torch.remainder(nx + dk, Mx)
                 values[(di, dj, dk)] = density_map[idx_z, idx_y, idx_x]
-    
+
     # Perform tricubic interpolation using nested 1D cubic interpolations
     # First interpolate along x for all z,y pairs
     x_interpolated = {}
@@ -205,10 +212,10 @@ def tricubic_interpolation_torch(
             f_0 = values[(di, dj, 0)]
             f_1 = values[(di, dj, 1)]
             f_2 = values[(di, dj, 2)]
-            
+
             a0, a1, a2, a3 = compute_cubic_coefficients(f_m1, f_0, f_1, f_2)
-            x_interpolated[(di, dj)] = a0 + a1*xd + a2*xd**2 + a3*xd**3
-    
+            x_interpolated[(di, dj)] = a0 + a1 * xd + a2 * xd**2 + a3 * xd**3
+
     # Next interpolate along y
     y_interpolated = {}
     for di in range(-1, 3):
@@ -216,46 +223,46 @@ def tricubic_interpolation_torch(
         f_0 = x_interpolated[(di, 0)]
         f_1 = x_interpolated[(di, 1)]
         f_2 = x_interpolated[(di, 2)]
-        
+
         a0, a1, a2, a3 = compute_cubic_coefficients(f_m1, f_0, f_1, f_2)
-        y_interpolated[di] = a0 + a1*yd + a2*yd**2 + a3*yd**3
-    
+        y_interpolated[di] = a0 + a1 * yd + a2 * yd**2 + a3 * yd**3
+
     # Finally interpolate along z
     f_m1 = y_interpolated[-1]
     f_0 = y_interpolated[0]
     f_1 = y_interpolated[1]
     f_2 = y_interpolated[2]
-    
+
     a0, a1, a2, a3 = compute_cubic_coefficients(f_m1, f_0, f_1, f_2)
-    interpolated_values_flat = a0 + a1*zd + a2*zd**2 + a3*zd**3
-    
+    interpolated_values_flat = a0 + a1 * zd + a2 * zd**2 + a3 * zd**3
+
     # Reshape output to match input dimensions
     interpolated_values = interpolated_values_flat.reshape(original_shape[:-1])
-    
+
     return interpolated_values
 
 
 def compute_derivatives_torch(
-    density_map: torch.Tensor
+    density_map: torch.Tensor,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Compute derivatives of the density map using central finite differences.
-    
+
     Parameters:
     ----------
     density_map : torch.Tensor
         The 3D density map of shape [Mz, My, Mx]
-        
+
     Returns:
     -------
     Tuple[torch.Tensor, torch.Tensor, torch.Tensor]
         Tensors containing derivatives in z, y, and x directions
     """
     Mz, My, Mx = density_map.shape
-    
+
     # Compute derivatives using central differences with periodic boundaries
     dx = (torch.roll(density_map, -1, dims=2) - torch.roll(density_map, 1, dims=2)) / 2
     dy = (torch.roll(density_map, -1, dims=1) - torch.roll(density_map, 1, dims=1)) / 2
     dz = (torch.roll(density_map, -1, dims=0) - torch.roll(density_map, 1, dims=0)) / 2
-    
+
     return dz, dy, dx

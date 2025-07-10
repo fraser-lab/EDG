@@ -21,7 +21,7 @@ from edg.experiment_runner import run_experiment
 
 def create_parser() -> argparse.ArgumentParser:
     """Create the command-line argument parser.
-    
+
     Returns
     -------
     argparse.ArgumentParser
@@ -58,116 +58,172 @@ Common parameters:
   --num-particles N         Number of steering particles
   --learning-rate LR        Adaptive solver learning rate
   --output-dir DIR          Output directory
-        """
+        """,
     )
-    
+
     # Required arguments
     parser.add_argument(
-        "--config", "-c",
+        "--config",
+        "-c",
         type=str,
         required=True,
-        help="Path to YAML configuration file"
+        help="Path to YAML configuration file",
     )
-    
+
     # Optional arguments
     parser.add_argument(
         "--validate-only",
         action="store_true",
-        help="Only validate configuration, don't run experiment"
+        help="Only validate configuration, don't run experiment",
     )
-    
+
     parser.add_argument(
         "--save-config",
         type=str,
-        help="Save the final configuration (after overrides) to this file"
+        help="Save the final configuration (after overrides) to this file",
     )
-    
+
     parser.add_argument(
-        "--verbose", "-v",
-        action="store_true", 
-        help="Enable verbose logging"
+        "--verbose", "-v", action="store_true", help="Enable verbose logging"
     )
-    
+
     parser.add_argument(
-        "--quiet", "-q",
-        action="store_true",
-        help="Suppress non-essential output"
+        "--quiet", "-q", action="store_true", help="Suppress non-essential output"
     )
-    
+
     # Common parameter overrides
     optimization_group = parser.add_argument_group("Optimization Parameters")
-    optimization_group.add_argument("--num-steps", type=int, help="Number of diffusion steps")
-    optimization_group.add_argument("--ensemble-size", type=int, help="Number of ensemble members")
-    optimization_group.add_argument("--step-scale", type=float, help="Diffusion step scale factor")
-    
+    optimization_group.add_argument(
+        "--num-steps", type=int, help="Number of diffusion steps"
+    )
+    optimization_group.add_argument(
+        "--ensemble-size", type=int, help="Number of ensemble members"
+    )
+    optimization_group.add_argument(
+        "--step-scale", type=float, help="Diffusion step scale factor"
+    )
+
     density_group = parser.add_argument_group("Density Parameters")
-    density_group.add_argument("--resolution", type=float, help="Map resolution in Angstroms")
+    density_group.add_argument(
+        "--resolution", type=float, help="Map resolution in Angstroms"
+    )
     density_group.add_argument("--map-path", type=str, help="Path to density map file")
-    density_group.add_argument("--em-mode", action="store_true", help="Use electron microscopy mode")
-    
+    density_group.add_argument(
+        "--em-mode", action="store_true", help="Use electron microscopy mode"
+    )
+
     structure_group = parser.add_argument_group("Structure Parameters")
-    structure_group.add_argument("--structure-path", type=str, help="Path to input structure file")
-    
+    structure_group.add_argument(
+        "--structure-path", type=str, help="Path to input structure file"
+    )
+
     guidance_group = parser.add_argument_group("Guidance Parameters")
-    guidance_group.add_argument("--guidance-weight", type=float, help="Density guidance weight")
-    guidance_group.add_argument("--resampling-weight", type=float, help="Particle resampling weight")
-    guidance_group.add_argument("--max-guidance-denoising-ratio", type=float, help="Maximum guidance to denoising ratio")
-    guidance_group.add_argument("--guidance-interval", type=int, help="Guidance application interval")
-    
+    guidance_group.add_argument(
+        "--guidance-weight", type=float, help="Density guidance weight"
+    )
+    guidance_group.add_argument(
+        "--resampling-weight", type=float, help="Particle resampling weight"
+    )
+    guidance_group.add_argument(
+        "--max-guidance-denoising-ratio",
+        type=float,
+        help="Maximum guidance to denoising ratio",
+    )
+    guidance_group.add_argument(
+        "--guidance-interval", type=int, help="Guidance application interval"
+    )
+
     steering_group = parser.add_argument_group("Steering Parameters")
-    steering_group.add_argument("--num-particles", type=int, help="Number of steering particles")
-    steering_group.add_argument("--guidance-update", action="store_true", help="Enable guidance updates")
-    steering_group.add_argument("--no-guidance-update", action="store_true", help="Disable guidance updates")
-    steering_group.add_argument("--fk-lambda", type=float, help="FK lambda parameter for steering")
-    steering_group.add_argument("--fk-resampling-interval", type=int, help="FK resampling interval")
-    
+    steering_group.add_argument(
+        "--num-particles", type=int, help="Number of steering particles"
+    )
+    steering_group.add_argument(
+        "--guidance-update", action="store_true", help="Enable guidance updates"
+    )
+    steering_group.add_argument(
+        "--no-guidance-update", action="store_true", help="Disable guidance updates"
+    )
+    steering_group.add_argument(
+        "--fk-lambda", type=float, help="FK lambda parameter for steering"
+    )
+    steering_group.add_argument(
+        "--fk-resampling-interval", type=int, help="FK resampling interval"
+    )
+
     solver_group = parser.add_argument_group("Adaptive Solver Parameters")
-    solver_group.add_argument("--learning-rate", type=float, help="Solver learning rate")
-    solver_group.add_argument("--solver-type", choices=["adam", "simple", "none"], help="Adaptive solver type")
-    solver_group.add_argument("--max-iterations", type=int, help="Maximum solver iterations")
-    solver_group.add_argument("--convergence-threshold", type=float, help="Convergence threshold for early stopping")
-    solver_group.add_argument("--gradient-clip-norm", type=float, help="Gradient clipping norm")
-    solver_group.add_argument("--line-search", action="store_true", help="Enable backtracking line search")
-    
+    solver_group.add_argument(
+        "--learning-rate", type=float, help="Solver learning rate"
+    )
+    solver_group.add_argument(
+        "--solver-type", choices=["adam", "simple", "none"], help="Adaptive solver type"
+    )
+    solver_group.add_argument(
+        "--max-iterations", type=int, help="Maximum solver iterations"
+    )
+    solver_group.add_argument(
+        "--convergence-threshold",
+        type=float,
+        help="Convergence threshold for early stopping",
+    )
+    solver_group.add_argument(
+        "--gradient-clip-norm", type=float, help="Gradient clipping norm"
+    )
+    solver_group.add_argument(
+        "--line-search", action="store_true", help="Enable backtracking line search"
+    )
+
     model_group = parser.add_argument_group("Model Parameters")
-    model_group.add_argument("--model-version", choices=["boltz1", "boltz2"], help="Model version")
-    model_group.add_argument("--checkpoint-path", type=str, help="Path to model checkpoint")
-    model_group.add_argument("--device", type=str, help="Compute device (cpu, cuda, etc.)")
-    
+    model_group.add_argument(
+        "--model-version", choices=["boltz1", "boltz2"], help="Model version"
+    )
+    model_group.add_argument(
+        "--checkpoint-path", type=str, help="Path to model checkpoint"
+    )
+    model_group.add_argument(
+        "--device", type=str, help="Compute device (cpu, cuda, etc.)"
+    )
+
     output_group = parser.add_argument_group("Output Parameters")
     output_group.add_argument("--output-dir", type=str, help="Output directory")
     output_group.add_argument("--name", type=str, help="Experiment name")
-    
+
     substructure_group = parser.add_argument_group("Substructure Parameters")
-    substructure_group.add_argument("--substructure-selection", type=str, help="Substructure selection string")
-    substructure_group.add_argument("--substructure-enabled", action="store_true", help="Enable substructure conditioning")
-    
+    substructure_group.add_argument(
+        "--substructure-selection", type=str, help="Substructure selection string"
+    )
+    substructure_group.add_argument(
+        "--substructure-enabled",
+        action="store_true",
+        help="Enable substructure conditioning",
+    )
+
     # Allow additional override parameters using special syntax
     parser.add_argument(
-        "--override", "-o",
+        "--override",
+        "-o",
         action="append",
         metavar="KEY=VALUE",
-        help="Override any parameter using KEY=VALUE syntax (can be used multiple times)"
+        help="Override any parameter using KEY=VALUE syntax (can be used multiple times)",
     )
-    
+
     return parser
 
 
 def parse_overrides(args: argparse.Namespace) -> Dict[str, Any]:
     """Parse command-line arguments into override dictionary.
-    
+
     Parameters
     ----------
     args : argparse.Namespace
         Parsed command-line arguments
-        
+
     Returns
     -------
     Dict[str, Any]
         Override parameters
     """
     overrides = {}
-    
+
     # Standard overrides
     param_mapping = {
         "num_steps": args.num_steps,
@@ -198,56 +254,58 @@ def parse_overrides(args: argparse.Namespace) -> Dict[str, Any]:
         "substructure_selection": args.substructure_selection,
         "substructure_enabled": args.substructure_enabled,
     }
-    
+
     # Add non-None values
     for key, value in param_mapping.items():
         if value is not None:
             overrides[key] = value
-    
+
     # Handle boolean flags that need special logic
     if args.guidance_update:
         overrides["guidance_update"] = True
     elif args.no_guidance_update:
         overrides["guidance_update"] = False
-    
+
     # Parse additional override parameters
     if args.override:
         for override_str in args.override:
             if "=" not in override_str:
-                raise ValueError(f"Invalid override format: {override_str}. Use KEY=VALUE")
-            
+                raise ValueError(
+                    f"Invalid override format: {override_str}. Use KEY=VALUE"
+                )
+
             key, value = override_str.split("=", 1)
             key = key.strip()
             value = value.strip()
-            
+
             # Try to parse value as appropriate type
             parsed_value = parse_override_value(value)
             overrides[key] = parsed_value
-    
+
     return {k: v for k, v in overrides.items() if v is not None}
 
 
 def parse_override_value(value_str: str) -> Any:
     """Parse a string override value to appropriate Python type.
-    
+
     Parameters
     ----------
     value_str : str
         String value to parse
-        
+
     Returns
     -------
     Any
         Parsed value
     """
     value_str = value_str.strip()
-    
+
     # Boolean values
     if value_str.lower() in ("true", "yes", "1", "on"):
         return True
     elif value_str.lower() in ("false", "no", "0", "off"):
         return False
-    
+
     # Try numeric values
     try:
         if "." in value_str:
@@ -256,20 +314,20 @@ def parse_override_value(value_str: str) -> Any:
             return int(value_str)
     except ValueError:
         pass
-    
+
     # Try YAML parsing for complex values
     try:
         return yaml.safe_load(value_str)
     except:
         pass
-    
+
     # Return as string
     return value_str
 
 
 def setup_logging(verbose: bool = False, quiet: bool = False) -> None:
     """Set up logging configuration.
-    
+
     Parameters
     ----------
     verbose : bool
@@ -283,17 +341,17 @@ def setup_logging(verbose: bool = False, quiet: bool = False) -> None:
         level = logging.DEBUG
     else:
         level = logging.INFO
-    
+
     logging.basicConfig(
         level=level,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S"
+        datefmt="%Y-%m-%d %H:%M:%S",
     )
 
 
 def main() -> int:
     """Main CLI entry point.
-    
+
     Returns
     -------
     int
@@ -301,59 +359,59 @@ def main() -> int:
     """
     parser = create_parser()
     args = parser.parse_args()
-    
+
     # Set up logging
     setup_logging(args.verbose, args.quiet)
     logger = logging.getLogger(__name__)
-    
+
     try:
         # Parse command-line overrides
         overrides = parse_overrides(args)
-        
+
         # Load configuration
         logger.info(f"Loading configuration from {args.config}")
         config = load_config(args.config, overrides)
-        
+
         logger.info(f"Loaded experiment: {config.name}")
         if overrides:
             logger.info(f"Applied overrides: {list(overrides.keys())}")
-        
+
         # Save final configuration if requested
         if args.save_config:
             logger.info(f"Saving final configuration to {args.save_config}")
             save_config(config, args.save_config)
-        
+
         # Validation only mode
         if args.validate_only:
             logger.info("Configuration validation passed!")
             print("✓ Configuration is valid")
             return 0
-        
+
         # Run experiment
         logger.info("Starting experiment...")
         results = run_experiment(config)
-        
+
         logger.info("Experiment completed successfully!")
         print(f"✓ Experiment '{config.name}' completed")
         print(f"✓ Results saved to: {config.output_dir}")
-        
+
         return 0
-        
+
     except FileNotFoundError as e:
         logger.error(f"File not found: {e}")
         print(f"✗ Error: {e}", file=sys.stderr)
         return 1
-        
+
     except ValueError as e:
         logger.error(f"Configuration error: {e}")
         print(f"✗ Configuration error: {e}", file=sys.stderr)
         return 1
-        
+
     except KeyboardInterrupt:
         logger.info("Experiment interrupted by user")
         print("\n✗ Experiment interrupted", file=sys.stderr)
         return 130
-        
+
     except Exception as e:
         logger.error(f"Unexpected error: {e}")
         if args.verbose:

@@ -226,17 +226,16 @@ class StructureSaver:
             try:
                 coor = coor.reshape(self.structure.coor.shape)
             except ValueError:
-                try: # slice to only the first n atoms if coor is padded
+                try:  # slice to only the first n atoms if coor is padded
                     if coor.ndim == 3:
                         coor = coor[:, : self.structure.coor.shape[1], :]
                     elif coor.ndim == 2:
                         coor = coor[: self.structure.coor.shape[0], :]
-                except: # noqa: E722
+                except:  # noqa: E722
                     # If the shape still does not match, raise an error
                     raise ValueError(
                         f"Coordinates shape {coor.shape} does not match structure coordinates shape {self.structure.coor.shape}."
                     )
-                
 
         if isinstance(self.structure, Ensemble):
             if coor.ndim == 3:
@@ -253,5 +252,5 @@ class StructureSaver:
                 raise ValueError(
                     f"Structure coordinates must be 2D tensor, got {coor.ndim}D tensor."
                 )
-            
+
         self.structure.tofile(output_path)

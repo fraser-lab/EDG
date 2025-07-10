@@ -77,7 +77,9 @@ class GaussLegendreQuadrature(torch.nn.Module):
         function_values = func(scaled_points)
 
         diff = function_values.ndim - weights_reshaped.ndim
-        weighted_values = function_values * weights_reshaped.reshape(*weights_reshaped.shape, *(diff * [1]))
+        weighted_values = function_values * weights_reshaped.reshape(
+            *weights_reshaped.shape, *(diff * [1])
+        )
         integral = scale_factor_reshaped * weighted_values.sum(dim=dim, keepdim=keepdim)
 
         return integral

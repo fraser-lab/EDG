@@ -80,17 +80,17 @@ class _BaseResidue(_BaseStructure):
     @classmethod
     def from_residue_group(cls, residue_group, **kwargs):
         """Create a complete residue from a residue group.
-        
+
         Args:
             residue_group: The residue group to create the residue from
             **kwargs: Additional arguments to pass to the residue constructor
-            
+
         Returns:
             A new residue instance with proper parent data handling
         """
         # Get the selection from the residue group
         selection = residue_group._selection
-        
+
         # Create a new residue with the same data and selection
         residue = cls(
             residue_group.data,
@@ -99,9 +99,9 @@ class _BaseResidue(_BaseStructure):
             resi=residue_group.id[0],
             icode=residue_group.id[1],
             type=residue_type(residue_group),
-            **kwargs
+            **kwargs,
         )
-        
+
         return residue
 
 
@@ -152,11 +152,11 @@ class _RotamerResidue(_BaseResidue):
         self._dist2_matrix = np.empty(self._ndistances, float)
 
         # Check if parent has active state, otherwise initialize all as active
-        if self.parent is not None and 'active' in self.parent.data:
-            self.active = self.parent.data['active'][self._selection].copy()
+        if self.parent is not None and "active" in self.parent.data:
+            self.active = self.parent.data["active"][self._selection].copy()
         else:
             self.active = np.ones(self.natoms, dtype=bool)
-        
+
         # Initialize the active mask based on atom active states
         self._active_mask = np.ones(self._ndistances, bool)
         self.update_clash_mask()
@@ -296,9 +296,11 @@ class _RotamerResidue(_BaseResidue):
             # Check if reference atom has valid coordinates
             ref_idx = np.argwhere(self.name == ref_atom)[0][0]
             if np.any(np.isnan(self.coor[ref_idx])):
-                logger.info(f"Reference atom {ref_atom} has NaN coordinates - rebuilding first")
+                logger.info(
+                    f"Reference atom {ref_atom} has NaN coordinates - rebuilding first"
+                )
                 self.complete_residue_recursive(ref_atom)
-                
+
         idx = np.argwhere(self.name == ref_atom)[0][0]
         ref_coor = self.coor[idx]
         bond_length, bond_length_sd = self._rotamers["bond_dist"][ref_atom][atom]
@@ -315,9 +317,11 @@ class _RotamerResidue(_BaseResidue):
                     # Check if bond angle atom has valid coordinates
                     ba_idx = np.argwhere(self.name == bond_angle_atom)[0][0]
                     if np.any(np.isnan(self.coor[ba_idx])):
-                        logger.info(f"Bond angle atom {bond_angle_atom} has NaN coordinates - rebuilding first")
+                        logger.info(
+                            f"Bond angle atom {bond_angle_atom} has NaN coordinates - rebuilding first"
+                        )
                         self.complete_residue_recursive(bond_angle_atom)
-                        
+
                 bond_angle_coor = self.coor[
                     np.argwhere(self.name == bond_angle_atom)[0]
                 ]
@@ -349,11 +353,15 @@ class _RotamerResidue(_BaseResidue):
                                     self.complete_residue_recursive(dihedral_atom)
                                 else:
                                     # Check if dihedral atom has valid coordinates
-                                    da_idx = np.argwhere(self.name == dihedral_atom)[0][0]
+                                    da_idx = np.argwhere(self.name == dihedral_atom)[0][
+                                        0
+                                    ]
                                     if np.any(np.isnan(self.coor[da_idx])):
-                                        logger.info(f"Dihedral atom {dihedral_atom} has NaN coordinates - rebuilding first")
+                                        logger.info(
+                                            f"Dihedral atom {dihedral_atom} has NaN coordinates - rebuilding first"
+                                        )
                                         self.complete_residue_recursive(dihedral_atom)
-                                        
+
                                 dihedral_atom_coor = self.coor[
                                     np.argwhere(self.name == dihedral_atom)[0]
                                 ]
@@ -361,11 +369,17 @@ class _RotamerResidue(_BaseResidue):
                                     self.complete_residue_recursive(other_dihedral_atom)
                                 else:
                                     # Check if other dihedral atom has valid coordinates
-                                    oda_idx = np.argwhere(self.name == other_dihedral_atom)[0][0]
+                                    oda_idx = np.argwhere(
+                                        self.name == other_dihedral_atom
+                                    )[0][0]
                                     if np.any(np.isnan(self.coor[oda_idx])):
-                                        logger.info(f"Other dihedral atom {other_dihedral_atom} has NaN coordinates - rebuilding first")
-                                        self.complete_residue_recursive(other_dihedral_atom)
-                                        
+                                        logger.info(
+                                            f"Other dihedral atom {other_dihedral_atom} has NaN coordinates - rebuilding first"
+                                        )
+                                        self.complete_residue_recursive(
+                                            other_dihedral_atom
+                                        )
+
                                 other_dihedral_atom_coor = self.coor[
                                     np.argwhere(self.name == other_dihedral_atom)[0]
                                 ]
@@ -403,9 +417,11 @@ class _RotamerResidue(_BaseResidue):
                         # Check if dihedral atom has valid coordinates
                         da_idx = np.argwhere(self.name == dihedral_atom)[0][0]
                         if np.any(np.isnan(self.coor[da_idx])):
-                            logger.info(f"Dihedral atom {dihedral_atom} has NaN coordinates - rebuilding first")
+                            logger.info(
+                                f"Dihedral atom {dihedral_atom} has NaN coordinates - rebuilding first"
+                            )
                             self.complete_residue_recursive(dihedral_atom)
-                            
+
                     dihedral_atom_coor = self.coor[
                         np.argwhere(self.name == dihedral_atom)[0]
                     ]
@@ -660,12 +676,12 @@ class _RotamerResidue(_BaseResidue):
 
     def add_atom(self, name, element, coor):
         """Add or update an atom in the residue.
-        
+
         Args:
             name: The name of the atom
             element: The element type
             coor: The coordinates of the atom
-            
+
         If the atom already exists, its coordinates will be updated.
         If the atom doesn't exist, it will be added to the end of the residue.
         If the atom exists but has NaN coordinates, those will be properly updated.
@@ -675,8 +691,10 @@ class _RotamerResidue(_BaseResidue):
             idx = self._selection[existing_atom_indices[0][0]]
             # Check if existing coordinates are NaN - if so, log this specific case
             if np.any(np.isnan(self._coor[idx])):
-                logger.info(f"Updating {name} with NaN coordinates to valid coordinates: {coor}")
-            
+                logger.info(
+                    f"Updating {name} with NaN coordinates to valid coordinates: {coor}"
+                )
+
             # Update coordinates and active status
             coor_array = getattr(self, "_coor").copy()
             coor_array[idx] = np.array(coor)
@@ -697,11 +715,11 @@ class _RotamerResidue(_BaseResidue):
             current_q = getattr(self, "_q")
             valid_q = current_q[~(current_q == 0)]
             if valid_q.size > 0 and np.all(valid_q == 1.0):
-                 target_q = 1.0
+                target_q = 1.0
             elif valid_q.size > 0:
-                target_q = np.mean(valid_q) 
+                target_q = np.mean(valid_q)
             else:
-                 target_q = 1.0
+                target_q = 1.0
             q_array = getattr(self, "_q").copy()
             q_array[idx] = target_q
             setattr(self, "_q", q_array)
@@ -714,15 +732,17 @@ class _RotamerResidue(_BaseResidue):
                 current.parent.data["b"][idx] = mean_b
                 current.parent.data["q"][idx] = target_q
                 current = current.parent
-            
-            logger.info(f"Updated {name} coordinates to {coor}, B-factor to {mean_b:.2f}, Occupancy to {target_q:.2f}")
+
+            logger.info(
+                f"Updated {name} coordinates to {coor}, B-factor to {mean_b:.2f}, Occupancy to {target_q:.2f}"
+            )
             return
 
         # Adding a new atom
         index = self._selection[-1]
         if index < len(self.data["record"]):
             index = len(self.data["record"]) - 1
-            
+
         # Pre-calculate mean B-factor and target Q for the new atom
         current_b_factors = getattr(self, "_b")
         valid_b_factors = current_b_factors[~np.isnan(current_b_factors)]
@@ -731,12 +751,12 @@ class _RotamerResidue(_BaseResidue):
         current_q = getattr(self, "_q")
         valid_q = current_q[~np.isnan(current_q)]
         if valid_q.size > 0 and np.all(valid_q == 1.0):
-             target_q_new = 1.0
+            target_q_new = 1.0
         elif valid_q.size > 0:
-            target_q_new = np.mean(valid_q) 
+            target_q_new = np.mean(valid_q)
         else:
-             target_q_new = 1.0
-             
+            target_q_new = 1.0
+
         for attr in self.data:
             if attr == "e":
                 setattr(self, "_" + attr, np.append(getattr(self, "_" + attr), element))
@@ -754,13 +774,17 @@ class _RotamerResidue(_BaseResidue):
                         getattr(self, "_" + attr), np.expand_dims(coor, axis=0), axis=0
                     ),
                 )
-            elif attr == "b":  
-                setattr(self, "_" + attr, np.append(getattr(self, "_" + attr), mean_b_new))
+            elif attr == "b":
+                setattr(
+                    self, "_" + attr, np.append(getattr(self, "_" + attr), mean_b_new)
+                )
             elif attr == "q":
-                setattr(self, "_" + attr, np.append(getattr(self, "_" + attr), target_q_new))
-            elif attr == "active": # Ensure new atoms are active
-                 setattr(self, "_" + attr, np.append(getattr(self, "_" + attr), True))
-            else: # Append the last value for other attributes (resn, chain, etc.)
+                setattr(
+                    self, "_" + attr, np.append(getattr(self, "_" + attr), target_q_new)
+                )
+            elif attr == "active":  # Ensure new atoms are active
+                setattr(self, "_" + attr, np.append(getattr(self, "_" + attr), True))
+            else:  # Append the last value for other attributes (resn, chain, etc.)
                 setattr(
                     self,
                     "_" + attr,

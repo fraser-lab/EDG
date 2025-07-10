@@ -23,4 +23,3 @@ def pytest_runtest_setup(item):
         np.random.seed(seed)
     if HAS_TORCH:
         torch.manual_seed(seed)
-        
