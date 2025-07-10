@@ -185,6 +185,8 @@ Common parameters:
 
     output_group = parser.add_argument_group("Output Parameters")
     output_group.add_argument("--output-dir", type=str, help="Output directory")
+    output_group.add_argument("--input-data-dir", type=str, help="Input data directory")
+    output_group.add_argument("--shared-input-dir", type=str, help="Shared input directory for parameter sweeps")
     output_group.add_argument("--name", type=str, help="Experiment name")
 
     substructure_group = parser.add_argument_group("Substructure Parameters")
@@ -250,6 +252,8 @@ def parse_overrides(args: argparse.Namespace) -> Dict[str, Any]:
         "checkpoint_path": args.checkpoint_path,
         "device": args.device,
         "output_dir": args.output_dir,
+        "input_data_dir": args.input_data_dir,
+        "shared_input_dir": args.shared_input_dir,
         "name": args.name,
         "substructure_selection": args.substructure_selection,
         "substructure_enabled": args.substructure_enabled,

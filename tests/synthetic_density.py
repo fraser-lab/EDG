@@ -441,53 +441,54 @@ if __name__ == "__main__":
     unit_cell = UnitCell(50.0, 50.0, 50.0)
 
     density_generator = SyntheticDensityGenerator(
-        structure=ensemble, resolution=2.0, unit_cell=unit_cell, em_mode=False
+        structure=ensemble[0], resolution=2.0, unit_cell=unit_cell, em_mode=False
     )
     density = density_generator.generate_map(
         b_factor_scale=1.0, occupancy_scale=1.0, shift=True
     )
     density_generator.save_map(
-        "/home/kchrispens/adp-replicate/tests/resources/mac1_adpr_peptideflip/mac1_adpr_peptideflip_2A.ccp4",
+        "/home/kchrispens/adp-replicate/tests/resources/mac1_adpr_peptideflip/mac1_adpr_peptideflip_Aconf_2A.ccp4",
         density,
     )
 
-    ensemble.tofile(
-        "/home/kchrispens/adp-replicate/tests/resources/mac1_adpr_peptideflip/mac1_adpr_peptideflip.cif"
+    ensemble[0].tofile(
+        "/home/kchrispens/adp-replicate/tests/resources/mac1_adpr_peptideflip/mac1_adpr_peptideflip_Aconf.cif"
     )
     ensemble.coor = ensemble.coor - density_generator.center
-    ensemble.tofile(
-        "/home/kchrispens/adp-replicate/tests/resources/mac1_adpr_peptideflip/mac1_adpr_peptideflip_shifted.cif"
+    ensemble[0].tofile(
+        "/home/kchrispens/adp-replicate/tests/resources/mac1_adpr_peptideflip/mac1_adpr_peptideflip_Aconf_shifted.cif"
     )
 
     ### PTP1B TEST CASE
-    pdb = Structure.fromfile(
-        "/home/kchrispens/adp-replicate/tests/resources/6b8x/processed/6b8x-sf_single_001.cif"
-    )
-    pdb = pdb.clean_structure(keep_type="protein")
-    pdb = pdb.reorder()
-    pdb = pdb.complete_residues()
-    pdb = pdb.reorder()
-    pdb.coor = pdb.coor - np.array([48.0, 18.0, 0.0])
-    print(pdb)
+    # pdb = Structure.fromfile(
+    #     "/home/kchrispens/adp-replicate/tests/resources/6b8x/processed/6b8x-sf_single_001.cif"
+    # )
+    # pdb = pdb.clean_structure(keep_type="protein")
+    # pdb = pdb.reorder()
+    # pdb = pdb.complete_residues()
+    # pdb = pdb.reorder()
+    # pdb = pdb.extract(pdb.select("not altloc A and not altloc C"))
+    # pdb.coor = pdb.coor - np.array([48.0, 18.0, 0.0])
+    # print(pdb)
 
-    unit_cell = UnitCell(50.0, 60.0, 70.0)
+    # unit_cell = UnitCell(50.0, 60.0, 70.0)
 
-    density_generator = SyntheticDensityGenerator(
-        structure=pdb, resolution=2.0, unit_cell=unit_cell, em_mode=False
-    )
-    density = density_generator.generate_map(
-        b_factor_scale=1.0, occupancy_scale=1.0, shift=True
-    )
-    density_generator.save_map(
-        "/home/kchrispens/adp-replicate/tests/resources/6b8x/6b8x_2A.ccp4",
-        density,
-    )
+    # density_generator = SyntheticDensityGenerator(
+    #     structure=pdb, resolution=2.0, unit_cell=unit_cell, em_mode=False
+    # )
+    # density = density_generator.generate_map(
+    #     b_factor_scale=1.0, occupancy_scale=1.0, shift=True
+    # )
+    # density_generator.save_map(
+    #     "/home/kchrispens/adp-replicate/tests/resources/6b8x/6b8x_Bconf_2A.ccp4",
+    #     density,
+    # )
 
-    pdb.tofile("/home/kchrispens/adp-replicate/tests/resources/6b8x/6b8x_synthetic.cif")
-    pdb.coor = pdb.coor - density_generator.center
-    pdb.tofile(
-        "/home/kchrispens/adp-replicate/tests/resources/6b8x/6b8x_synthetic_shifted.cif"
-    )
+    # pdb.tofile("/home/kchrispens/adp-replicate/tests/resources/6b8x/6b8x_synthetic_Bconf.cif")
+    # pdb.coor = pdb.coor - density_generator.center
+    # pdb.tofile(
+    #     "/home/kchrispens/adp-replicate/tests/resources/6b8x/6b8x_synthetic_Bconf_shifted.cif"
+    # )
 
     ### Synthetic AAAWAAA data
     # pdb = Structure.fromfile(

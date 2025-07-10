@@ -26,6 +26,12 @@ from edg.config.optimizer_factory import (
 from edg.edg.optimizer import DensityGuidedDiffusion
 from edg.data.structure import Structure, Ensemble
 from edg.utils.utility import try_gpu
+from edg.utils.shared_input import (
+    validate_shared_input_compatibility,
+    check_shared_processed_data,
+    copy_boltz_input_to_shared,
+    create_config_with_shared_input,
+)
 
 # Type checking imports
 from typing import TYPE_CHECKING
@@ -169,6 +175,32 @@ def run_experiment(config: ExperimentConfig) -> Dict[str, Any]:
     """
     logger.info(f"Running experiment: {config.name}")
 
+    # Check if we're using a shared input directory
+    using_shared_input = config.shared_input_dir is not None
+    
+    if using_shared_input:
+        logger.info("Using shared input directory for parameter sweep optimization")
+        return run_experiment_with_shared_input(config)
+    else:
+        logger.info("Running standalone experiment")
+        return run_experiment_standalone(config)
+
+
+def run_experiment_standalone(config: ExperimentConfig) -> Dict[str, Any]:
+    """Run a standalone experiment without shared input.
+
+    Parameters
+    ----------
+    config : ExperimentConfig
+        Complete experiment configuration
+
+    Returns
+    -------
+    Dict[str, Any]
+        Experiment results including final structures and scores
+    """
+    logger.info(f"Running standalone experiment: {config.name}")
+
     # Create output directories
     output_dir = Path(config.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -186,13 +218,85 @@ def run_experiment(config: ExperimentConfig) -> Dict[str, Any]:
     save_config(config, config_output_path)
     logger.info(f"Saved experiment configuration to {config_output_path}")
 
+    # Run the main experiment logic
+    return run_experiment_main_logic(config, input_data_dir, run_output_dir)
+
+
+def run_experiment_with_shared_input(config: ExperimentConfig) -> Dict[str, Any]:
+    """Run an experiment using shared input directory.
+
+    Parameters
+    ----------
+    config : ExperimentConfig
+        Complete experiment configuration
+
+    Returns
+    -------
+    Dict[str, Any]
+        Experiment results including final structures and scores
+    """
+    logger.info(f"Running experiment with shared input: {config.name}")
+
+    shared_input_dir = Path(config.shared_input_dir)
+    shared_output_dir = Path(config.output_dir)  # This should be the shared output directory
+    
+    # Validate shared input compatibility
+    if not validate_shared_input_compatibility(config, shared_input_dir):
+        raise ValueError(f"Shared input directory is not compatible with current configuration: {shared_input_dir}")
+
+    # Check if we need to copy Boltz input YAML to shared directory
+    if config.boltz_input_yaml:
+        shared_yaml_path = shared_input_dir / f"{config.name}_shared.yaml"
+        if not shared_yaml_path.exists():
+            logger.info("Copying Boltz input YAML to shared directory")
+            copy_boltz_input_to_shared(config, shared_input_dir)
+    
+    # Create run-specific output directory (this will be moved later)
+    run_output_dir = create_run_output_dir(config, shared_output_dir)
+    
+    # Save the final configuration used to the run-specific directory
+    config_output_path = run_output_dir / "experiment_config.yaml"
+    from edg.config import save_config
+
+    save_config(config, config_output_path)
+    logger.info(f"Saved experiment configuration to {config_output_path}")
+
+    # Run the main experiment logic
+    return run_experiment_main_logic(config, shared_input_dir, run_output_dir)
+
+
+def run_experiment_main_logic(config: ExperimentConfig, input_data_dir: Path, run_output_dir: Path) -> Dict[str, Any]:
+    """Main experiment logic that can be shared between standalone and shared input modes.
+
+    Parameters
+    ----------
+    config : ExperimentConfig
+        Complete experiment configuration
+    input_data_dir : Path
+        Input data directory (either standalone or shared)
+    run_output_dir : Path
+        Run-specific output directory
+
+    Returns
+    -------
+    Dict[str, Any]
+        Experiment results including final structures and scores
+    """
     # Initialize the optimizer first (we need the structure to create proper Boltz YAML)
     logger.info("Initializing optimizer...")
 
     # Use existing Boltz input YAML if provided, otherwise create one after optimizer init
     if config.boltz_input_yaml:
-        logger.info(f"Using existing Boltz input YAML: {config.boltz_input_yaml}")
-        input_yaml_path = Path(config.boltz_input_yaml)
+        # For shared input mode, check if we need to handle the YAML path differently
+        if config.shared_input_dir:
+            # Use the shared YAML file that was copied earlier
+            shared_yaml_path = input_data_dir / f"{config.name}_shared.yaml"
+            if shared_yaml_path.exists():
+                input_yaml_path = shared_yaml_path
+            else:
+                input_yaml_path = Path(config.boltz_input_yaml)
+        else:
+            input_yaml_path = Path(config.boltz_input_yaml)
 
         # Validate that the file exists
         if not input_yaml_path.exists():

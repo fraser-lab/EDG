@@ -157,6 +157,7 @@ class ExperimentConfig:
     output_dir: str
     input_data_dir: str  # Path for temporary input data (YAML file)
     boltz_input_yaml: Optional[str] = None  # Optional path to existing Boltz input YAML
+    shared_input_dir: Optional[str] = None  # Optional path to shared input directory for reusing processed data
 
     # Optional configurations with defaults
     model: ModelConfig = field(default_factory=ModelConfig)
