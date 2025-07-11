@@ -1,11 +1,11 @@
 # PTP1B experiment configuration
 # Replicates the functionality of run_ptp1b.py
 
-name: "ptp1b_Bconf_experiment"
+name: "ptp1b_1occBconf_experiment"
 
 # Structure configuration
 structure:
-  structure_path: "/home/kchrispens/adp-replicate/tests/resources/6b8x/6b8x_synthetic_Bconf_shifted.cif"
+  structure_path: "/home/kchrispens/adp-replicate/tests/resources/6b8x/6b8x_synthetic_1occBconf_shifted.cif"
   clean_structure: true
   keep_type: "protein"
   remove_all_ligands: true
@@ -14,7 +14,7 @@ structure:
 
 # Density map configuration
 density:
-  map_path: "/home/kchrispens/adp-replicate/tests/resources/6b8x/6b8x_Bconf_2A.ccp4"
+  map_path: "/home/kchrispens/adp-replicate/tests/resources/6b8x/6b8x_1occBconf_2A.ccp4"
   resolution: 2.0
   em_mode: false
 

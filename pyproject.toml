@@ -12,7 +12,8 @@ edg = "edg.cli:main"
 
 [project.optional-dependencies]
 test = ["pytest>=8.3.5,<9"]
-visualization = ["matplotlib", "seaborn"]
+visualization = ["matplotlib","seaborn"]
+analysis = ["openpyxl","pyarrow"]
 
 [build-system]
 build-backend = "hatchling.build"
@@ -44,3 +45,4 @@ ruff = ">=0.12.2,<0.13"
 default = {features = [], solve-group = "default"}
 test = {features = ["test"], solve-group = "default"}
 visualization = {features = ["visualization"], solve-group = "default"}
+analysis = {features = ["analysis", "visualization"], solve-group = "default"}
