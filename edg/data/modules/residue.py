@@ -266,16 +266,32 @@ class _RotamerResidue(_BaseResidue):
             )
             raise RuntimeError(msg)
 
+        failed_atoms = []
         for atom, position in zip(self._rotamers["atoms"], self._rotamers["positions"]):
             # Found a missing atom!
             if atom not in self.name:
-                self.complete_residue_recursive(atom)
+                try:
+                    self.complete_residue_recursive(atom)
+                except RuntimeError as e:
+                    failed_atoms.append((atom, str(e)))
+                    logger.warning(f"Failed to rebuild missing atom {atom}: {e}")
             else:
                 # Check if atom exists but has NaN coordinates
                 atom_idx = np.argwhere(self.name == atom)[0][0]
                 if np.any(np.isnan(self.coor[atom_idx])):
                     logger.info(f"Found atom {atom} with NaN coordinates - rebuilding")
-                    self.complete_residue_recursive(atom)
+                    try:
+                        self.complete_residue_recursive(atom)
+                    except RuntimeError as e:
+                        failed_atoms.append((atom, str(e)))
+                        logger.warning(f"Failed to rebuild atom {atom} with NaN coordinates: {e}")
+        
+        if failed_atoms:
+            failed_names = [atom for atom, _ in failed_atoms]
+            logger.warning(
+                f"Completed residue {self} with {len(failed_atoms)} failed atoms: {failed_names}. "
+                f"These atoms will be missing from the final structure."
+            )
 
     def complete_residue_recursive(self, atom):
         if atom in ["N", "C", "CA", "O"]:
@@ -436,6 +452,8 @@ class _RotamerResidue(_BaseResidue):
             f"  angle:{bond_angle}±{bond_angle_sd}\n"
             f"  dihedral_angle:{dihed_angle}"
         )
+        
+        # Try primary geometric rebuilding
         try:
             new_coor = self.calc_coordinates(
                 dihedral_atom_coor.flatten(),
@@ -448,19 +466,125 @@ class _RotamerResidue(_BaseResidue):
                 np.deg2rad(dihed_angle),
             )
             new_coor = [round(x, 3) for x in new_coor]
-        except RuntimeError as e:
-            raise RuntimeError(f"Unable to rebuild atom {atom}.") from e
-        else:
             logger.info(f"Rebuilt {atom} at {new_coor}")
-        self.add_atom(atom, atom[0], new_coor)
+            self.add_atom(atom, atom[0], new_coor)
+            return
+        except RuntimeError as e:
+            logger.warning(f"Primary geometric rebuild failed for {atom}: {e}")
+        
+        # Try alternative bond angle atoms if available
+        alternative_angles = []
+        for angle in self._rotamers["bond_angle"]:
+            if angle[0][1] == ref_atom and angle[0][2] == atom:
+                if angle[0][0][0] != "H" and angle[0][0] != bond_angle_atom:
+                    alternative_angles.append(angle)
+        
+        for alt_angle in alternative_angles:
+            try:
+                alt_bond_angle_atom = alt_angle[0][0]
+                alt_bond_angle, alt_bond_angle_sd = alt_angle[1]
+                
+                if alt_bond_angle_atom not in self.name:
+                    continue  # Skip if we don't have this atom
+                
+                alt_bond_angle_coor = self.coor[
+                    np.argwhere(self.name == alt_bond_angle_atom)[0]
+                ]
+                
+                logger.debug(f"Trying alternative bond angle atom {alt_bond_angle_atom} for {atom}")
+                
+                new_coor = self.calc_coordinates(
+                    dihedral_atom_coor.flatten(),
+                    alt_bond_angle_coor.flatten(),
+                    ref_coor.flatten(),
+                    bond_length,
+                    bond_length_sd,
+                    np.deg2rad(alt_bond_angle),
+                    np.deg2rad(alt_bond_angle_sd),
+                    np.deg2rad(dihed_angle),
+                )
+                new_coor = [round(x, 3) for x in new_coor]
+                logger.info(f"Rebuilt {atom} at {new_coor} using alternative angle atom {alt_bond_angle_atom}")
+                self.add_atom(atom, atom[0], new_coor)
+                return
+            except RuntimeError:
+                continue  # Try next alternative
+        
+        # Try approximate positioning as last resort
+        try:
+            new_coor = self._approximate_atom_position(ref_atom, ref_coor, bond_length)
+            logger.warning(f"Used approximate positioning for {atom} at {new_coor}")
+            self.add_atom(atom, atom[0], new_coor)
+            return
+        except Exception:
+            pass
+        
+        # If all attempts fail, log detailed warning and skip atom
+        logger.warning(
+            f"Unable to rebuild atom {atom} in {self}. "
+            f"Tried primary geometric rebuild, {len(alternative_angles)} alternative bond angles, "
+            f"and approximate positioning. Atom will be skipped. "
+            f"Residue: {self.resn[0]} {self.resi[0]}, "
+            f"Reference atom: {ref_atom}, Bond length: {bond_length}±{bond_length_sd}, "
+            f"Bond angle: {bond_angle}±{bond_angle_sd}, Dihedral: {dihed_angle}"
+        )
+
+    def _approximate_atom_position(self, ref_atom, ref_coor, bond_length):
+        """Approximate atom positioning as fallback when geometric rebuild fails.
+        
+        Uses simple vector math to place atom at approximate position based on
+        reference atom and typical bond geometry.
+        
+        Args:
+            ref_atom: Name of reference atom
+            ref_coor: Coordinates of reference atom
+            bond_length: Expected bond length
+            
+        Returns:
+            np.ndarray: Approximate coordinates for the atom
+        """
+        # Find other atoms in the residue to determine general direction
+        available_atoms = []
+        for other_atom in self.name:
+            if other_atom != ref_atom and other_atom not in ["H", "D"]:  # Skip hydrogens/deuterium
+                other_idx = np.argwhere(self.name == other_atom)[0][0]
+                other_coor = self.coor[other_idx]
+                if not np.any(np.isnan(other_coor)):
+                    available_atoms.append((other_atom, other_coor))
+        
+        if len(available_atoms) == 0:
+            raise RuntimeError("No valid atoms available for approximate positioning")
+        
+        # Calculate center of mass of available atoms
+        center_of_mass = np.mean([coor for _, coor in available_atoms], axis=0)
+        
+        # Direction vector from center of mass to reference atom
+        com_to_ref = ref_coor.flatten() - center_of_mass
+        com_to_ref_norm = np.linalg.norm(com_to_ref)
+        
+        if com_to_ref_norm > 0:
+            # Place atom in direction away from center of mass
+            direction = com_to_ref / com_to_ref_norm
+        else:
+            # If reference atom is at center of mass, use random direction
+            direction = np.array([1.0, 0.0, 0.0])
+        
+        # Add some randomness to avoid perfect alignment
+        random_perturbation = np.random.normal(0, 0.1, 3)
+        direction += random_perturbation
+        direction = direction / np.linalg.norm(direction)
+        
+        # Place atom at bond length distance in calculated direction
+        approx_coor = ref_coor.flatten() + direction * bond_length
+        
+        return [round(x, 3) for x in approx_coor]
 
     @staticmethod
     def calc_coordinates(i, j, k, L, sig_L, theta, sig_theta, chi):
         """Calculate coords of an atom from three atomic positions and bond parms.
 
         Will permit deviations in bond length or theta to position an atom.
-
-        TODO: Use a solver to minimise error in both L and theta.
+        Uses progressive expansion of search ranges for better success rate.
 
         Args:
             i (np.ndarray[float, shape=(3,)]): coords of atom 3-bonds away
@@ -475,36 +599,51 @@ class _RotamerResidue(_BaseResidue):
         Returns:
             np.ndarray[float, shape=(3,): coords of atom
         """
-        # We will try these parameters
-        theta_options_larger = np.linspace(theta, theta + sig_theta, 5, endpoint=False)
-        theta_options_smaller = np.linspace(
-            theta, theta - sig_theta, 5, endpoint=False
-        )[1:]
-        theta_options = [theta, *theta_options_larger, *theta_options_smaller]
+        # Progressive expansion of search ranges for better success rate
+        expansion_factors = [1.0, 1.5, 2.0, 3.0]
+        search_points = [5, 8, 10, 12]  # Increase resolution as we expand
+        
+        for expansion_factor, n_points in zip(expansion_factors, search_points):
+            # Expand search ranges
+            expanded_sig_L = sig_L * expansion_factor
+            expanded_sig_theta = sig_theta * expansion_factor
+            
+            # Generate parameter options with higher resolution
+            theta_options_larger = np.linspace(theta, theta + expanded_sig_theta, n_points, endpoint=False)
+            theta_options_smaller = np.linspace(
+                theta, theta - expanded_sig_theta, n_points, endpoint=False
+            )[1:]
+            theta_options = [theta, *theta_options_larger, *theta_options_smaller]
 
-        L_options_larger = np.linspace(L, L + sig_L, 5, endpoint=False)
-        L_options_smaller = np.linspace(L, L - sig_L, 5, endpoint=False)[1:]
-        L_options = [L, *L_options_larger, *L_options_smaller]
+            L_options_larger = np.linspace(L, L + expanded_sig_L, n_points, endpoint=False)
+            L_options_smaller = np.linspace(L, L - expanded_sig_L, n_points, endpoint=False)[1:]
+            L_options = [L, *L_options_larger, *L_options_smaller]
 
-        tries = itl.product(theta_options, L_options)
+            tries = itl.product(theta_options, L_options)
 
-        # Loop over parameters, and return the first success.
-        for try_theta, try_L in tries:
-            try:
-                coordinates = _RotamerResidue.position_from_bond_parms(
-                    i, j, k, try_L, try_theta, chi
-                )
-            except ValueError:
-                # If these parameters didn't work, try the next set.
-                continue
-            else:
-                return coordinates
+            # Loop over parameters, and return the first success.
+            for try_theta, try_L in tries:
+                try:
+                    coordinates = _RotamerResidue.position_from_bond_parms(
+                        i, j, k, try_L, try_theta, chi
+                    )
+                except ValueError:
+                    # If these parameters didn't work, try the next set.
+                    continue
+                else:
+                    if expansion_factor > 1.0:
+                        logger.debug(
+                            f"Successfully rebuilt atom with expanded parameters: "
+                            f"expansion_factor={expansion_factor}, L={try_L:.3f}, theta={try_theta:.3f}"
+                        )
+                    return coordinates
 
         # If we get here, we can't rebuild the atom according to our parameters.
+        max_expansion = expansion_factors[-1]
         raise RuntimeError(
             f"Could not determine position. "
-            f"Exhausted L ∈ [{L - sig_L:.2f}, {L + sig_L:.2f}] and "
-            f"theta ∈ [{theta - sig_theta:.2f}, {theta + sig_theta:.2f}]"
+            f"Exhausted L ∈ [{L - sig_L * max_expansion:.2f}, {L + sig_L * max_expansion:.2f}] and "
+            f"theta ∈ [{theta - sig_theta * max_expansion:.2f}, {theta + sig_theta * max_expansion:.2f}]"
         )
 
     @staticmethod
