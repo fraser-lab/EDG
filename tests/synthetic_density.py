@@ -396,25 +396,25 @@ class SyntheticDensityGenerator:
 
 def download_structure_factors(pdb_id: str, output_dir: str) -> Optional[str]:
     """Download structure factors for a PDB ID.
-    
+
     Args:
         pdb_id: PDB ID to download
         output_dir: Directory to save the file
-        
+
     Returns:
         Path to downloaded file or None if failed
     """
     url = f"https://files.rcsb.org/download/{pdb_id.lower()}-sf.cif"
     output_path = os.path.join(output_dir, f"{pdb_id.lower()}-sf.cif")
-    
+
     try:
         print(f"Downloading structure factors for {pdb_id}...")
         response = requests.get(url, timeout=30)
         response.raise_for_status()
-        
-        with open(output_path, 'w') as f:
+
+        with open(output_path, "w") as f:
             f.write(response.text)
-        
+
         print(f"✓ Downloaded structure factors: {output_path}")
         return output_path
     except Exception as e:
@@ -422,33 +422,40 @@ def download_structure_factors(pdb_id: str, output_dir: str) -> Optional[str]:
         return None
 
 
-def extract_altloc_conformations(structure: Structure, chain_id: str = None) -> List[Structure]:
+def extract_altloc_conformations(
+    structure: Structure, chain_id: str = None
+) -> List[Structure]:
     """Extract alternative conformations from a structure.
-    
+
     Args:
         structure: Input structure
         chain_id: Specific chain to extract (optional)
-        
+
     Returns:
         List of structures, one for each conformation
     """
+    structure.build_hierarchy()
+    structure = structure.reorder()
+    structure = structure.clean_structure()
+    structure = structure.complete_residues()
     # Filter by chain if specified
     if chain_id:
         structure = structure.extract(structure.select(f"chain {chain_id}"))
-    
+
     # Get unique alternative location IDs
     altlocs = set(structure.altloc)
     altlocs.discard("")  # Remove empty altloc
-    
+
     conformations = []
-    
+
     # Add main conformation (no altloc or altloc A)
     main_selection = structure.select("altloc '' or altloc A")
     if main_selection.sum() > 0:
         main_struct = structure.extract(main_selection)
         main_struct.altloc = ""  # Clear altloc identifiers
+        main_struct.q = 1.0
         conformations.append(main_struct)
-    
+
     # Add alternative conformations
     for altloc in sorted(altlocs):
         if altloc and altloc != "A":
@@ -456,16 +463,22 @@ def extract_altloc_conformations(structure: Structure, chain_id: str = None) -> 
             if alt_selection.sum() > 0:
                 alt_struct = structure.extract(alt_selection)
                 alt_struct.altloc = ""  # Clear altloc identifiers
+                alt_struct.q = 1.0
                 conformations.append(alt_struct)
-    
+
     return conformations
 
 
-def process_single_structure(pdb_id: str, structure_path: str, output_dir: str, 
-                           resolution: float = 2.0, download_sf: bool = False,
-                           chain_id: str = None):
+def process_single_structure(
+    pdb_id: str,
+    structure_path: str,
+    output_dir: str,
+    resolution: float = 2.0,
+    download_sf: bool = False,
+    chain_id: str = None,
+):
     """Process a single structure to generate synthetic density maps.
-    
+
     Args:
         pdb_id: PDB ID for naming
         structure_path: Path to structure file
@@ -475,16 +488,16 @@ def process_single_structure(pdb_id: str, structure_path: str, output_dir: str,
         chain_id: Specific chain to process
     """
     print(f"\nProcessing {pdb_id}...")
-    
+
     # Create output directory
     pdb_output_dir = os.path.join(output_dir, pdb_id.lower())
     os.makedirs(pdb_output_dir, exist_ok=True)
-    
+
     # Download structure factors if requested
     sf_file = None
     if download_sf:
         sf_file = download_structure_factors(pdb_id, pdb_output_dir)
-    
+
     # Load structure
     try:
         structure = Structure.fromfile(structure_path)
@@ -492,15 +505,16 @@ def process_single_structure(pdb_id: str, structure_path: str, output_dir: str,
     except Exception as e:
         print(f"✗ Failed to load structure {structure_path}: {e}")
         return
-    
+
     # Extract alternative conformations
     conformations = extract_altloc_conformations(structure, chain_id)
     print(f"Found {len(conformations)} conformations")
-    
+    ensemble = Ensemble(conformations)
+
     # Generate density maps for each conformation
     for i, conformation in enumerate(conformations):
-        conformation_name = f"conf_{i+1}" if i > 0 else "main"
-        
+        conformation_name = f"conf_{i + 1}" if i > 0 else "main"
+
         try:
             # Setup density generator
             if sf_file and os.path.exists(sf_file):
@@ -508,29 +522,61 @@ def process_single_structure(pdb_id: str, structure_path: str, output_dir: str,
                 density_generator = SyntheticDensityGenerator(conformation, sf_file)
             else:
                 # Use resolution-based approach
-                density_generator = SyntheticDensityGenerator(conformation, resolution=resolution)
-            
+                density_generator = SyntheticDensityGenerator(
+                    conformation, resolution=resolution
+                )
+
             # Generate density map
             density = density_generator.generate_map(shift=True)
-            
+
             # Save density map
-            density_file = os.path.join(pdb_output_dir, f"{pdb_id.lower()}_{conformation_name}_{resolution}A.ccp4")
+            density_file = os.path.join(
+                pdb_output_dir,
+                f"{pdb_id.lower()}_{conformation_name}_{resolution}A.ccp4",
+            )
             density_generator.save_map(density_file, density)
-            
+
             # Save structure
-            structure_file = os.path.join(pdb_output_dir, f"{pdb_id.lower()}_{conformation_name}.cif")
+            structure_file = os.path.join(
+                pdb_output_dir, f"{pdb_id.lower()}_{conformation_name}.cif"
+            )
             conformation.tofile(structure_file)
-            
+
             print(f"✓ Generated {conformation_name}: {density_file}")
-            
+
         except Exception as e:
             print(f"✗ Failed to generate density for {conformation_name}: {e}")
 
+    try:
+        if sf_file and os.path.exists(sf_file):
+            density_generator = SyntheticDensityGenerator(ensemble, sf_file)
+        else:
+            density_generator = SyntheticDensityGenerator(
+                ensemble, resolution=resolution
+            )
 
-def process_batch_from_csv(csv_path: str, output_dir: str, resolution: float = 2.0, 
-                          download_sf: bool = False, altloc_data_dir: str = None):
+        density = density_generator.generate_map(shift=True, occupancy_scale = 1. / len(ensemble))
+        density_file = os.path.join(
+            pdb_output_dir, f"{pdb_id.lower()}_ensemble_{resolution}A.ccp4"
+        )
+
+        density_generator.save_map(density_file, density)
+        ensemble_file = os.path.join(pdb_output_dir, f"{pdb_id.lower()}_ensemble.cif")
+        ensemble.tofile(ensemble_file)
+        print(f"✓ Generated ensemble: {density_file}")
+    except Exception as e:
+        print(f"✗ Failed to generate density for ensemble: {e}")
+
+
+def process_batch_from_csv(
+    csv_path: str,
+    output_dir: str,
+    resolution: float = 2.0,
+    download_sf: bool = False,
+    altloc_data_dir: str = None,
+):
     """Process multiple structures from altloc analysis CSV.
-    
+
     Args:
         csv_path: Path to altloc_summary.csv
         output_dir: Output directory
@@ -539,7 +585,7 @@ def process_batch_from_csv(csv_path: str, output_dir: str, resolution: float = 2
         altloc_data_dir: Directory containing mmCIF files from altloc analysis
     """
     print(f"Processing batch from {csv_path}...")
-    
+
     # Load CSV
     try:
         df = pd.read_csv(csv_path)
@@ -547,12 +593,12 @@ def process_batch_from_csv(csv_path: str, output_dir: str, resolution: float = 2
     except Exception as e:
         print(f"✗ Failed to load CSV: {e}")
         return
-    
+
     # Process each structure
     for _, row in df.iterrows():
-        pdb_code = row['pdb_code']
-        chain_id = row.get('target_chain', None)
-        
+        pdb_code = row["pdb_code"]
+        chain_id = row.get("target_chain", None)
+
         # Look for structure file
         structure_path = None
         if altloc_data_dir:
@@ -565,47 +611,66 @@ def process_batch_from_csv(csv_path: str, output_dir: str, resolution: float = 2
                 if os.path.exists(path):
                     structure_path = path
                     break
-        
+
         if not structure_path:
             print(f"✗ Structure file not found for {pdb_code}")
             continue
-        
+
         # Process structure
-        process_single_structure(pdb_code, structure_path, output_dir, resolution, download_sf, chain_id)
+        process_single_structure(
+            pdb_code, structure_path, output_dir, resolution, download_sf, chain_id
+        )
 
 
 def main():
     """Main function for command line interface."""
-    parser = argparse.ArgumentParser(description="Generate synthetic density maps from protein structures")
-    
+    parser = argparse.ArgumentParser(
+        description="Generate synthetic density maps from protein structures"
+    )
+
     # Input options
     parser.add_argument("--pdb-id", help="PDB ID to process")
     parser.add_argument("--input-structure", help="Path to input structure file")
-    parser.add_argument("--batch-csv", help="Path to altloc_summary.csv for batch processing")
-    parser.add_argument("--altloc-data-dir", default="../tests/resources/altloc_data", 
-                       help="Directory containing mmCIF files from altloc analysis")
-    
+    parser.add_argument(
+        "--batch-csv", help="Path to altloc_summary.csv for batch processing"
+    )
+    parser.add_argument(
+        "--altloc-data-dir",
+        default="tests/resources/altloc_data/mmcif_files",
+        help="Directory containing mmCIF files from altloc analysis",
+    )
+
     # Output options
-    parser.add_argument("--output-dir", default="synthetic_density_output", 
-                       help="Output directory")
-    parser.add_argument("--resolution", type=float, default=2.0, 
-                       help="Map resolution in Angstroms")
-    
+    parser.add_argument(
+        "--output-dir", default="synthetic_density_output", help="Output directory"
+    )
+    parser.add_argument(
+        "--resolution", type=float, default=2.0, help="Map resolution in Angstroms"
+    )
+
     # Processing options
-    parser.add_argument("--download-sf", action="store_true", 
-                       help="Download structure factors for unit cell parameters")
+    parser.add_argument(
+        "--download-sf",
+        action="store_true",
+        help="Download structure factors for unit cell parameters",
+    )
     parser.add_argument("--chain-id", help="Specific chain to process")
-    
+
     args = parser.parse_args()
-    
+
     # Create output directory
     os.makedirs(args.output_dir, exist_ok=True)
-    
+
     if args.batch_csv:
         # Batch processing mode
-        process_batch_from_csv(args.batch_csv, args.output_dir, args.resolution, 
-                             args.download_sf, args.altloc_data_dir)
-    
+        process_batch_from_csv(
+            args.batch_csv,
+            args.output_dir,
+            args.resolution,
+            args.download_sf,
+            args.altloc_data_dir,
+        )
+
     elif args.pdb_id:
         # Single PDB ID mode
         structure_path = args.input_structure
@@ -619,20 +684,32 @@ def main():
                 if os.path.exists(path):
                     structure_path = path
                     break
-        
+
         if not structure_path:
             print(f"✗ Structure file not found for {args.pdb_id}")
             return
-        
-        process_single_structure(args.pdb_id, structure_path, args.output_dir, 
-                               args.resolution, args.download_sf, args.chain_id)
-    
+
+        process_single_structure(
+            args.pdb_id,
+            structure_path,
+            args.output_dir,
+            args.resolution,
+            args.download_sf,
+            args.chain_id,
+        )
+
     elif args.input_structure:
         # Custom structure file mode
         pdb_id = os.path.splitext(os.path.basename(args.input_structure))[0]
-        process_single_structure(pdb_id, args.input_structure, args.output_dir, 
-                               args.resolution, args.download_sf, args.chain_id)
-    
+        process_single_structure(
+            pdb_id,
+            args.input_structure,
+            args.output_dir,
+            args.resolution,
+            args.download_sf,
+            args.chain_id,
+        )
+
     else:
         print("Please specify --pdb-id, --input-structure, or --batch-csv")
         parser.print_help()
@@ -640,7 +717,7 @@ def main():
 
 if __name__ == "__main__":
     import sys
-    
+
     # Check if command line arguments are provided
     if len(sys.argv) > 1:
         main()

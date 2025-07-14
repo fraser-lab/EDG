@@ -1210,7 +1210,7 @@ class mmCIFFile(list):
             "b": float("nan"),
             "e": "",
             "charge": 0,
-            # "model": 1,
+            "model": 1,
         }
         # Extract missing atoms
         unobs_atoms = block.get_table("pdbx_unobs_or_zero_occ_atoms")
@@ -1237,10 +1237,10 @@ class mmCIFFile(list):
                             row, f"{auth_or_label}_alt_id"
                         )
                         or "",
-                        # "model": self._try_int(
-                        #     self._get_value_from_row(row, "PDB_model_num")
-                        # )
-                        # or 1,
+                        "model": self._try_int(
+                            self._get_value_from_row(row, "PDB_model_num")
+                        )
+                        or 1,
                         # 'occupancy_flag': self._get_value_from_row(row, 'occupancy_flag') or 0 # NOTE: doesn't seem to be used for anything?
                     }
                 )
@@ -1285,10 +1285,10 @@ class mmCIFFile(list):
                             self._get_value_from_row(row, f"{auth_or_label}_seq_id")
                         ),
                         "icode": self._get_value_from_row(row, "PDB_ins_code") or "",
-                        # "model": self._try_int(
-                        #     self._get_value_from_row(row, "PDB_model_num")
-                        # )
-                        # or 1,
+                        "model": self._try_int(
+                            self._get_value_from_row(row, "PDB_model_num")
+                        )
+                        or 1,
                         # "occupancy_flag": self._get_value_from_row(row, "occupancy_flag")
                         # or 0, # NOTE: doesn't seem to be used for anything?
                     }
