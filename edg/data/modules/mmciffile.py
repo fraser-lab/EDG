@@ -972,6 +972,8 @@ class mmCIFFile(list):
                     value = self._try_int(value)
                     if attr == "model" and value is None:
                         value = 1  # Default to model 1 if not specified
+                    elif attr == "resi" and value is None:
+                        value = 1  # Default to residue 1 for non-polymer chains
                 elif attr == "charge":
                     value = self._try_int(value)
                     if value is None:

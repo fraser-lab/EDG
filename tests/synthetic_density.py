@@ -434,8 +434,6 @@ def extract_altloc_conformations(
     Returns:
         List of structures, one for each conformation
     """
-    structure.build_hierarchy()
-    structure = structure.reorder()
     structure = structure.clean_structure()
     structure = structure.complete_residues()
     # Filter by chain if specified

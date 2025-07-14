@@ -4,6 +4,7 @@ import numpy as np
 import copy
 import itertools
 import os
+import logging
 
 from .modules.base_structure import _BaseStructure, PDBFile
 from .modules.ligand import _Ligand
@@ -12,6 +13,9 @@ from .modules.rotamers import ROTAMERS
 from .modules.math import Rz
 from ..utils.normalize_to_precision import normalize_to_precision
 from .modules.mmciffile import mmCIFFile
+
+
+logger = logging.getLogger(__name__)
 
 
 class Structure(_BaseStructure):
@@ -902,6 +906,10 @@ class _Chain(_BaseStructure):
 
     def build_hierarchy(self):
         resi = self.resi
+        # Handle any remaining None values in resi as defensive measure
+        if np.any(resi == None):
+            logger.warning(f"Found None residue indices in chain {self.chain[0]}, replacing with 1")
+            resi = np.where(resi == None, 1, resi)
         # order = np.argsort(resi)
         # resi = resi[order]
         # icode = self.icode[order]
