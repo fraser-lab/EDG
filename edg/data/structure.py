@@ -289,7 +289,7 @@ class Structure(_BaseStructure):
         ordering = []
         for chain in self.chains:
             for rg in chain.residue_groups:
-                if rg.resn[0] in ROTAMERS:
+                if len(rg.resn) > 0 and rg.resn[0] in ROTAMERS:
                     # There are some perverted cases apparently in the PDB that
                     # have more than 1 resname in a specific residue 'slot'
                     if len(set(rg.resn)) > 1:

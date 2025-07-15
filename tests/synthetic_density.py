@@ -8,7 +8,10 @@ experimental parameters.
 import os
 import argparse
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 import tempfile
+import time
 from pathlib import Path
 from typing import Optional, Union, Tuple, List, NamedTuple
 
@@ -18,12 +21,10 @@ import pandas as pd
 
 from edg.data import Structure
 from edg.data.structure import Ensemble
-from edg.qfit.volume import XMap, Resolution, GetSpaceGroup, GridParameters
-from edg.qfit.unitcell import UnitCell
+from edg.qfit.volume import XMap, Resolution, GridParameters
 from edg.edg.modules.density.density import (
     DifferentiableTransformer,
     XMap_torch,
-    DensityParameters,
 )
 from edg.data.io import structure_to_density_input
 from edg.data.sf import (
@@ -395,7 +396,7 @@ class SyntheticDensityGenerator:
 
 
 def download_structure_factors(pdb_id: str, output_dir: str) -> Optional[str]:
-    """Download structure factors for a PDB ID.
+    """Download structure factors for a PDB ID from PDB-REDO.
 
     Args:
         pdb_id: PDB ID to download
@@ -404,22 +405,44 @@ def download_structure_factors(pdb_id: str, output_dir: str) -> Optional[str]:
     Returns:
         Path to downloaded file or None if failed
     """
-    url = f"https://files.rcsb.org/download/{pdb_id.lower()}-sf.cif"
-    output_path = os.path.join(output_dir, f"{pdb_id.lower()}-sf.cif")
+    url = f"https://pdb-redo.eu/db/{pdb_id.lower()}/{pdb_id.lower()}_final.mtz"
+    output_path = os.path.join(output_dir, f"{pdb_id.lower()}_final.mtz")
+
+    # Check if file already exists
+    if os.path.exists(output_path):
+        print(f"✓ Structure factors already exist: {output_path}")
+        return output_path
+
+    # Setup retry strategy
+    retry_strategy = Retry(
+        total=3,
+        status_forcelist=[429, 500, 502, 503, 504],
+        backoff_factor=2,
+        allowed_methods=["HEAD", "GET", "OPTIONS"]
+    )
+    
+    # Create session with retry strategy
+    session = requests.Session()
+    adapter = HTTPAdapter(max_retries=retry_strategy)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
 
     try:
-        print(f"Downloading structure factors for {pdb_id}...")
-        response = requests.get(url, timeout=30)
+        print(f"Downloading PDB-REDO structure factors for {pdb_id}...")
+        response = session.get(url, timeout=30)
         response.raise_for_status()
 
-        with open(output_path, "w") as f:
-            f.write(response.text)
+        with open(output_path, "wb") as f:
+            f.write(response.content)
 
-        print(f"✓ Downloaded structure factors: {output_path}")
+        print(f"✓ Downloaded PDB-REDO structure factors: {output_path}")
+        time.sleep(1)  # Rate limiting
         return output_path
     except Exception as e:
-        print(f"✗ Failed to download structure factors for {pdb_id}: {e}")
+        print(f"✗ Failed to download PDB-REDO structure factors for {pdb_id}: {e}")
         return None
+    finally:
+        session.close()
 
 
 def extract_altloc_conformations(
@@ -518,14 +541,16 @@ def process_single_structure(
             if sf_file and os.path.exists(sf_file):
                 # Use structure factors for unit cell
                 density_generator = SyntheticDensityGenerator(conformation, sf_file)
+                shift = False  # Don't shift if using real unit cell
             else:
                 # Use resolution-based approach
                 density_generator = SyntheticDensityGenerator(
                     conformation, resolution=resolution
                 )
+                shift = True  # Shift to center in unit cell
 
             # Generate density map
-            density = density_generator.generate_map(shift=True)
+            density = density_generator.generate_map(shift=shift)
 
             # Save density map
             density_file = os.path.join(
@@ -548,12 +573,14 @@ def process_single_structure(
     try:
         if sf_file and os.path.exists(sf_file):
             density_generator = SyntheticDensityGenerator(ensemble, sf_file)
+            shift = False  # Don't shift if using real unit cell
         else:
             density_generator = SyntheticDensityGenerator(
                 ensemble, resolution=resolution
             )
+            shift = True  # Shift to center in unit cell
 
-        density = density_generator.generate_map(shift=True, occupancy_scale = 1. / len(ensemble))
+        density = density_generator.generate_map(shift=shift, occupancy_scale = 1. / len(ensemble))
         density_file = os.path.join(
             pdb_output_dir, f"{pdb_id.lower()}_ensemble_{resolution}A.ccp4"
         )
