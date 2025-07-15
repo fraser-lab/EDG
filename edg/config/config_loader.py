@@ -10,7 +10,7 @@ from typing import Dict, Any, Union, Optional, List
 import yaml
 from dataclasses import fields, is_dataclass, asdict
 
-from .config_schema import ExperimentConfig
+from .config_schema import ExperimentConfig, BatchExperimentConfig
 from .schedules import ParameterSchedule, parse_schedule_config
 
 
@@ -340,3 +340,170 @@ def create_experiment_config(config_data: Dict[str, Any]) -> ExperimentConfig:
     main_config_data.update(nested_configs)
 
     return ExperimentConfig(**main_config_data)
+
+
+def load_batch_config(
+    config_path: Union[str, Path], overrides: Optional[Dict[str, Any]] = None
+) -> BatchExperimentConfig:
+    """Load batch experiment configuration from YAML file with optional overrides.
+
+    Parameters
+    ----------
+    config_path : Union[str, Path]
+        Path to YAML configuration file
+    overrides : Optional[Dict[str, Any]], optional
+        Dictionary of parameter overrides from command line, by default None
+
+    Returns
+    -------
+    BatchExperimentConfig
+        Loaded and validated batch configuration
+
+    Raises
+    ------
+    FileNotFoundError
+        If config file doesn't exist
+    ValueError
+        If configuration is invalid
+    """
+    config_path = Path(config_path)
+    if not config_path.exists():
+        raise FileNotFoundError(f"Configuration file not found: {config_path}")
+
+    # Load YAML file
+    with open(config_path, "r") as f:
+        config_data = yaml.safe_load(f)
+
+    if config_data is None:
+        raise ValueError(f"Empty or invalid YAML file: {config_path}")
+
+    # Apply command-line overrides (but don't merge into shared_config yet)
+    if overrides:
+        # For batch configs, we need to handle overrides differently
+        # Store them to apply to individual experiments later
+        pass
+
+    # Parse schedule configurations
+    config_data = parse_schedule_configs(config_data)
+
+    # Create BatchExperimentConfig object with proper nested dataclass construction
+    try:
+        config = create_batch_experiment_config(config_data)
+    except TypeError as e:
+        raise ValueError(f"Invalid batch configuration: {e}")
+    
+    # Apply overrides to shared_config if they exist
+    if overrides and config.shared_config:
+        # Apply overrides to the shared config
+        shared_config_dict = asdict(config.shared_config)
+        shared_config_dict = merge_overrides(shared_config_dict, overrides)
+        shared_config_dict = parse_schedule_configs(shared_config_dict)
+        config.shared_config = create_experiment_config(shared_config_dict)
+
+    # Validate configuration
+    errors = config.validate()
+    if errors:
+        error_msg = "Batch configuration validation errors:\n" + "\n".join(
+            f"  - {err}" for err in errors
+        )
+        raise ValueError(error_msg)
+
+    return config
+
+
+def create_batch_experiment_config(config_data: Dict[str, Any]) -> BatchExperimentConfig:
+    """Create BatchExperimentConfig with proper nested dataclass construction.
+
+    Parameters
+    ----------
+    config_data : Dict[str, Any]
+        Configuration data dictionary
+
+    Returns
+    -------
+    BatchExperimentConfig
+        Constructed batch configuration object
+    """
+    # Handle shared_config if present
+    shared_config = None
+    if "shared_config" in config_data:
+        shared_config = create_experiment_config(config_data["shared_config"])
+
+    # Handle explicit experiments list if present
+    experiments = []
+    if "experiments" in config_data:
+        for exp_data in config_data["experiments"]:
+            experiments.append(create_experiment_config(exp_data))
+
+    # Get valid fields for BatchExperimentConfig
+    from .config_schema import BatchExperimentConfig
+    valid_fields = set(BatchExperimentConfig.__dataclass_fields__.keys())
+    
+    # Create main batch config with only valid fields
+    batch_config_data = {k: v for k, v in config_data.items() 
+                        if k in valid_fields and k not in ["shared_config", "experiments"]}
+    batch_config_data["shared_config"] = shared_config
+    batch_config_data["experiments"] = experiments
+
+    return BatchExperimentConfig(**batch_config_data)
+
+
+def detect_config_type(config_path: Union[str, Path]) -> str:
+    """Detect whether a config file is for single or batch experiments.
+
+    Parameters
+    ----------
+    config_path : Union[str, Path]
+        Path to YAML configuration file
+
+    Returns
+    -------
+    str
+        "single" for single experiment configs, "batch" for batch configs
+
+    Raises
+    ------
+    FileNotFoundError
+        If config file doesn't exist
+    ValueError
+        If config file is invalid
+    """
+    config_path = Path(config_path)
+    if not config_path.exists():
+        raise FileNotFoundError(f"Configuration file not found: {config_path}")
+
+    # Load YAML file
+    with open(config_path, "r") as f:
+        config_data = yaml.safe_load(f)
+
+    if config_data is None:
+        raise ValueError(f"Empty or invalid YAML file: {config_path}")
+
+    # Check for batch-specific fields
+    batch_indicators = ["protein_directory", "experiments", "shared_config", "output_base_dir"]
+    
+    if any(key in config_data for key in batch_indicators):
+        return "batch"
+    else:
+        return "single"
+
+
+def save_batch_config(config: BatchExperimentConfig, output_path: Union[str, Path]) -> None:
+    """Save batch configuration to YAML file.
+
+    Parameters
+    ----------
+    config : BatchExperimentConfig
+        Batch configuration to save
+    output_path : Union[str, Path]
+        Output file path
+    """
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Convert to dictionary and handle special types
+    config_dict = asdict(config)
+    config_dict = convert_schedules_to_dict(config_dict)
+
+    with open(output_path, "w") as f:
+        yaml.dump(config_dict, f, default_flow_style=False, indent=2)

@@ -182,16 +182,17 @@ class ExperimentConfig:
         errors = []
 
         # Check required files exist
-        if not Path(self.structure.structure_path).exists():
+        if self.structure.structure_path is not None and not Path(self.structure.structure_path).exists():
             errors.append(f"Structure file not found: {self.structure.structure_path}")
 
-        if not Path(self.density.map_path).exists():
+        if self.density.map_path is not None and not Path(self.density.map_path).exists():
             errors.append(f"Density map file not found: {self.density.map_path}")
 
         # Check density resolution for CCP4/MRC files
-        map_ext = Path(self.density.map_path).suffix.lower()
-        if map_ext in [".ccp4", ".mrc", ".map"] and self.density.resolution is None:
-            errors.append(f"Resolution must be specified for {map_ext} files")
+        if self.density.map_path is not None:
+            map_ext = Path(self.density.map_path).suffix.lower()
+            if map_ext in [".ccp4", ".mrc", ".map"] and self.density.resolution is None:
+                errors.append(f"Resolution must be specified for {map_ext} files")
 
         # Check model version
         if self.model.version not in ["boltz1", "boltz2"]:
@@ -212,3 +213,141 @@ class ExperimentConfig:
             errors.append("Number of particles must be positive")
 
         return errors
+
+
+@dataclass
+class BatchExperimentConfig:
+    """Configuration for running multiple experiments in batch."""
+    
+    # Required configurations
+    name: str
+    
+    # Batch-specific configuration
+    experiments: List[ExperimentConfig] = field(default_factory=list)
+    
+    # Optional: Auto-discovery configuration
+    protein_directory: Optional[str] = None  # Directory containing protein subdirectories
+    structure_pattern: str = "{protein_id}_main.cif"  # Pattern for structure files
+    density_pattern: str = "{protein_id}_main_2.0A.ccp4"  # Pattern for density files
+    
+    # Shared configuration that applies to all experiments
+    shared_config: Optional[ExperimentConfig] = None
+    
+    # Batch execution configuration
+    output_base_dir: str = "results/batch"
+    input_base_dir: str = "input/batch"
+    continue_on_error: bool = True
+    max_parallel: int = 1  # Future: support for parallel execution
+    
+    def validate(self) -> List[str]:
+        """Validate the batch configuration and return any errors.
+        
+        Returns
+        -------
+        List[str]
+            List of validation error messages. Empty if valid.
+        """
+        errors = []
+        
+        # Check that we have experiments or auto-discovery config
+        if not self.experiments and not self.protein_directory:
+            errors.append("Must specify either 'experiments' list or 'protein_directory' for auto-discovery")
+        
+        # Validate protein directory if specified
+        if self.protein_directory:
+            if not Path(self.protein_directory).exists():
+                errors.append(f"Protein directory not found: {self.protein_directory}")
+            elif not Path(self.protein_directory).is_dir():
+                errors.append(f"Protein directory is not a directory: {self.protein_directory}")
+        
+        # Validate shared config if provided (skip file existence checks for placeholders and null values)
+        if self.shared_config:
+            shared_errors = self.shared_config.validate()
+            # Filter out file existence errors for placeholder paths AND null values
+            filtered_shared_errors = [
+                error for error in shared_errors 
+                if not (("not found" in error) and 
+                        ("placeholder" in error or "None" in error))
+            ]
+            if filtered_shared_errors:
+                errors.extend([f"Shared config error: {error}" for error in filtered_shared_errors])
+        
+        # Validate individual experiments
+        for i, experiment in enumerate(self.experiments):
+            exp_errors = experiment.validate()
+            if exp_errors:
+                errors.extend([f"Experiment {i} ({experiment.name}): {error}" for error in exp_errors])
+        
+        # Check parallel execution setting
+        if self.max_parallel < 1:
+            errors.append("max_parallel must be at least 1")
+        
+        return errors
+    
+    def get_experiment_configs(self) -> List[ExperimentConfig]:
+        """Get all experiment configurations, including auto-discovered ones.
+        
+        Returns
+        -------
+        List[ExperimentConfig]
+            List of all experiment configurations ready for execution
+        """
+        configs = []
+        
+        # Add explicitly specified experiments
+        configs.extend(self.experiments)
+        
+        # Add auto-discovered experiments
+        if self.protein_directory:
+            configs.extend(self._discover_protein_experiments())
+        
+        return configs
+    
+    def _discover_protein_experiments(self) -> List[ExperimentConfig]:
+        """Discover protein experiments from directory structure.
+        
+        Returns
+        -------
+        List[ExperimentConfig]
+            List of auto-discovered experiment configurations
+        """
+        from pathlib import Path
+        import copy
+        
+        experiments = []
+        protein_dir = Path(self.protein_directory)
+        
+        # Find all protein subdirectories
+        for protein_subdir in protein_dir.iterdir():
+            if not protein_subdir.is_dir():
+                continue
+                
+            protein_id = protein_subdir.name
+            
+            # Look for structure and density files
+            structure_file = protein_subdir / self.structure_pattern.format(protein_id=protein_id)
+            density_file = protein_subdir / self.density_pattern.format(protein_id=protein_id)
+            
+            if structure_file.exists() and density_file.exists():
+                # Create experiment config
+                if self.shared_config:
+                    # Use shared config as base
+                    exp_config = copy.deepcopy(self.shared_config)
+                    exp_config.name = protein_id
+                    exp_config.structure.structure_path = str(structure_file)
+                    exp_config.density.map_path = str(density_file)
+                    exp_config.output_dir = str(Path(self.output_base_dir) / protein_id)
+                    exp_config.input_data_dir = str(Path(self.input_base_dir) / protein_id)
+                else:
+                    # Create minimal config
+                    exp_config = ExperimentConfig(
+                        name=protein_id,
+                        structure=StructureConfig(structure_path=str(structure_file)),
+                        density=DensityConfig(map_path=str(density_file), resolution=2.0),
+                        output_dir=str(Path(self.output_base_dir) / protein_id),
+                        input_data_dir=str(Path(self.input_base_dir) / protein_id)
+                    )
+                
+                experiments.append(exp_config)
+        
+        return experiments

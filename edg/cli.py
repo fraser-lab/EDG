@@ -15,8 +15,17 @@ from typing import Dict, Any, Optional
 import traceback
 import yaml
 
-from edg.config import load_config, save_config, ExperimentConfig
+from edg.config import (
+    load_config,
+    load_batch_config,
+    detect_config_type,
+    save_config,
+    save_batch_config,
+    ExperimentConfig,
+    BatchExperimentConfig,
+)
 from edg.experiment_runner import run_experiment
+from edg.batch_runner import run_batch_experiment
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -89,6 +98,12 @@ Common parameters:
 
     parser.add_argument(
         "--quiet", "-q", action="store_true", help="Suppress non-essential output"
+    )
+
+    parser.add_argument(
+        "--batch", 
+        action="store_true", 
+        help="Enable batch processing mode (auto-detected if not specified)"
     )
 
     # Common parameter overrides
@@ -372,32 +387,76 @@ def main() -> int:
         # Parse command-line overrides
         overrides = parse_overrides(args)
 
-        # Load configuration
-        logger.info(f"Loading configuration from {args.config}")
-        config = load_config(args.config, overrides)
+        # Auto-detect or use explicit batch mode
+        if args.batch:
+            config_type = "batch"
+        else:
+            config_type = detect_config_type(args.config)
 
-        logger.info(f"Loaded experiment: {config.name}")
-        if overrides:
-            logger.info(f"Applied overrides: {list(overrides.keys())}")
+        # Load configuration based on type
+        if config_type == "batch":
+            logger.info(f"Loading batch configuration from {args.config}")
+            config = load_batch_config(args.config, overrides)
+            
+            logger.info(f"Loaded batch experiment: {config.name}")
+            experiment_configs = config.get_experiment_configs()
+            logger.info(f"Found {len(experiment_configs)} experiments in batch")
+            
+            if overrides:
+                logger.info(f"Applied overrides: {list(overrides.keys())}")
 
-        # Save final configuration if requested
-        if args.save_config:
-            logger.info(f"Saving final configuration to {args.save_config}")
-            save_config(config, args.save_config)
+            # Save final configuration if requested
+            if args.save_config:
+                logger.info(f"Saving final batch configuration to {args.save_config}")
+                save_batch_config(config, args.save_config)
 
-        # Validation only mode
-        if args.validate_only:
-            logger.info("Configuration validation passed!")
-            print("✓ Configuration is valid")
-            return 0
+            # Validation only mode
+            if args.validate_only:
+                logger.info("Batch configuration validation passed!")
+                print("✓ Batch configuration is valid")
+                print(f"✓ Found {len(experiment_configs)} experiments")
+                return 0
 
-        # Run experiment
-        logger.info("Starting experiment...")
-        results = run_experiment(config)
+            # Run batch experiment
+            logger.info("Starting batch experiment...")
+            results = run_batch_experiment(config)
 
-        logger.info("Experiment completed successfully!")
-        print(f"✓ Experiment '{config.name}' completed")
-        print(f"✓ Results saved to: {config.output_dir}")
+            logger.info("Batch experiment completed!")
+            print(f"✓ Batch '{config.name}' completed")
+            print(f"✓ {results['completed_experiments']}/{results['total_experiments']} experiments successful")
+            print(f"✓ Results saved to: {config.output_base_dir}")
+            
+            if results['failed_experiments'] > 0:
+                print(f"⚠ {results['failed_experiments']} experiments failed")
+                return 1
+
+        else:
+            # Single experiment mode
+            logger.info(f"Loading configuration from {args.config}")
+            config = load_config(args.config, overrides)
+
+            logger.info(f"Loaded experiment: {config.name}")
+            if overrides:
+                logger.info(f"Applied overrides: {list(overrides.keys())}")
+
+            # Save final configuration if requested
+            if args.save_config:
+                logger.info(f"Saving final configuration to {args.save_config}")
+                save_config(config, args.save_config)
+
+            # Validation only mode
+            if args.validate_only:
+                logger.info("Configuration validation passed!")
+                print("✓ Configuration is valid")
+                return 0
+
+            # Run experiment
+            logger.info("Starting experiment...")
+            results = run_experiment(config)
+
+            logger.info("Experiment completed successfully!")
+            print(f"✓ Experiment '{config.name}' completed")
+            print(f"✓ Results saved to: {config.output_dir}")
 
         return 0
 

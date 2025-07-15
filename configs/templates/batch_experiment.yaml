@@ -1,0 +1,115 @@
+# Batch EDG experiment template
+# This template shows how to run multiple experiments in batch
+
+name: "synthetic_density_batch"
+
+# Auto-discovery configuration
+protein_directory: "synthetic_density_output"
+structure_pattern: "{protein_id}_main.cif"
+density_pattern: "{protein_id}_main_2.0A.ccp4"
+
+# Batch execution configuration
+output_base_dir: "results/synthetic_density_batch"
+input_base_dir: "input/synthetic_density_batch"
+continue_on_error: true
+max_parallel: 1
+
+# Shared configuration applied to all experiments
+shared_config:
+  name: "template"  # Will be overridden with protein_id
+  
+  # Structure configuration (paths will be auto-set)
+  structure:
+    structure_path: "placeholder"  # Auto-set from protein_directory
+    clean_structure: true
+    keep_type: "protein"
+    remove_alternative_conformations: true
+    complete_residues: true
+  
+  # Density configuration (paths will be auto-set)
+  density:
+    map_path: "placeholder"  # Auto-set from protein_directory
+    resolution: 2.0
+    em_mode: false
+  
+  # Output configuration (will be auto-set)
+  output_dir: "placeholder"  # Auto-set to output_base_dir/{protein_id}
+  input_data_dir: "placeholder"  # Auto-set to input_base_dir/{protein_id}
+  
+  # Model configuration
+  model:
+    version: "boltz2"
+  
+  # Diffusion parameters
+  diffusion:
+    num_steps: 100  # Reduced for faster batch processing
+    step_scale: null
+    noise_scale: 1.0
+    gamma_0: 1.0
+    gamma_min: 0.01
+  
+  # Steering configuration
+  steering:
+    enabled: true
+    guidance_update: true
+    num_particles: 3
+    fk_resampling_interval: 1
+    fk_lambda: 0.5
+    num_gd_steps: 10
+  
+  # Adaptive solver configuration
+  adaptive_solver:
+    type: "adam"
+    learning_rate: 0.02
+    max_iterations: 10
+    convergence_threshold: 0.0001
+    gradient_clip_norm: 1.0
+    per_potential_scaling: true
+    line_search: false
+  
+  # Density guidance configuration
+  density_guidance:
+    base_weight: 0.4
+    guidance_interval: 1
+    resampling_weight: 0.1
+    scale_guidance_to_denoising: true
+    max_guidance_denoising_ratio: 0.2
+  
+  # Substructure conditioning (disabled by default)
+  substructure:
+    enabled: false
+    selection: null
+    guidance_weight: 0.05
+    resampling_weight: 0.0
+    buffer: 0.5
+  
+  # Optimization configuration
+  optimization:
+    ensemble_size: 1
+    partial_diffusion: false
+    save_interval: 10
+    save_maps: true
+    save_scores: true
+  
+  # Potentials configuration
+  potentials:
+    use_default_potentials: true
+
+# Optional: Explicit experiments list (alternative to auto-discovery)
+# experiments:
+#   - name: "8osw"
+#     structure:
+#       structure_path: "synthetic_density_output/8osw/8osw_main.cif"
+#     density:
+#       map_path: "synthetic_density_output/8osw/8osw_main_2.0A.ccp4"
+#       resolution: 2.0
+#     output_dir: "results/synthetic_density_batch/8osw"
+#     input_data_dir: "input/synthetic_density_batch/8osw"
+#   - name: "8owz"
+#     structure:
+#       structure_path: "synthetic_density_output/8owz/8owz_main.cif"
+#     density:
+#       map_path: "synthetic_density_output/8owz/8owz_main_2.0A.ccp4"
+#       resolution: 2.0
+#     output_dir: "results/synthetic_density_batch/8owz"
+#     input_data_dir: "input/synthetic_density_batch/8owz"

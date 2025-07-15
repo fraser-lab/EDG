@@ -6,6 +6,7 @@ and validation for EDG experiments.
 
 from .config_schema import (
     ExperimentConfig,
+    BatchExperimentConfig,
     DiffusionConfig,
     DensityConfig,
     DensityGuidanceConfig,
@@ -13,7 +14,14 @@ from .config_schema import (
     SteeringConfig,
     OptimizationConfig,
 )
-from .config_loader import load_config, merge_overrides, save_config
+from .config_loader import (
+    load_config,
+    load_batch_config,
+    detect_config_type,
+    merge_overrides,
+    save_config,
+    save_batch_config,
+)
 from .schedules import (
     ParameterSchedule,
     PiecewiseScheduleConfig,
@@ -23,6 +31,7 @@ from .schedules import (
 
 __all__ = [
     "ExperimentConfig",
+    "BatchExperimentConfig",
     "DiffusionConfig",
     "DensityConfig",
     "DensityGuidanceConfig",
@@ -30,8 +39,11 @@ __all__ = [
     "SteeringConfig",
     "OptimizationConfig",
     "load_config",
+    "load_batch_config",
+    "detect_config_type",
     "merge_overrides",
     "save_config",
+    "save_batch_config",
     "ParameterSchedule",
     "PiecewiseScheduleConfig",
     "ExponentialInterpolationConfig",
