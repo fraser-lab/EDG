@@ -12,7 +12,6 @@ import os
 import logging
 from pathlib import Path
 from typing import Dict, Any, Tuple, List
-import copy
 import numpy as np
 import matplotlib.pyplot as plt
 import yaml
@@ -23,21 +22,16 @@ from edg.config.optimizer_factory import (
     process_structure_from_config,
     prepare_optimization_kwargs_from_config,
 )
-from edg.edg.optimizer import DensityGuidedDiffusion
 from edg.data.structure import Structure, Ensemble
-from edg.utils.utility import try_gpu
 from edg.utils.shared_input import (
     validate_shared_input_compatibility,
-    check_shared_processed_data,
     copy_boltz_input_to_shared,
-    create_config_with_shared_input,
 )
 
 # Type checking imports
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from edg.edg.optimizer import DensityGuidedDiffusion
     from edg.data.structure import Structure
 
 
@@ -63,6 +57,9 @@ def validate_boltz_yaml_compatibility(
     bool
         True if compatible, False otherwise
     """
+    # Mark unused parameters to avoid linting warnings
+    _ = structure_path
+    _ = model_config
     try:
         # First, do basic YAML format validation
         with open(boltz_yaml_path, "r") as f:
@@ -345,7 +342,7 @@ def run_experiment_main_logic(config: ExperimentConfig, input_data_dir: Path, ru
             ]  # Take first model
 
         logger.info("Processing input structure...")
-        optimizer = process_structure_from_config(optimizer, config)
+        optimizer.structure = process_structure_from_config(optimizer.structure, config)
 
     else:
         # No Boltz YAML provided - warn user and fallback to sequence extraction
@@ -357,27 +354,35 @@ def run_experiment_main_logic(config: ExperimentConfig, input_data_dir: Path, ru
         )
         logger.warning("Consider providing a Boltz YAML file for better compatibility.")
 
-        # Create temporary optimizer with minimal YAML to get structure
-        temp_yaml_path = create_temp_yaml(config, input_data_dir)
-        temp_optimizer = create_optimizer_from_config(config, temp_yaml_path)
+        # Load structure directly (without Boltz processing)
+        logger.info("Loading structure directly...")
+        extension = os.path.splitext(config.structure.structure_path)[1]
+        if extension not in (".cif", ".pdb", ".mmcif"):
+            raise ValueError("Structure file must be in mmCIF or PDB format.")
+        
+        if extension in (".pdb",):
+            structure = Structure.fromfile(config.structure.structure_path)
+        else:
+            structure = Ensemble.fromfile(config.structure.structure_path)[0]  # Take first model
 
-        # Process structure to extract sequence information
-        temp_optimizer = process_structure_from_config(temp_optimizer, config)
+        # Process structure according to configuration
+        logger.info("Processing structure according to configuration...")
+        structure = process_structure_from_config(structure, config)
+
+        # Extract sequences and ligands from processed structure
+        logger.info("Extracting sequences and ligands from structure...")
+        sequences, ligands = extract_sequences_and_ligands_from_structure(structure, config)
 
         # Create proper Boltz YAML with sequences
-        input_yaml_path = create_boltz_yaml_with_sequences(
-            config, input_data_dir, temp_optimizer
+        input_yaml_path = create_boltz_yaml_with_sequences_direct(
+            config, input_data_dir, sequences, ligands
         )
 
-        # Clean up temporary optimizer
-        del temp_optimizer
-
-        # Create final optimizer with extracted sequences
+        # Create optimizer with proper Boltz YAML
         optimizer = create_optimizer_from_config(config, input_yaml_path)
 
-        # Process the structure
-        logger.info("Processing input structure...")
-        optimizer = process_structure_from_config(optimizer, config)
+        # Set the processed structure on the optimizer
+        optimizer.structure = structure
 
     # Prepare optimization arguments
     optimize_kwargs = prepare_optimization_kwargs_from_config(
@@ -396,41 +401,12 @@ def run_experiment_main_logic(config: ExperimentConfig, input_data_dir: Path, ru
     return results
 
 
-def create_temp_yaml(config: ExperimentConfig, input_data_dir: Path) -> Path:
-    """Create temporary minimal YAML file for initial structure loading.
-
-    Parameters
-    ----------
-    config : ExperimentConfig
-        Experiment configuration
-    input_data_dir : Path
-        Directory for input data files
-
-    Returns
-    -------
-    Path
-        Path to created temporary YAML file
-    """
-    yaml_path = input_data_dir / f"{config.name}_temp.yaml"
-
-    # Create minimal YAML content for structure loading
-    yaml_content = f"""# Temporary input data configuration for {config.name}
-experiment_name: {config.name}
-structure_path: {config.structure.structure_path}
-density_path: {config.density.map_path}
-"""
-
-    with open(yaml_path, "w") as f:
-        f.write(yaml_content)
-
-    logger.debug(f"Created temporary YAML at {yaml_path}")
-    return yaml_path
 
 
-def create_boltz_yaml_with_sequences(
-    config: ExperimentConfig, input_data_dir: Path, optimizer: "DensityGuidedDiffusion"
+def create_boltz_yaml_with_sequences_direct(
+    config: ExperimentConfig, input_data_dir: Path, sequences: List[Dict[str, str]], ligands: List[Dict[str, str]]
 ) -> Path:
-    """Create proper Boltz YAML file with sequences extracted from structure.
+    """Create proper Boltz YAML file with sequences and ligands.
 
     Parameters
     ----------
@@ -438,8 +414,10 @@ def create_boltz_yaml_with_sequences(
         Experiment configuration
     input_data_dir : Path
         Directory for input data files
-    optimizer : DensityGuidedDiffusion
-        Optimizer with processed structure
+    sequences : List[Dict[str, str]]
+        List of protein sequences with 'id' and 'sequence' keys
+    ligands : List[Dict[str, str]]
+        List of ligands with 'id' and 'ccd' keys
 
     Returns
     -------
@@ -448,96 +426,128 @@ def create_boltz_yaml_with_sequences(
     """
     yaml_path = input_data_dir / f"{config.name}.yaml"
 
-    # Extract sequences from processed structure
-    sequences = extract_sequences_from_structure(optimizer.structure)
-
     # Create proper Boltz YAML format
     yaml_content = "sequences:\n"
+    
+    # Add protein sequences
     for seq_info in sequences:
         yaml_content += "  - protein:\n"
         yaml_content += f"      id: {seq_info['id']}\n"
         yaml_content += f"      sequence: {seq_info['sequence']}\n"
+    
+    # Add ligand sequences (if configuration allows)
+    for ligand_info in ligands:
+        yaml_content += "  - ligand:\n"
+        yaml_content += f"      id: {ligand_info['id']}\n"
+        yaml_content += f"      ccd: {ligand_info['ccd']}\n"
 
     with open(yaml_path, "w") as f:
         f.write(yaml_content)
 
-    logger.info(f"Created Boltz YAML with {len(sequences)} sequences at {yaml_path}")
+    logger.info(f"Created Boltz YAML with {len(sequences)} protein sequences and {len(ligands)} ligands at {yaml_path}")
     return yaml_path
 
 
-def extract_sequences_from_structure(structure: "Structure") -> List[Dict[str, str]]:
-    """Extract protein sequences from structure for Boltz YAML format.
+def extract_sequences_and_ligands_from_structure(structure: "Structure", config: ExperimentConfig) -> Tuple[List[Dict[str, str]], List[Dict[str, str]]]:
+    """Extract protein sequences and ligands from structure for Boltz YAML format.
+    
+    Only includes residues that can be completed by Structure.complete_residues()
+    and conditionally includes ligands based on structure cleaning configuration.
 
     Parameters
     ----------
     structure : Structure
         Processed structure object
+    config : ExperimentConfig
+        Experiment configuration for structure cleaning settings
 
     Returns
     -------
-    List[Dict[str, str]]
-        List of sequence dictionaries with 'id' and 'sequence' keys
+    Tuple[List[Dict[str, str]], List[Dict[str, str]]]
+        Tuple of (protein sequences, ligand sequences) where:
+        - protein sequences have 'id' and 'sequence' keys
+        - ligand sequences have 'id' and 'ccd' keys
     """
     sequences = []
+    ligands = []
 
-    # Get unique chains from structure data
-    chains = np.unique(structure.data["chain"])
+    # Determine if ligands should be included based on configuration
+    include_ligands = (
+        config.structure.keep_type == "all" and 
+        not config.structure.remove_all_ligands
+    )
 
-    for chain in chains:
-        # Filter to this chain and CA atoms
-        chain_mask = (structure.data["chain"] == chain) & (
-            structure.data["name"] == "CA"
-        )
-        if not chain_mask.any():
-            continue
-
-        # Get residue data for this chain
-        chain_residue_numbers = structure.data["resi"][chain_mask]
-        chain_residue_names = structure.data["resn"][chain_mask]
-
-        # Create residue mapping
-        residue_data = {}
-        for res_num, res_name in zip(chain_residue_numbers, chain_residue_names):
-            residue_data[res_num] = res_name
-
-        # Sort by residue number and build sequence
-        sorted_residues = sorted(residue_data.items())
-
+    # Extract protein sequences from residues (property handles building internally)
+    for residue in structure.single_conformer_residues:
+        # Only include residues that have backbone atoms (completable by complete_residues)
+        if hasattr(residue, 'active') and len(residue.active) >= 4:
+            # Check if first 4 atoms (backbone) are active - matching complete_residues() logic
+            if not np.all(residue.active[:4]):
+                logger.debug(f"Skipping residue {residue.resn[0]} {residue.resi[0]} with missing backbone atoms")
+                continue
+        
+        # Get chain ID and residue name
+        chain_id = residue.chain[0]
+        resn = residue.resn[0]
+        
         # Convert 3-letter amino acid codes to 1-letter
         aa_mapping = {
-            "ALA": "A",
-            "ARG": "R",
-            "ASN": "N",
-            "ASP": "D",
-            "CYS": "C",
-            "GLU": "E",
-            "GLN": "Q",
-            "GLY": "G",
-            "HIS": "H",
-            "ILE": "I",
-            "LEU": "L",
-            "LYS": "K",
-            "MET": "M",
-            "PHE": "F",
-            "PRO": "P",
-            "SER": "S",
-            "THR": "T",
-            "TRP": "W",
-            "TYR": "Y",
-            "VAL": "V",
+            "ALA": "A", "ARG": "R", "ASN": "N", "ASP": "D", "CYS": "C",
+            "GLU": "E", "GLN": "Q", "GLY": "G", "HIS": "H", "ILE": "I",
+            "LEU": "L", "LYS": "K", "MET": "M", "PHE": "F", "PRO": "P",
+            "SER": "S", "THR": "T", "TRP": "W", "TYR": "Y", "VAL": "V",
         }
+        
+        if resn in aa_mapping:
+            # Find or create sequence for this chain
+            chain_seq = None
+            for seq in sequences:
+                if seq["id"] == chain_id:
+                    chain_seq = seq
+                    break
+            
+            if chain_seq is None:
+                chain_seq = {"id": chain_id, "sequence": "", "residues": []}
+                sequences.append(chain_seq)
+            
+            # Add residue info for sorting
+            chain_seq["residues"].append({
+                "resi": residue.resi[0],
+                "aa": aa_mapping[resn]
+            })
+    
+    # Sort residues by number and build final sequences
+    for seq in sequences:
+        # Sort residues by residue number
+        seq["residues"].sort(key=lambda x: x["resi"])
+        # Build sequence string
+        seq["sequence"] = "".join([r["aa"] for r in seq["residues"]])
+        # Remove temporary residues list
+        del seq["residues"]
 
-        sequence = ""
-        for res_num, res_name in sorted_residues:
-            if res_name in aa_mapping:
-                sequence += aa_mapping[res_name]
-            else:
-                logger.warning(f"Unknown residue {res_name} in chain {chain}, skipping")
+    # Extract ligands if configuration allows
+    if include_ligands:
+        for ligand in structure.ligands:
+            # Get ligand identifier
+            chain_id = ligand.chain[0]
+            resi = ligand.resi[0]
+            icode = ligand.icode[0] if hasattr(ligand, 'icode') else ""
+            
+            # Create ligand ID
+            ligand_id = f"{chain_id}_{resi}"
+            if icode:
+                ligand_id += f"_{icode}"
+            
+            # Get CCD code from residue name
+            ccd_code = ligand.resn[0]
+            
+            ligands.append({
+                "id": ligand_id,
+                "ccd": ccd_code
+            })
 
-        if sequence:
-            sequences.append({"id": chain, "sequence": sequence})
-
-    return sequences
+    logger.debug(f"Extracted {len(sequences)} protein chains and {len(ligands)} ligands (include_ligands={include_ligands})")
+    return sequences, ligands
 
 
 def create_run_output_dir(config: ExperimentConfig, base_output_dir: Path) -> Path:

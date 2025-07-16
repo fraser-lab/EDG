@@ -1,7 +1,7 @@
 name: synthetic_density_test
 output_base_dir: results/synthetic_density_test
 input_base_dir: input/synthetic_density_test
-continue_on_error: true
+continue_on_error: false
 max_parallel: 2
 shared_config:
   name: null
@@ -96,7 +96,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/9bn8.cif
   density:
-    map_path: synthetic_density_output/9bn8/9bn8_main_2.0A.ccp4
+    map_path: synthetic_density_output/9bn8/9bn8_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/9bn8
   input_data_dir: input/synthetic_density_test/9bn8
@@ -107,7 +107,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/9b22.cif
   density:
-    map_path: synthetic_density_output/9b22/9b22_main_2.0A.ccp4
+    map_path: synthetic_density_output/9b22/9b22_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/9b22
   input_data_dir: input/synthetic_density_test/9b22
@@ -118,7 +118,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8z76.cif
   density:
-    map_path: synthetic_density_output/8z76/8z76_main_2.0A.ccp4
+    map_path: synthetic_density_output/8z76/8z76_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8z76
   input_data_dir: input/synthetic_density_test/8z76
@@ -129,7 +129,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8x3h.cif
   density:
-    map_path: synthetic_density_output/8x3h/8x3h_main_2.0A.ccp4
+    map_path: synthetic_density_output/8x3h/8x3h_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8x3h
   input_data_dir: input/synthetic_density_test/8x3h
@@ -140,7 +140,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8wjy.cif
   density:
-    map_path: synthetic_density_output/8wjy/8wjy_main_2.0A.ccp4
+    map_path: synthetic_density_output/8wjy/8wjy_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8wjy
   input_data_dir: input/synthetic_density_test/8wjy
@@ -151,7 +151,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8wa9.cif
   density:
-    map_path: synthetic_density_output/8wa9/8wa9_main_2.0A.ccp4
+    map_path: synthetic_density_output/8wa9/8wa9_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8wa9
   input_data_dir: input/synthetic_density_test/8wa9
@@ -162,7 +162,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8w6x.cif
   density:
-    map_path: synthetic_density_output/8w6x/8w6x_main_2.0A.ccp4
+    map_path: synthetic_density_output/8w6x/8w6x_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8w6x
   input_data_dir: input/synthetic_density_test/8w6x
@@ -173,7 +173,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8vq1.cif
   density:
-    map_path: synthetic_density_output/8vq1/8vq1_main_2.0A.ccp4
+    map_path: synthetic_density_output/8vq1/8vq1_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8vq1
   input_data_dir: input/synthetic_density_test/8vq1
@@ -184,7 +184,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8vpw.cif
   density:
-    map_path: synthetic_density_output/8vpw/8vpw_main_2.0A.ccp4
+    map_path: synthetic_density_output/8vpw/8vpw_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8vpw
   input_data_dir: input/synthetic_density_test/8vpw
@@ -195,7 +195,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8v9i.cif
   density:
-    map_path: synthetic_density_output/8v9i/8v9i_main_2.0A.ccp4
+    map_path: synthetic_density_output/8v9i/8v9i_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8v9i
   input_data_dir: input/synthetic_density_test/8v9i
@@ -206,7 +206,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8v6p.cif
   density:
-    map_path: synthetic_density_output/8v6p/8v6p_main_2.0A.ccp4
+    map_path: synthetic_density_output/8v6p/8v6p_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8v6p
   input_data_dir: input/synthetic_density_test/8v6p
@@ -217,7 +217,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8v4a.cif
   density:
-    map_path: synthetic_density_output/8v4a/8v4a_main_2.0A.ccp4
+    map_path: synthetic_density_output/8v4a/8v4a_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8v4a
   input_data_dir: input/synthetic_density_test/8v4a
@@ -228,7 +228,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8uw0.cif
   density:
-    map_path: synthetic_density_output/8uw0/8uw0_main_2.0A.ccp4
+    map_path: synthetic_density_output/8uw0/8uw0_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8uw0
   input_data_dir: input/synthetic_density_test/8uw0
@@ -239,7 +239,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8uvz.cif
   density:
-    map_path: synthetic_density_output/8uvz/8uvz_main_2.0A.ccp4
+    map_path: synthetic_density_output/8uvz/8uvz_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8uvz
   input_data_dir: input/synthetic_density_test/8uvz
@@ -250,7 +250,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8u91.cif
   density:
-    map_path: synthetic_density_output/8u91/8u91_main_2.0A.ccp4
+    map_path: synthetic_density_output/8u91/8u91_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8u91
   input_data_dir: input/synthetic_density_test/8u91
@@ -261,7 +261,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8u90.cif
   density:
-    map_path: synthetic_density_output/8u90/8u90_main_2.0A.ccp4
+    map_path: synthetic_density_output/8u90/8u90_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8u90
   input_data_dir: input/synthetic_density_test/8u90
@@ -272,7 +272,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8u8w.cif
   density:
-    map_path: synthetic_density_output/8u8w/8u8w_main_2.0A.ccp4
+    map_path: synthetic_density_output/8u8w/8u8w_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8u8w
   input_data_dir: input/synthetic_density_test/8u8w
@@ -283,7 +283,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8u6c.cif
   density:
-    map_path: synthetic_density_output/8u6c/8u6c_main_2.0A.ccp4
+    map_path: synthetic_density_output/8u6c/8u6c_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8u6c
   input_data_dir: input/synthetic_density_test/8u6c
@@ -294,7 +294,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8u69.cif
   density:
-    map_path: synthetic_density_output/8u69/8u69_main_2.0A.ccp4
+    map_path: synthetic_density_output/8u69/8u69_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8u69
   input_data_dir: input/synthetic_density_test/8u69
@@ -305,7 +305,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8tt5.cif
   density:
-    map_path: synthetic_density_output/8tt5/8tt5_main_2.0A.ccp4
+    map_path: synthetic_density_output/8tt5/8tt5_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8tt5
   input_data_dir: input/synthetic_density_test/8tt5
@@ -316,7 +316,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8tt4.cif
   density:
-    map_path: synthetic_density_output/8tt4/8tt4_main_2.0A.ccp4
+    map_path: synthetic_density_output/8tt4/8tt4_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8tt4
   input_data_dir: input/synthetic_density_test/8tt4
@@ -327,7 +327,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8tt2.cif
   density:
-    map_path: synthetic_density_output/8tt2/8tt2_main_2.0A.ccp4
+    map_path: synthetic_density_output/8tt2/8tt2_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8tt2
   input_data_dir: input/synthetic_density_test/8tt2
@@ -338,7 +338,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8tsz.cif
   density:
-    map_path: synthetic_density_output/8tsz/8tsz_main_2.0A.ccp4
+    map_path: synthetic_density_output/8tsz/8tsz_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8tsz
   input_data_dir: input/synthetic_density_test/8tsz
@@ -349,7 +349,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8tsy.cif
   density:
-    map_path: synthetic_density_output/8tsy/8tsy_main_2.0A.ccp4
+    map_path: synthetic_density_output/8tsy/8tsy_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8tsy
   input_data_dir: input/synthetic_density_test/8tsy
@@ -360,7 +360,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8tsx.cif
   density:
-    map_path: synthetic_density_output/8tsx/8tsx_main_2.0A.ccp4
+    map_path: synthetic_density_output/8tsx/8tsx_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8tsx
   input_data_dir: input/synthetic_density_test/8tsx
@@ -371,7 +371,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8tsu.cif
   density:
-    map_path: synthetic_density_output/8tsu/8tsu_main_2.0A.ccp4
+    map_path: synthetic_density_output/8tsu/8tsu_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8tsu
   input_data_dir: input/synthetic_density_test/8tsu
@@ -382,7 +382,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8th9.cif
   density:
-    map_path: synthetic_density_output/8th9/8th9_main_2.0A.ccp4
+    map_path: synthetic_density_output/8th9/8th9_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8th9
   input_data_dir: input/synthetic_density_test/8th9
@@ -393,7 +393,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8ted.cif
   density:
-    map_path: synthetic_density_output/8ted/8ted_main_2.0A.ccp4
+    map_path: synthetic_density_output/8ted/8ted_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8ted
   input_data_dir: input/synthetic_density_test/8ted
@@ -404,7 +404,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8t7w.cif
   density:
-    map_path: synthetic_density_output/8t7w/8t7w_main_2.0A.ccp4
+    map_path: synthetic_density_output/8t7w/8t7w_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8t7w
   input_data_dir: input/synthetic_density_test/8t7w
@@ -415,7 +415,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8sy8.cif
   density:
-    map_path: synthetic_density_output/8sy8/8sy8_main_2.0A.ccp4
+    map_path: synthetic_density_output/8sy8/8sy8_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8sy8
   input_data_dir: input/synthetic_density_test/8sy8
@@ -426,7 +426,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8sth.cif
   density:
-    map_path: synthetic_density_output/8sth/8sth_main_2.0A.ccp4
+    map_path: synthetic_density_output/8sth/8sth_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8sth
   input_data_dir: input/synthetic_density_test/8sth
@@ -437,7 +437,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8std.cif
   density:
-    map_path: synthetic_density_output/8std/8std_main_2.0A.ccp4
+    map_path: synthetic_density_output/8std/8std_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8std
   input_data_dir: input/synthetic_density_test/8std
@@ -448,7 +448,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8sqv.cif
   density:
-    map_path: synthetic_density_output/8sqv/8sqv_main_2.0A.ccp4
+    map_path: synthetic_density_output/8sqv/8sqv_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8sqv
   input_data_dir: input/synthetic_density_test/8sqv
@@ -459,7 +459,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8spl.cif
   density:
-    map_path: synthetic_density_output/8spl/8spl_main_2.0A.ccp4
+    map_path: synthetic_density_output/8spl/8spl_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8spl
   input_data_dir: input/synthetic_density_test/8spl
@@ -470,7 +470,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8sov.cif
   density:
-    map_path: synthetic_density_output/8sov/8sov_main_2.0A.ccp4
+    map_path: synthetic_density_output/8sov/8sov_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8sov
   input_data_dir: input/synthetic_density_test/8sov
@@ -481,7 +481,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8sou.cif
   density:
-    map_path: synthetic_density_output/8sou/8sou_main_2.0A.ccp4
+    map_path: synthetic_density_output/8sou/8sou_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8sou
   input_data_dir: input/synthetic_density_test/8sou
@@ -492,7 +492,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8soq.cif
   density:
-    map_path: synthetic_density_output/8soq/8soq_main_2.0A.ccp4
+    map_path: synthetic_density_output/8soq/8soq_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8soq
   input_data_dir: input/synthetic_density_test/8soq
@@ -503,7 +503,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8sog.cif
   density:
-    map_path: synthetic_density_output/8sog/8sog_main_2.0A.ccp4
+    map_path: synthetic_density_output/8sog/8sog_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8sog
   input_data_dir: input/synthetic_density_test/8sog
@@ -514,7 +514,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8slu.cif
   density:
-    map_path: synthetic_density_output/8slu/8slu_main_2.0A.ccp4
+    map_path: synthetic_density_output/8slu/8slu_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8slu
   input_data_dir: input/synthetic_density_test/8slu
@@ -525,7 +525,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8skp.cif
   density:
-    map_path: synthetic_density_output/8skp/8skp_main_2.0A.ccp4
+    map_path: synthetic_density_output/8skp/8skp_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8skp
   input_data_dir: input/synthetic_density_test/8skp
@@ -536,7 +536,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8sko.cif
   density:
-    map_path: synthetic_density_output/8sko/8sko_main_2.0A.ccp4
+    map_path: synthetic_density_output/8sko/8sko_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8sko
   input_data_dir: input/synthetic_density_test/8sko
@@ -547,7 +547,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8sc0.cif
   density:
-    map_path: synthetic_density_output/8sc0/8sc0_main_2.0A.ccp4
+    map_path: synthetic_density_output/8sc0/8sc0_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8sc0
   input_data_dir: input/synthetic_density_test/8sc0
@@ -558,7 +558,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8rae.cif
   density:
-    map_path: synthetic_density_output/8rae/8rae_main_2.0A.ccp4
+    map_path: synthetic_density_output/8rae/8rae_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8rae
   input_data_dir: input/synthetic_density_test/8rae
@@ -569,7 +569,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8rad.cif
   density:
-    map_path: synthetic_density_output/8rad/8rad_main_2.0A.ccp4
+    map_path: synthetic_density_output/8rad/8rad_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8rad
   input_data_dir: input/synthetic_density_test/8rad
@@ -580,7 +580,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8rac.cif
   density:
-    map_path: synthetic_density_output/8rac/8rac_main_2.0A.ccp4
+    map_path: synthetic_density_output/8rac/8rac_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8rac
   input_data_dir: input/synthetic_density_test/8rac
@@ -591,7 +591,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8rab.cif
   density:
-    map_path: synthetic_density_output/8rab/8rab_main_2.0A.ccp4
+    map_path: synthetic_density_output/8rab/8rab_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8rab
   input_data_dir: input/synthetic_density_test/8rab
@@ -602,7 +602,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8raa.cif
   density:
-    map_path: synthetic_density_output/8raa/8raa_main_2.0A.ccp4
+    map_path: synthetic_density_output/8raa/8raa_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8raa
   input_data_dir: input/synthetic_density_test/8raa
@@ -613,7 +613,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8ra9.cif
   density:
-    map_path: synthetic_density_output/8ra9/8ra9_main_2.0A.ccp4
+    map_path: synthetic_density_output/8ra9/8ra9_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8ra9
   input_data_dir: input/synthetic_density_test/8ra9
@@ -624,7 +624,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8ra8.cif
   density:
-    map_path: synthetic_density_output/8ra8/8ra8_main_2.0A.ccp4
+    map_path: synthetic_density_output/8ra8/8ra8_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8ra8
   input_data_dir: input/synthetic_density_test/8ra8
@@ -635,7 +635,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8ra5.cif
   density:
-    map_path: synthetic_density_output/8ra5/8ra5_main_2.0A.ccp4
+    map_path: synthetic_density_output/8ra5/8ra5_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8ra5
   input_data_dir: input/synthetic_density_test/8ra5
@@ -646,7 +646,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8ra4.cif
   density:
-    map_path: synthetic_density_output/8ra4/8ra4_main_2.0A.ccp4
+    map_path: synthetic_density_output/8ra4/8ra4_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8ra4
   input_data_dir: input/synthetic_density_test/8ra4
@@ -657,7 +657,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8ra3.cif
   density:
-    map_path: synthetic_density_output/8ra3/8ra3_main_2.0A.ccp4
+    map_path: synthetic_density_output/8ra3/8ra3_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8ra3
   input_data_dir: input/synthetic_density_test/8ra3
@@ -668,7 +668,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8ra2.cif
   density:
-    map_path: synthetic_density_output/8ra2/8ra2_main_2.0A.ccp4
+    map_path: synthetic_density_output/8ra2/8ra2_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8ra2
   input_data_dir: input/synthetic_density_test/8ra2
@@ -679,7 +679,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8ra1.cif
   density:
-    map_path: synthetic_density_output/8ra1/8ra1_main_2.0A.ccp4
+    map_path: synthetic_density_output/8ra1/8ra1_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8ra1
   input_data_dir: input/synthetic_density_test/8ra1
@@ -690,7 +690,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8r9q.cif
   density:
-    map_path: synthetic_density_output/8r9q/8r9q_main_2.0A.ccp4
+    map_path: synthetic_density_output/8r9q/8r9q_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8r9q
   input_data_dir: input/synthetic_density_test/8r9q
@@ -701,7 +701,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8r9m.cif
   density:
-    map_path: synthetic_density_output/8r9m/8r9m_main_2.0A.ccp4
+    map_path: synthetic_density_output/8r9m/8r9m_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8r9m
   input_data_dir: input/synthetic_density_test/8r9m
@@ -712,7 +712,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8r9l.cif
   density:
-    map_path: synthetic_density_output/8r9l/8r9l_main_2.0A.ccp4
+    map_path: synthetic_density_output/8r9l/8r9l_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8r9l
   input_data_dir: input/synthetic_density_test/8r9l
@@ -723,7 +723,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8r9k.cif
   density:
-    map_path: synthetic_density_output/8r9k/8r9k_main_2.0A.ccp4
+    map_path: synthetic_density_output/8r9k/8r9k_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8r9k
   input_data_dir: input/synthetic_density_test/8r9k
@@ -734,7 +734,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8r9j.cif
   density:
-    map_path: synthetic_density_output/8r9j/8r9j_main_2.0A.ccp4
+    map_path: synthetic_density_output/8r9j/8r9j_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8r9j
   input_data_dir: input/synthetic_density_test/8r9j
@@ -745,7 +745,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8r9i.cif
   density:
-    map_path: synthetic_density_output/8r9i/8r9i_main_2.0A.ccp4
+    map_path: synthetic_density_output/8r9i/8r9i_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8r9i
   input_data_dir: input/synthetic_density_test/8r9i
@@ -756,7 +756,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8r9h.cif
   density:
-    map_path: synthetic_density_output/8r9h/8r9h_main_2.0A.ccp4
+    map_path: synthetic_density_output/8r9h/8r9h_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8r9h
   input_data_dir: input/synthetic_density_test/8r9h
@@ -767,7 +767,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8r9g.cif
   density:
-    map_path: synthetic_density_output/8r9g/8r9g_main_2.0A.ccp4
+    map_path: synthetic_density_output/8r9g/8r9g_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8r9g
   input_data_dir: input/synthetic_density_test/8r9g
@@ -778,7 +778,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8r9f.cif
   density:
-    map_path: synthetic_density_output/8r9f/8r9f_main_2.0A.ccp4
+    map_path: synthetic_density_output/8r9f/8r9f_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8r9f
   input_data_dir: input/synthetic_density_test/8r9f
@@ -789,7 +789,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8r9e.cif
   density:
-    map_path: synthetic_density_output/8r9e/8r9e_main_2.0A.ccp4
+    map_path: synthetic_density_output/8r9e/8r9e_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8r9e
   input_data_dir: input/synthetic_density_test/8r9e
@@ -800,7 +800,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8r9d.cif
   density:
-    map_path: synthetic_density_output/8r9d/8r9d_main_2.0A.ccp4
+    map_path: synthetic_density_output/8r9d/8r9d_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8r9d
   input_data_dir: input/synthetic_density_test/8r9d
@@ -811,7 +811,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8r9c.cif
   density:
-    map_path: synthetic_density_output/8r9c/8r9c_main_2.0A.ccp4
+    map_path: synthetic_density_output/8r9c/8r9c_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8r9c
   input_data_dir: input/synthetic_density_test/8r9c
@@ -822,7 +822,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8r95.cif
   density:
-    map_path: synthetic_density_output/8r95/8r95_main_2.0A.ccp4
+    map_path: synthetic_density_output/8r95/8r95_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8r95
   input_data_dir: input/synthetic_density_test/8r95
@@ -833,7 +833,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8r94.cif
   density:
-    map_path: synthetic_density_output/8r94/8r94_main_2.0A.ccp4
+    map_path: synthetic_density_output/8r94/8r94_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8r94
   input_data_dir: input/synthetic_density_test/8r94
@@ -844,7 +844,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8r93.cif
   density:
-    map_path: synthetic_density_output/8r93/8r93_main_2.0A.ccp4
+    map_path: synthetic_density_output/8r93/8r93_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8r93
   input_data_dir: input/synthetic_density_test/8r93
@@ -855,7 +855,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8r92.cif
   density:
-    map_path: synthetic_density_output/8r92/8r92_main_2.0A.ccp4
+    map_path: synthetic_density_output/8r92/8r92_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8r92
   input_data_dir: input/synthetic_density_test/8r92
@@ -866,7 +866,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8r91.cif
   density:
-    map_path: synthetic_density_output/8r91/8r91_main_2.0A.ccp4
+    map_path: synthetic_density_output/8r91/8r91_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8r91
   input_data_dir: input/synthetic_density_test/8r91
@@ -877,7 +877,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8r90.cif
   density:
-    map_path: synthetic_density_output/8r90/8r90_main_2.0A.ccp4
+    map_path: synthetic_density_output/8r90/8r90_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8r90
   input_data_dir: input/synthetic_density_test/8r90
@@ -888,7 +888,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8r8z.cif
   density:
-    map_path: synthetic_density_output/8r8z/8r8z_main_2.0A.ccp4
+    map_path: synthetic_density_output/8r8z/8r8z_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8r8z
   input_data_dir: input/synthetic_density_test/8r8z
@@ -899,7 +899,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8r8y.cif
   density:
-    map_path: synthetic_density_output/8r8y/8r8y_main_2.0A.ccp4
+    map_path: synthetic_density_output/8r8y/8r8y_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8r8y
   input_data_dir: input/synthetic_density_test/8r8y
@@ -910,7 +910,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8r8x.cif
   density:
-    map_path: synthetic_density_output/8r8x/8r8x_main_2.0A.ccp4
+    map_path: synthetic_density_output/8r8x/8r8x_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8r8x
   input_data_dir: input/synthetic_density_test/8r8x
@@ -921,7 +921,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8r8w.cif
   density:
-    map_path: synthetic_density_output/8r8w/8r8w_main_2.0A.ccp4
+    map_path: synthetic_density_output/8r8w/8r8w_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8r8w
   input_data_dir: input/synthetic_density_test/8r8w
@@ -932,7 +932,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8r8j.cif
   density:
-    map_path: synthetic_density_output/8r8j/8r8j_main_2.0A.ccp4
+    map_path: synthetic_density_output/8r8j/8r8j_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8r8j
   input_data_dir: input/synthetic_density_test/8r8j
@@ -943,7 +943,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8r8i.cif
   density:
-    map_path: synthetic_density_output/8r8i/8r8i_main_2.0A.ccp4
+    map_path: synthetic_density_output/8r8i/8r8i_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8r8i
   input_data_dir: input/synthetic_density_test/8r8i
@@ -954,7 +954,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8r8h.cif
   density:
-    map_path: synthetic_density_output/8r8h/8r8h_main_2.0A.ccp4
+    map_path: synthetic_density_output/8r8h/8r8h_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8r8h
   input_data_dir: input/synthetic_density_test/8r8h
@@ -965,7 +965,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8r8g.cif
   density:
-    map_path: synthetic_density_output/8r8g/8r8g_main_2.0A.ccp4
+    map_path: synthetic_density_output/8r8g/8r8g_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8r8g
   input_data_dir: input/synthetic_density_test/8r8g
@@ -976,7 +976,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8qyt.cif
   density:
-    map_path: synthetic_density_output/8qyt/8qyt_main_2.0A.ccp4
+    map_path: synthetic_density_output/8qyt/8qyt_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8qyt
   input_data_dir: input/synthetic_density_test/8qyt
@@ -987,7 +987,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8qxq.cif
   density:
-    map_path: synthetic_density_output/8qxq/8qxq_main_2.0A.ccp4
+    map_path: synthetic_density_output/8qxq/8qxq_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8qxq
   input_data_dir: input/synthetic_density_test/8qxq
@@ -998,7 +998,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8quk.cif
   density:
-    map_path: synthetic_density_output/8quk/8quk_main_2.0A.ccp4
+    map_path: synthetic_density_output/8quk/8quk_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8quk
   input_data_dir: input/synthetic_density_test/8quk
@@ -1009,7 +1009,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8quj.cif
   density:
-    map_path: synthetic_density_output/8quj/8quj_main_2.0A.ccp4
+    map_path: synthetic_density_output/8quj/8quj_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8quj
   input_data_dir: input/synthetic_density_test/8quj
@@ -1020,7 +1020,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8qtl.cif
   density:
-    map_path: synthetic_density_output/8qtl/8qtl_main_2.0A.ccp4
+    map_path: synthetic_density_output/8qtl/8qtl_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8qtl
   input_data_dir: input/synthetic_density_test/8qtl
@@ -1031,7 +1031,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8qml.cif
   density:
-    map_path: synthetic_density_output/8qml/8qml_main_2.0A.ccp4
+    map_path: synthetic_density_output/8qml/8qml_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8qml
   input_data_dir: input/synthetic_density_test/8qml
@@ -1042,7 +1042,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8pus.cif
   density:
-    map_path: synthetic_density_output/8pus/8pus_main_2.0A.ccp4
+    map_path: synthetic_density_output/8pus/8pus_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8pus
   input_data_dir: input/synthetic_density_test/8pus
@@ -1053,7 +1053,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8pph.cif
   density:
-    map_path: synthetic_density_output/8pph/8pph_main_2.0A.ccp4
+    map_path: synthetic_density_output/8pph/8pph_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8pph
   input_data_dir: input/synthetic_density_test/8pph
@@ -1064,7 +1064,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8ppa.cif
   density:
-    map_path: synthetic_density_output/8ppa/8ppa_main_2.0A.ccp4
+    map_path: synthetic_density_output/8ppa/8ppa_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8ppa
   input_data_dir: input/synthetic_density_test/8ppa
@@ -1075,7 +1075,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8pms.cif
   density:
-    map_path: synthetic_density_output/8pms/8pms_main_2.0A.ccp4
+    map_path: synthetic_density_output/8pms/8pms_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8pms
   input_data_dir: input/synthetic_density_test/8pms
@@ -1086,7 +1086,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8peb.cif
   density:
-    map_path: synthetic_density_output/8peb/8peb_main_2.0A.ccp4
+    map_path: synthetic_density_output/8peb/8peb_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8peb
   input_data_dir: input/synthetic_density_test/8peb
@@ -1097,7 +1097,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8pbm.cif
   density:
-    map_path: synthetic_density_output/8pbm/8pbm_main_2.0A.ccp4
+    map_path: synthetic_density_output/8pbm/8pbm_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8pbm
   input_data_dir: input/synthetic_density_test/8pbm
@@ -1108,7 +1108,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8pb7.cif
   density:
-    map_path: synthetic_density_output/8pb7/8pb7_main_2.0A.ccp4
+    map_path: synthetic_density_output/8pb7/8pb7_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8pb7
   input_data_dir: input/synthetic_density_test/8pb7
@@ -1119,7 +1119,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8pb6.cif
   density:
-    map_path: synthetic_density_output/8pb6/8pb6_main_2.0A.ccp4
+    map_path: synthetic_density_output/8pb6/8pb6_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8pb6
   input_data_dir: input/synthetic_density_test/8pb6
@@ -1130,7 +1130,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8pb5.cif
   density:
-    map_path: synthetic_density_output/8pb5/8pb5_main_2.0A.ccp4
+    map_path: synthetic_density_output/8pb5/8pb5_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8pb5
   input_data_dir: input/synthetic_density_test/8pb5
@@ -1141,7 +1141,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8pb4.cif
   density:
-    map_path: synthetic_density_output/8pb4/8pb4_main_2.0A.ccp4
+    map_path: synthetic_density_output/8pb4/8pb4_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8pb4
   input_data_dir: input/synthetic_density_test/8pb4
@@ -1152,7 +1152,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8p58.cif
   density:
-    map_path: synthetic_density_output/8p58/8p58_main_2.0A.ccp4
+    map_path: synthetic_density_output/8p58/8p58_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8p58
   input_data_dir: input/synthetic_density_test/8p58
@@ -1163,7 +1163,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8p19.cif
   density:
-    map_path: synthetic_density_output/8p19/8p19_main_2.0A.ccp4
+    map_path: synthetic_density_output/8p19/8p19_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8p19
   input_data_dir: input/synthetic_density_test/8p19
@@ -1174,7 +1174,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8owz.cif
   density:
-    map_path: synthetic_density_output/8owz/8owz_main_2.0A.ccp4
+    map_path: synthetic_density_output/8owz/8owz_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8owz
   input_data_dir: input/synthetic_density_test/8owz
@@ -1185,7 +1185,7 @@ experiments:
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8osw.cif
   density:
-    map_path: synthetic_density_output/8osw/8osw_main_2.0A.ccp4
+    map_path: synthetic_density_output/8osw/8osw_ensemble_2.0A.ccp4
     resolution: 2.0
   output_dir: results/synthetic_density_test/8osw
   input_data_dir: input/synthetic_density_test/8osw

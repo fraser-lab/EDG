@@ -250,7 +250,9 @@ class BatchExperimentConfig:
         errors = []
         
         # Check that we have experiments or auto-discovery config
-        if not self.experiments and not self.protein_directory:
+        has_experiments = (self.experiments or 
+                          (hasattr(self, '_experiment_yaml_data') and self._experiment_yaml_data))
+        if not has_experiments and not self.protein_directory:
             errors.append("Must specify either 'experiments' list or 'protein_directory' for auto-discovery")
         
         # Validate protein directory if specified
@@ -294,15 +296,169 @@ class BatchExperimentConfig:
         """
         configs = []
         
-        # Add explicitly specified experiments
-        configs.extend(self.experiments)
+        # Use YAML-based merging if available (preferred method)
+        if hasattr(self, '_experiment_yaml_data') and self._experiment_yaml_data:
+            configs.extend(self.get_experiment_configs_from_yaml(self._experiment_yaml_data))
+        else:
+            # Fallback to dataclass-based merging for legacy support
+            for experiment in self.experiments:
+                merged_config = self._merge_with_shared_config(experiment)
+                configs.append(merged_config)
         
-        # Add auto-discovered experiments
+        # Add auto-discovered experiments with shared config merging
         if self.protein_directory:
-            configs.extend(self._discover_protein_experiments())
+            discovered_experiments = self._discover_protein_experiments()
+            for experiment in discovered_experiments:
+                merged_config = self._merge_with_shared_config(experiment)
+                configs.append(merged_config)
         
         return configs
     
+    def get_experiment_configs_from_yaml(self, experiment_yaml_data: List[Dict[str, Any]]) -> List[ExperimentConfig]:
+        """Get experiment configurations from raw YAML data with proper shared config merging.
+        
+        This method works with the original YAML data to avoid dataclass default contamination.
+        
+        Parameters
+        ----------
+        experiment_yaml_data : List[Dict[str, Any]]
+            List of experiment configuration dictionaries from YAML
+            
+        Returns
+        -------
+        List[ExperimentConfig]
+            List of all experiment configurations ready for execution
+        """
+        configs = []
+        
+        # Merge each experiment YAML with shared config
+        for exp_yaml in experiment_yaml_data:
+            merged_config = self._merge_yaml_with_shared_config(exp_yaml)
+            configs.append(merged_config)
+        
+        return configs
+    
+    def _merge_yaml_with_shared_config(self, experiment_yaml: Dict[str, Any]) -> ExperimentConfig:
+        """Merge experiment YAML data with shared config, preserving explicit values only.
+        
+        This method ensures that only explicitly specified values in the experiment YAML
+        override the shared config, avoiding dataclass default contamination.
+        
+        Parameters
+        ----------
+        experiment_yaml : Dict[str, Any]
+            Raw experiment configuration from YAML
+            
+        Returns
+        -------
+        ExperimentConfig
+            Merged configuration with proper priority handling
+        """
+        if self.shared_config is None:
+            # No shared config, just create from YAML
+            from .config_loader import parse_schedule_configs, create_experiment_config
+            parsed_yaml = parse_schedule_configs(experiment_yaml)
+            return create_experiment_config(parsed_yaml)
+        
+        # Convert shared config to dict for merging
+        from dataclasses import asdict
+        shared_dict = asdict(self.shared_config)
+        
+        # Use shared config as base, only override with explicitly set experiment values
+        merged_dict = self._deep_merge_dicts(shared_dict, experiment_yaml)
+        
+        # Parse schedule configurations in the merged dict
+        from .config_loader import parse_schedule_configs, create_experiment_config
+        merged_dict = parse_schedule_configs(merged_dict)
+        
+        return create_experiment_config(merged_dict)
+    
+    def _merge_with_shared_config(self, experiment_config: ExperimentConfig) -> ExperimentConfig:
+        """Merge an experiment config with shared config (legacy method).
+        
+        This method is kept for backward compatibility and auto-discovered experiments.
+        
+        Parameters
+        ----------
+        experiment_config : ExperimentConfig
+            Individual experiment configuration
+            
+        Returns
+        -------
+        ExperimentConfig
+            Experiment configuration merged with shared config
+        """
+        if self.shared_config is None:
+            return experiment_config
+            
+        # Convert both configs to dictionaries for merging
+        from dataclasses import asdict
+        shared_dict = asdict(self.shared_config)
+        experiment_dict = asdict(experiment_config)
+        
+        # Simple deep merge - shared config provides defaults, experiment config overrides
+        merged_dict = self._deep_merge_dicts(shared_dict, experiment_dict)
+        
+        # Parse schedule configurations in the merged dict
+        from .config_loader import parse_schedule_configs, create_experiment_config
+        merged_dict = parse_schedule_configs(merged_dict)
+        
+        return create_experiment_config(merged_dict)
+        
+    def _deep_merge_dicts(self, base_dict: Dict[str, Any], override_dict: Dict[str, Any]) -> Dict[str, Any]:
+        """Deep merge two dictionaries, with override_dict taking precedence.
+        
+        Parameters
+        ----------
+        base_dict : Dict[str, Any]
+            Base dictionary (shared config)
+        override_dict : Dict[str, Any]
+            Override dictionary (individual experiment config)
+            
+        Returns
+        -------
+        Dict[str, Any]
+            Merged dictionary
+        """
+        import copy
+        
+        result = copy.deepcopy(base_dict)
+        
+        for key, value in override_dict.items():
+            if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+                # Special handling for schedule configurations
+                if self._is_schedule_config(value) or self._is_schedule_config(result[key]):
+                    # Don't merge schedule configs - let experiment config fully override
+                    result[key] = value
+                else:
+                    # Recursively merge nested dictionaries for non-schedule configs
+                    result[key] = self._deep_merge_dicts(result[key], value)
+            elif value is not None:  # Only override if experiment value is not None
+                result[key] = value
+            # If value is None, keep the base_dict value (don't override with None)
+                
+        return result
+        
+    def _is_schedule_config(self, config: Dict[str, Any]) -> bool:
+        """Check if a dictionary looks like a schedule configuration.
+        
+        Parameters
+        ----------
+        config : Dict[str, Any]
+            Dictionary to check
+            
+        Returns
+        -------
+        bool
+            True if this looks like a schedule config
+        """
+        if not isinstance(config, dict):
+            return False
+            
+        # Check for schedule-specific keys
+        schedule_keys = ['value', 'breakpoints', 'values', 'start', 'end', 'alpha', 'thresholds']
+        return any(key in config for key in schedule_keys)
+        
     def _discover_protein_experiments(self) -> List[ExperimentConfig]:
         """Discover protein experiments from directory structure.
         

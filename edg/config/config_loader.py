@@ -98,6 +98,10 @@ def merge_overrides(
     config_data = config_data.copy()
 
     for key, value in overrides.items():
+        # Map common CLI parameter names to config paths
+        if "." not in key:
+            key = map_override_key(key)
+        
         # Handle dot notation for nested parameters
         if "." in key:
             parts = key.split(".")
@@ -112,18 +116,8 @@ def merge_overrides(
             # Set final value
             target[parts[-1]] = value
         else:
-            # Handle direct mapping for common parameters
-            mapped_key = map_override_key(key)
-            if "." in mapped_key:
-                parts = mapped_key.split(".")
-                target = config_data
-                for part in parts[:-1]:
-                    if part not in target:
-                        target[part] = {}
-                    target = target[part]
-                target[parts[-1]] = value
-            else:
-                config_data[mapped_key] = value
+            # Direct assignment for top-level parameters
+            config_data[key] = value
 
     return config_data
 
@@ -208,6 +202,17 @@ def parse_schedule_configs(config_data: Dict[str, Any]) -> Dict[str, Any]:
             if "type" in value and isinstance(value["type"], str):
                 try:
                     result[key] = parse_schedule_config(value)
+                    continue
+                except ValueError:
+                    # Not a valid schedule config, treat as nested dict
+                    pass
+            # Check for implicit piecewise schedule (breakpoints + values)
+            elif "breakpoints" in value and "values" in value:
+                try:
+                    # Add implicit type for piecewise schedule
+                    schedule_config = dict(value)
+                    schedule_config["type"] = "piecewise"
+                    result[key] = parse_schedule_config(schedule_config)
                     continue
                 except ValueError:
                     # Not a valid schedule config, treat as nested dict
@@ -429,11 +434,8 @@ def create_batch_experiment_config(config_data: Dict[str, Any]) -> BatchExperime
     if "shared_config" in config_data:
         shared_config = create_experiment_config(config_data["shared_config"])
 
-    # Handle explicit experiments list if present
-    experiments = []
-    if "experiments" in config_data:
-        for exp_data in config_data["experiments"]:
-            experiments.append(create_experiment_config(exp_data))
+    # Store raw experiment YAML data for proper merging
+    experiment_yaml_data = config_data.get("experiments", [])
 
     # Get valid fields for BatchExperimentConfig
     from .config_schema import BatchExperimentConfig
@@ -443,9 +445,15 @@ def create_batch_experiment_config(config_data: Dict[str, Any]) -> BatchExperime
     batch_config_data = {k: v for k, v in config_data.items() 
                         if k in valid_fields and k not in ["shared_config", "experiments"]}
     batch_config_data["shared_config"] = shared_config
-    batch_config_data["experiments"] = experiments
+    batch_config_data["experiments"] = []  # Will be populated via get_experiment_configs_from_yaml
 
-    return BatchExperimentConfig(**batch_config_data)
+    # Create batch config
+    batch_config = BatchExperimentConfig(**batch_config_data)
+    
+    # Store the raw YAML data for later use
+    batch_config._experiment_yaml_data = experiment_yaml_data
+    
+    return batch_config
 
 
 def detect_config_type(config_path: Union[str, Path]) -> str:

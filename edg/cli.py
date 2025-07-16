@@ -241,14 +241,13 @@ def parse_overrides(args: argparse.Namespace) -> Dict[str, Any]:
     """
     overrides = {}
 
-    # Standard overrides
+    # Standard overrides (excluding boolean flags)
     param_mapping = {
         "num_steps": args.num_steps,
         "ensemble_size": args.ensemble_size,
         "step_scale": args.step_scale,
         "resolution": args.resolution,
         "map_path": args.map_path,
-        "em_mode": args.em_mode,
         "structure_path": args.structure_path,
         "guidance_weight": args.guidance_weight,
         "resampling_weight": args.resampling_weight,
@@ -262,7 +261,6 @@ def parse_overrides(args: argparse.Namespace) -> Dict[str, Any]:
         "max_iterations": args.max_iterations,
         "convergence_threshold": args.convergence_threshold,
         "gradient_clip_norm": args.gradient_clip_norm,
-        "line_search": args.line_search,
         "model_version": args.model_version,
         "checkpoint_path": args.checkpoint_path,
         "device": args.device,
@@ -271,13 +269,20 @@ def parse_overrides(args: argparse.Namespace) -> Dict[str, Any]:
         "shared_input_dir": args.shared_input_dir,
         "name": args.name,
         "substructure_selection": args.substructure_selection,
-        "substructure_enabled": args.substructure_enabled,
     }
 
     # Add non-None values
     for key, value in param_mapping.items():
         if value is not None:
             overrides[key] = value
+
+    # Handle boolean flags - only add if explicitly set to True
+    if args.em_mode:
+        overrides["em_mode"] = True
+    if args.line_search:
+        overrides["line_search"] = True
+    if args.substructure_enabled:
+        overrides["substructure_enabled"] = True
 
     # Handle boolean flags that need special logic
     if args.guidance_update:
@@ -337,7 +342,7 @@ def parse_override_value(value_str: str) -> Any:
     # Try YAML parsing for complex values
     try:
         return yaml.safe_load(value_str)
-    except:
+    except (yaml.YAMLError, ValueError):
         pass
 
     # Return as string
