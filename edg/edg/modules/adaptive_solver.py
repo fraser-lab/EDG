@@ -11,7 +11,6 @@ Created: 6 July 2025
 
 import torch
 from typing import Dict, List, Optional, Tuple, Callable, Any
-import numpy as np
 from dataclasses import dataclass
 from abc import ABC, abstractmethod
 

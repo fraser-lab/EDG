@@ -174,7 +174,7 @@ def run_experiment(config: ExperimentConfig) -> Dict[str, Any]:
 
     # Check if we're using a shared input directory
     using_shared_input = config.shared_input_dir is not None
-    
+
     if using_shared_input:
         logger.info("Using shared input directory for parameter sweep optimization")
         return run_experiment_with_shared_input(config)
@@ -235,11 +235,15 @@ def run_experiment_with_shared_input(config: ExperimentConfig) -> Dict[str, Any]
     logger.info(f"Running experiment with shared input: {config.name}")
 
     shared_input_dir = Path(config.shared_input_dir)
-    shared_output_dir = Path(config.output_dir)  # This should be the shared output directory
-    
+    shared_output_dir = Path(
+        config.output_dir
+    )  # This should be the shared output directory
+
     # Validate shared input compatibility
     if not validate_shared_input_compatibility(config, shared_input_dir):
-        raise ValueError(f"Shared input directory is not compatible with current configuration: {shared_input_dir}")
+        raise ValueError(
+            f"Shared input directory is not compatible with current configuration: {shared_input_dir}"
+        )
 
     # Check if we need to copy Boltz input YAML to shared directory
     if config.boltz_input_yaml:
@@ -247,10 +251,10 @@ def run_experiment_with_shared_input(config: ExperimentConfig) -> Dict[str, Any]
         if not shared_yaml_path.exists():
             logger.info("Copying Boltz input YAML to shared directory")
             copy_boltz_input_to_shared(config, shared_input_dir)
-    
+
     # Create run-specific output directory (this will be moved later)
     run_output_dir = create_run_output_dir(config, shared_output_dir)
-    
+
     # Save the final configuration used to the run-specific directory
     config_output_path = run_output_dir / "experiment_config.yaml"
     from edg.config import save_config
@@ -262,7 +266,9 @@ def run_experiment_with_shared_input(config: ExperimentConfig) -> Dict[str, Any]
     return run_experiment_main_logic(config, shared_input_dir, run_output_dir)
 
 
-def run_experiment_main_logic(config: ExperimentConfig, input_data_dir: Path, run_output_dir: Path) -> Dict[str, Any]:
+def run_experiment_main_logic(
+    config: ExperimentConfig, input_data_dir: Path, run_output_dir: Path
+) -> Dict[str, Any]:
     """Main experiment logic that can be shared between standalone and shared input modes.
 
     Parameters
@@ -359,11 +365,13 @@ def run_experiment_main_logic(config: ExperimentConfig, input_data_dir: Path, ru
         extension = os.path.splitext(config.structure.structure_path)[1]
         if extension not in (".cif", ".pdb", ".mmcif"):
             raise ValueError("Structure file must be in mmCIF or PDB format.")
-        
+
         if extension in (".pdb",):
             structure = Structure.fromfile(config.structure.structure_path)
         else:
-            structure = Ensemble.fromfile(config.structure.structure_path)[0]  # Take first model
+            structure = Ensemble.fromfile(config.structure.structure_path)[
+                0
+            ]  # Take first model
 
         # Process structure according to configuration
         logger.info("Processing structure according to configuration...")
@@ -371,7 +379,9 @@ def run_experiment_main_logic(config: ExperimentConfig, input_data_dir: Path, ru
 
         # Extract sequences and ligands from processed structure
         logger.info("Extracting sequences and ligands from structure...")
-        sequences, ligands = extract_sequences_and_ligands_from_structure(structure, config)
+        sequences, ligands = extract_sequences_and_ligands_from_structure(
+            structure, config
+        )
 
         # Create proper Boltz YAML with sequences
         input_yaml_path = create_boltz_yaml_with_sequences_direct(
@@ -401,10 +411,11 @@ def run_experiment_main_logic(config: ExperimentConfig, input_data_dir: Path, ru
     return results
 
 
-
-
 def create_boltz_yaml_with_sequences_direct(
-    config: ExperimentConfig, input_data_dir: Path, sequences: List[Dict[str, str]], ligands: List[Dict[str, str]]
+    config: ExperimentConfig,
+    input_data_dir: Path,
+    sequences: List[Dict[str, str]],
+    ligands: List[Dict[str, str]],
 ) -> Path:
     """Create proper Boltz YAML file with sequences and ligands.
 
@@ -428,13 +439,13 @@ def create_boltz_yaml_with_sequences_direct(
 
     # Create proper Boltz YAML format
     yaml_content = "sequences:\n"
-    
+
     # Add protein sequences
     for seq_info in sequences:
         yaml_content += "  - protein:\n"
         yaml_content += f"      id: {seq_info['id']}\n"
         yaml_content += f"      sequence: {seq_info['sequence']}\n"
-    
+
     # Add ligand sequences (if configuration allows)
     for ligand_info in ligands:
         yaml_content += "  - ligand:\n"
@@ -444,13 +455,17 @@ def create_boltz_yaml_with_sequences_direct(
     with open(yaml_path, "w") as f:
         f.write(yaml_content)
 
-    logger.info(f"Created Boltz YAML with {len(sequences)} protein sequences and {len(ligands)} ligands at {yaml_path}")
+    logger.info(
+        f"Created Boltz YAML with {len(sequences)} protein sequences and {len(ligands)} ligands at {yaml_path}"
+    )
     return yaml_path
 
 
-def extract_sequences_and_ligands_from_structure(structure: "Structure", config: ExperimentConfig) -> Tuple[List[Dict[str, str]], List[Dict[str, str]]]:
+def extract_sequences_and_ligands_from_structure(
+    structure: "Structure", config: ExperimentConfig
+) -> Tuple[List[Dict[str, str]], List[Dict[str, str]]]:
     """Extract protein sequences and ligands from structure for Boltz YAML format.
-    
+
     Only includes residues that can be completed by Structure.complete_residues()
     and conditionally includes ligands based on structure cleaning configuration.
 
@@ -473,31 +488,48 @@ def extract_sequences_and_ligands_from_structure(structure: "Structure", config:
 
     # Determine if ligands should be included based on configuration
     include_ligands = (
-        config.structure.keep_type == "all" and 
-        not config.structure.remove_all_ligands
+        config.structure.keep_type == "all" and not config.structure.remove_all_ligands
     )
 
     # Extract protein sequences from residues (property handles building internally)
     for residue in structure.single_conformer_residues:
         # Only include residues that have backbone atoms (completable by complete_residues)
-        if hasattr(residue, 'active') and len(residue.active) >= 4:
+        if hasattr(residue, "active") and len(residue.active) >= 4:
             # Check if first 4 atoms (backbone) are active - matching complete_residues() logic
             if not np.all(residue.active[:4]):
-                logger.debug(f"Skipping residue {residue.resn[0]} {residue.resi[0]} with missing backbone atoms")
+                logger.debug(
+                    f"Skipping residue {residue.resn[0]} {residue.resi[0]} with missing backbone atoms"
+                )
                 continue
-        
+
         # Get chain ID and residue name
         chain_id = residue.chain[0]
         resn = residue.resn[0]
-        
+
         # Convert 3-letter amino acid codes to 1-letter
         aa_mapping = {
-            "ALA": "A", "ARG": "R", "ASN": "N", "ASP": "D", "CYS": "C",
-            "GLU": "E", "GLN": "Q", "GLY": "G", "HIS": "H", "ILE": "I",
-            "LEU": "L", "LYS": "K", "MET": "M", "PHE": "F", "PRO": "P",
-            "SER": "S", "THR": "T", "TRP": "W", "TYR": "Y", "VAL": "V",
+            "ALA": "A",
+            "ARG": "R",
+            "ASN": "N",
+            "ASP": "D",
+            "CYS": "C",
+            "GLU": "E",
+            "GLN": "Q",
+            "GLY": "G",
+            "HIS": "H",
+            "ILE": "I",
+            "LEU": "L",
+            "LYS": "K",
+            "MET": "M",
+            "PHE": "F",
+            "PRO": "P",
+            "SER": "S",
+            "THR": "T",
+            "TRP": "W",
+            "TYR": "Y",
+            "VAL": "V",
         }
-        
+
         if resn in aa_mapping:
             # Find or create sequence for this chain
             chain_seq = None
@@ -505,17 +537,16 @@ def extract_sequences_and_ligands_from_structure(structure: "Structure", config:
                 if seq["id"] == chain_id:
                     chain_seq = seq
                     break
-            
+
             if chain_seq is None:
                 chain_seq = {"id": chain_id, "sequence": "", "residues": []}
                 sequences.append(chain_seq)
-            
+
             # Add residue info for sorting
-            chain_seq["residues"].append({
-                "resi": residue.resi[0],
-                "aa": aa_mapping[resn]
-            })
-    
+            chain_seq["residues"].append(
+                {"resi": residue.resi[0], "aa": aa_mapping[resn]}
+            )
+
     # Sort residues by number and build final sequences
     for seq in sequences:
         # Sort residues by residue number
@@ -531,22 +562,21 @@ def extract_sequences_and_ligands_from_structure(structure: "Structure", config:
             # Get ligand identifier
             chain_id = ligand.chain[0]
             resi = ligand.resi[0]
-            icode = ligand.icode[0] if hasattr(ligand, 'icode') else ""
-            
+            icode = ligand.icode[0] if hasattr(ligand, "icode") else ""
+
             # Create ligand ID
             ligand_id = f"{chain_id}_{resi}"
             if icode:
                 ligand_id += f"_{icode}"
-            
+
             # Get CCD code from residue name
             ccd_code = ligand.resn[0]
-            
-            ligands.append({
-                "id": ligand_id,
-                "ccd": ccd_code
-            })
 
-    logger.debug(f"Extracted {len(sequences)} protein chains and {len(ligands)} ligands (include_ligands={include_ligands})")
+            ligands.append({"id": ligand_id, "ccd": ccd_code})
+
+    logger.debug(
+        f"Extracted {len(sequences)} protein chains and {len(ligands)} ligands (include_ligands={include_ligands})"
+    )
     return sequences, ligands
 
 

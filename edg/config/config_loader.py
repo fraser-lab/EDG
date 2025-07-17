@@ -6,9 +6,9 @@ schedule objects.
 """
 
 from pathlib import Path
-from typing import Dict, Any, Union, Optional, List
+from typing import Dict, Any, Union, Optional
 import yaml
-from dataclasses import fields, is_dataclass, asdict
+from dataclasses import asdict
 
 from .config_schema import ExperimentConfig, BatchExperimentConfig
 from .schedules import ParameterSchedule, parse_schedule_config
@@ -101,7 +101,7 @@ def merge_overrides(
         # Map common CLI parameter names to config paths
         if "." not in key:
             key = map_override_key(key)
-        
+
         # Handle dot notation for nested parameters
         if "." in key:
             parts = key.split(".")
@@ -181,12 +181,12 @@ def map_override_key(key: str) -> str:
 
 def infer_schedule_type(config_dict: Dict[str, Any]) -> Optional[str]:
     """Infer schedule type from configuration fields.
-    
+
     Parameters
     ----------
     config_dict : Dict[str, Any]
         Dictionary that may represent a schedule configuration
-        
+
     Returns
     -------
     Optional[str]
@@ -194,27 +194,29 @@ def infer_schedule_type(config_dict: Dict[str, Any]) -> Optional[str]:
     """
     if not isinstance(config_dict, dict):
         return None
-    
+
     # Check for exponential with bounds
-    if all(field in config_dict for field in ["start", "end", "alpha", "start_t", "end_t"]):
+    if all(
+        field in config_dict for field in ["start", "end", "alpha", "start_t", "end_t"]
+    ):
         return "exponential_bounds"
-    
+
     # Check for basic exponential
     if all(field in config_dict for field in ["start", "end", "alpha"]):
         return "exponential"
-    
+
     # Check for piecewise step
     if "thresholds" in config_dict and "values" in config_dict:
         return "piecewise_step"
-    
-    # Check for piecewise 
+
+    # Check for piecewise
     if "breakpoints" in config_dict and "values" in config_dict:
         return "piecewise"
-    
+
     # Check for resolution scaling
     if "resolution_schedule" in config_dict and "reference_resolution" in config_dict:
         return "resolution_scaling"
-    
+
     return None
 
 
@@ -437,7 +439,7 @@ def load_batch_config(
         config = create_batch_experiment_config(config_data)
     except TypeError as e:
         raise ValueError(f"Invalid batch configuration: {e}")
-    
+
     # Apply overrides to shared_config if they exist
     if overrides and config.shared_config:
         # Apply overrides to the shared config
@@ -457,7 +459,9 @@ def load_batch_config(
     return config
 
 
-def create_batch_experiment_config(config_data: Dict[str, Any]) -> BatchExperimentConfig:
+def create_batch_experiment_config(
+    config_data: Dict[str, Any],
+) -> BatchExperimentConfig:
     """Create BatchExperimentConfig with proper nested dataclass construction.
 
     Parameters
@@ -480,20 +484,26 @@ def create_batch_experiment_config(config_data: Dict[str, Any]) -> BatchExperime
 
     # Get valid fields for BatchExperimentConfig
     from .config_schema import BatchExperimentConfig
+
     valid_fields = set(BatchExperimentConfig.__dataclass_fields__.keys())
-    
+
     # Create main batch config with only valid fields
-    batch_config_data = {k: v for k, v in config_data.items() 
-                        if k in valid_fields and k not in ["shared_config", "experiments"]}
+    batch_config_data = {
+        k: v
+        for k, v in config_data.items()
+        if k in valid_fields and k not in ["shared_config", "experiments"]
+    }
     batch_config_data["shared_config"] = shared_config
-    batch_config_data["experiments"] = []  # Will be populated via get_experiment_configs_from_yaml
+    batch_config_data[
+        "experiments"
+    ] = []  # Will be populated via get_experiment_configs_from_yaml
 
     # Create batch config
     batch_config = BatchExperimentConfig(**batch_config_data)
-    
+
     # Store the raw YAML data for later use
     batch_config._experiment_yaml_data = experiment_yaml_data
-    
+
     return batch_config
 
 
@@ -529,15 +539,22 @@ def detect_config_type(config_path: Union[str, Path]) -> str:
         raise ValueError(f"Empty or invalid YAML file: {config_path}")
 
     # Check for batch-specific fields
-    batch_indicators = ["protein_directory", "experiments", "shared_config", "output_base_dir"]
-    
+    batch_indicators = [
+        "protein_directory",
+        "experiments",
+        "shared_config",
+        "output_base_dir",
+    ]
+
     if any(key in config_data for key in batch_indicators):
         return "batch"
     else:
         return "single"
 
 
-def save_batch_config(config: BatchExperimentConfig, output_path: Union[str, Path]) -> None:
+def save_batch_config(
+    config: BatchExperimentConfig, output_path: Union[str, Path]
+) -> None:
     """Save batch configuration to YAML file.
 
     Parameters

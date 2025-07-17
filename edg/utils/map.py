@@ -17,7 +17,6 @@ import subprocess
 import urllib.request
 import gemmi
 import logging
-import os
 
 
 @dataclass

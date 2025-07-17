@@ -10,8 +10,7 @@ This module provides the main CLI entry point that supports:
 import argparse
 import sys
 import logging
-from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 import traceback
 import yaml
 
@@ -21,8 +20,6 @@ from edg.config import (
     detect_config_type,
     save_config,
     save_batch_config,
-    ExperimentConfig,
-    BatchExperimentConfig,
 )
 from edg.experiment_runner import run_experiment
 from edg.batch_runner import run_batch_experiment
@@ -101,9 +98,9 @@ Common parameters:
     )
 
     parser.add_argument(
-        "--batch", 
-        action="store_true", 
-        help="Enable batch processing mode (auto-detected if not specified)"
+        "--batch",
+        action="store_true",
+        help="Enable batch processing mode (auto-detected if not specified)",
     )
 
     # Common parameter overrides
@@ -201,7 +198,11 @@ Common parameters:
     output_group = parser.add_argument_group("Output Parameters")
     output_group.add_argument("--output-dir", type=str, help="Output directory")
     output_group.add_argument("--input-data-dir", type=str, help="Input data directory")
-    output_group.add_argument("--shared-input-dir", type=str, help="Shared input directory for parameter sweeps")
+    output_group.add_argument(
+        "--shared-input-dir",
+        type=str,
+        help="Shared input directory for parameter sweeps",
+    )
     output_group.add_argument("--name", type=str, help="Experiment name")
 
     substructure_group = parser.add_argument_group("Substructure Parameters")
@@ -402,11 +403,11 @@ def main() -> int:
         if config_type == "batch":
             logger.info(f"Loading batch configuration from {args.config}")
             config = load_batch_config(args.config, overrides)
-            
+
             logger.info(f"Loaded batch experiment: {config.name}")
             experiment_configs = config.get_experiment_configs()
             logger.info(f"Found {len(experiment_configs)} experiments in batch")
-            
+
             if overrides:
                 logger.info(f"Applied overrides: {list(overrides.keys())}")
 
@@ -428,10 +429,12 @@ def main() -> int:
 
             logger.info("Batch experiment completed!")
             print(f"✓ Batch '{config.name}' completed")
-            print(f"✓ {results['completed_experiments']}/{results['total_experiments']} experiments successful")
+            print(
+                f"✓ {results['completed_experiments']}/{results['total_experiments']} experiments successful"
+            )
             print(f"✓ Results saved to: {config.output_base_dir}")
-            
-            if results['failed_experiments'] > 0:
+
+            if results["failed_experiments"] > 0:
                 print(f"⚠ {results['failed_experiments']} experiments failed")
                 return 1
 

@@ -1,6 +1,6 @@
 # type: ignore
 
-from typing import Callable, Dict, Optional, Tuple, Union
+from typing import Optional, Tuple, Union
 import torch
 from einops import einsum
 import torch.nn.functional as F
@@ -8,7 +8,6 @@ import torch.nn.functional as F
 from math import sqrt
 
 from boltz.model.modules.utils import (
-    center_random_augmentation,
     compute_random_augmentation,
 )
 from boltz.model.potentials.schedules import ParameterSchedule
@@ -19,7 +18,6 @@ from edg.edg.modules.diffusion import DiffusionStepper
 from edg.edg.modules.adaptive_solver import (
     create_adaptive_solver,
     AdaptiveSolverConfig,
-    AdaptiveGradientSolver,
 )
 
 

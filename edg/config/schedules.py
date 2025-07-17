@@ -4,11 +4,10 @@ This module provides YAML-serializable configurations for parameter schedules
 that can be converted to the actual schedule objects used by the optimizer.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import List, Union, Optional, Any, Dict
 from abc import ABC, abstractmethod
 
-import torch
 from boltz.model.potentials.schedules import (
     PiecewiseSchedule,
     PiecewiseStepFunction,
@@ -142,12 +141,12 @@ class ResolutionScalingConfig(ParameterSchedule):
 
 def infer_schedule_type(config_dict: Dict[str, Any]) -> Optional[str]:
     """Infer schedule type from configuration fields.
-    
+
     Parameters
     ----------
     config_dict : Dict[str, Any]
         Dictionary that may represent a schedule configuration
-        
+
     Returns
     -------
     Optional[str]
@@ -155,27 +154,29 @@ def infer_schedule_type(config_dict: Dict[str, Any]) -> Optional[str]:
     """
     if not isinstance(config_dict, dict):
         return None
-    
+
     # Check for exponential with bounds
-    if all(field in config_dict for field in ["start", "end", "alpha", "start_t", "end_t"]):
+    if all(
+        field in config_dict for field in ["start", "end", "alpha", "start_t", "end_t"]
+    ):
         return "exponential_bounds"
-    
+
     # Check for basic exponential
     if all(field in config_dict for field in ["start", "end", "alpha"]):
         return "exponential"
-    
+
     # Check for piecewise step
     if "thresholds" in config_dict and "values" in config_dict:
         return "piecewise_step"
-    
-    # Check for piecewise 
+
+    # Check for piecewise
     if "breakpoints" in config_dict and "values" in config_dict:
         return "piecewise"
-    
+
     # Check for resolution scaling
     if "resolution_schedule" in config_dict and "reference_resolution" in config_dict:
         return "resolution_scaling"
-    
+
     return None
 
 

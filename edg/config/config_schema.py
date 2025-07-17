@@ -19,6 +19,9 @@ class ModelConfig:
     checkpoint_path: Optional[str] = None  # Auto-detect if None
     ccd_path: Optional[str] = None  # Auto-detect if None
     device: Optional[str] = None  # Auto-detect if None
+    pre_loaded_model: Optional[object] = (
+        None  # Pre-loaded model instance for parallel execution
+    )
 
 
 @dataclass
@@ -157,7 +160,9 @@ class ExperimentConfig:
     output_dir: str
     input_data_dir: str  # Path for temporary input data (YAML file)
     boltz_input_yaml: Optional[str] = None  # Optional path to existing Boltz input YAML
-    shared_input_dir: Optional[str] = None  # Optional path to shared input directory for reusing processed data
+    shared_input_dir: Optional[str] = (
+        None  # Optional path to shared input directory for reusing processed data
+    )
 
     # Optional configurations with defaults
     model: ModelConfig = field(default_factory=ModelConfig)
@@ -182,10 +187,16 @@ class ExperimentConfig:
         errors = []
 
         # Check required files exist
-        if self.structure.structure_path is not None and not Path(self.structure.structure_path).exists():
+        if (
+            self.structure.structure_path is not None
+            and not Path(self.structure.structure_path).exists()
+        ):
             errors.append(f"Structure file not found: {self.structure.structure_path}")
 
-        if self.density.map_path is not None and not Path(self.density.map_path).exists():
+        if (
+            self.density.map_path is not None
+            and not Path(self.density.map_path).exists()
+        ):
             errors.append(f"Density map file not found: {self.density.map_path}")
 
         # Check density resolution for CCP4/MRC files
@@ -218,137 +229,163 @@ class ExperimentConfig:
 @dataclass
 class BatchExperimentConfig:
     """Configuration for running multiple experiments in batch."""
-    
+
     # Required configurations
     name: str
-    
+
     # Batch-specific configuration
     experiments: List[ExperimentConfig] = field(default_factory=list)
-    
+
     # Optional: Auto-discovery configuration
-    protein_directory: Optional[str] = None  # Directory containing protein subdirectories
+    protein_directory: Optional[str] = (
+        None  # Directory containing protein subdirectories
+    )
     structure_pattern: str = "{protein_id}_main.cif"  # Pattern for structure files
     density_pattern: str = "{protein_id}_main_2.0A.ccp4"  # Pattern for density files
-    
+
     # Shared configuration that applies to all experiments
     shared_config: Optional[ExperimentConfig] = None
-    
+
     # Batch execution configuration
     output_base_dir: str = "results/batch"
     input_base_dir: str = "input/batch"
     continue_on_error: bool = True
-    max_parallel: int = 1  # Future: support for parallel execution
-    
+    max_parallel: int = 1  # Number of parallel experiments (uses multiple GPUs)
+
     def validate(self) -> List[str]:
         """Validate the batch configuration and return any errors.
-        
+
         Returns
         -------
         List[str]
             List of validation error messages. Empty if valid.
         """
         errors = []
-        
+
         # Check that we have experiments or auto-discovery config
-        has_experiments = (self.experiments or 
-                          (hasattr(self, '_experiment_yaml_data') and self._experiment_yaml_data))
+        has_experiments = self.experiments or (
+            hasattr(self, "_experiment_yaml_data") and self._experiment_yaml_data
+        )
         if not has_experiments and not self.protein_directory:
-            errors.append("Must specify either 'experiments' list or 'protein_directory' for auto-discovery")
-        
+            errors.append(
+                "Must specify either 'experiments' list or 'protein_directory' for auto-discovery"
+            )
+
         # Validate protein directory if specified
         if self.protein_directory:
             if not Path(self.protein_directory).exists():
                 errors.append(f"Protein directory not found: {self.protein_directory}")
             elif not Path(self.protein_directory).is_dir():
-                errors.append(f"Protein directory is not a directory: {self.protein_directory}")
-        
+                errors.append(
+                    f"Protein directory is not a directory: {self.protein_directory}"
+                )
+
         # Validate shared config if provided (skip file existence checks for placeholders and null values)
         if self.shared_config:
             shared_errors = self.shared_config.validate()
             # Filter out file existence errors for placeholder paths AND null values
             filtered_shared_errors = [
-                error for error in shared_errors 
-                if not (("not found" in error) and 
-                        ("placeholder" in error or "None" in error))
+                error
+                for error in shared_errors
+                if not (
+                    ("not found" in error)
+                    and ("placeholder" in error or "None" in error)
+                )
             ]
             if filtered_shared_errors:
-                errors.extend([f"Shared config error: {error}" for error in filtered_shared_errors])
-        
+                errors.extend(
+                    [
+                        f"Shared config error: {error}"
+                        for error in filtered_shared_errors
+                    ]
+                )
+
         # Validate individual experiments
         for i, experiment in enumerate(self.experiments):
             exp_errors = experiment.validate()
             if exp_errors:
-                errors.extend([f"Experiment {i} ({experiment.name}): {error}" for error in exp_errors])
-        
+                errors.extend(
+                    [
+                        f"Experiment {i} ({experiment.name}): {error}"
+                        for error in exp_errors
+                    ]
+                )
+
         # Check parallel execution setting
         if self.max_parallel < 1:
             errors.append("max_parallel must be at least 1")
-        
+
         return errors
-    
+
     def get_experiment_configs(self) -> List[ExperimentConfig]:
         """Get all experiment configurations, including auto-discovered ones.
-        
+
         Returns
         -------
         List[ExperimentConfig]
             List of all experiment configurations ready for execution
         """
         configs = []
-        
+
         # Use YAML-based merging if available (preferred method)
-        if hasattr(self, '_experiment_yaml_data') and self._experiment_yaml_data:
-            configs.extend(self.get_experiment_configs_from_yaml(self._experiment_yaml_data))
+        if hasattr(self, "_experiment_yaml_data") and self._experiment_yaml_data:
+            configs.extend(
+                self.get_experiment_configs_from_yaml(self._experiment_yaml_data)
+            )
         else:
             # Fallback to dataclass-based merging for legacy support
             for experiment in self.experiments:
                 merged_config = self._merge_with_shared_config(experiment)
                 configs.append(merged_config)
-        
+
         # Add auto-discovered experiments with shared config merging
         if self.protein_directory:
             discovered_experiments = self._discover_protein_experiments()
             for experiment in discovered_experiments:
                 merged_config = self._merge_with_shared_config(experiment)
                 configs.append(merged_config)
-        
+
         return configs
-    
-    def get_experiment_configs_from_yaml(self, experiment_yaml_data: List[Dict[str, Any]]) -> List[ExperimentConfig]:
+
+    def get_experiment_configs_from_yaml(
+        self, experiment_yaml_data: List[Dict[str, Any]]
+    ) -> List[ExperimentConfig]:
         """Get experiment configurations from raw YAML data with proper shared config merging.
-        
+
         This method works with the original YAML data to avoid dataclass default contamination.
-        
+
         Parameters
         ----------
         experiment_yaml_data : List[Dict[str, Any]]
             List of experiment configuration dictionaries from YAML
-            
+
         Returns
         -------
         List[ExperimentConfig]
             List of all experiment configurations ready for execution
         """
         configs = []
-        
+
         # Merge each experiment YAML with shared config
         for exp_yaml in experiment_yaml_data:
             merged_config = self._merge_yaml_with_shared_config(exp_yaml)
             configs.append(merged_config)
-        
+
         return configs
-    
-    def _merge_yaml_with_shared_config(self, experiment_yaml: Dict[str, Any]) -> ExperimentConfig:
+
+    def _merge_yaml_with_shared_config(
+        self, experiment_yaml: Dict[str, Any]
+    ) -> ExperimentConfig:
         """Merge experiment YAML data with shared config, preserving explicit values only.
-        
+
         This method ensures that only explicitly specified values in the experiment YAML
         override the shared config, avoiding dataclass default contamination.
-        
+
         Parameters
         ----------
         experiment_yaml : Dict[str, Any]
             Raw experiment configuration from YAML
-            
+
         Returns
         -------
         ExperimentConfig
@@ -357,32 +394,37 @@ class BatchExperimentConfig:
         if self.shared_config is None:
             # No shared config, just create from YAML
             from .config_loader import parse_schedule_configs, create_experiment_config
+
             parsed_yaml = parse_schedule_configs(experiment_yaml)
             return create_experiment_config(parsed_yaml)
-        
+
         # Convert shared config to dict for merging
         from dataclasses import asdict
+
         shared_dict = asdict(self.shared_config)
-        
+
         # Use shared config as base, only override with explicitly set experiment values
         merged_dict = self._deep_merge_dicts(shared_dict, experiment_yaml)
-        
+
         # Parse schedule configurations in the merged dict
         from .config_loader import parse_schedule_configs, create_experiment_config
+
         merged_dict = parse_schedule_configs(merged_dict)
-        
+
         return create_experiment_config(merged_dict)
-    
-    def _merge_with_shared_config(self, experiment_config: ExperimentConfig) -> ExperimentConfig:
+
+    def _merge_with_shared_config(
+        self, experiment_config: ExperimentConfig
+    ) -> ExperimentConfig:
         """Merge an experiment config with shared config (legacy method).
-        
+
         This method is kept for backward compatibility and auto-discovered experiments.
-        
+
         Parameters
         ----------
         experiment_config : ExperimentConfig
             Individual experiment configuration
-            
+
         Returns
         -------
         ExperimentConfig
@@ -390,44 +432,54 @@ class BatchExperimentConfig:
         """
         if self.shared_config is None:
             return experiment_config
-            
+
         # Convert both configs to dictionaries for merging
         from dataclasses import asdict
+
         shared_dict = asdict(self.shared_config)
         experiment_dict = asdict(experiment_config)
-        
+
         # Simple deep merge - shared config provides defaults, experiment config overrides
         merged_dict = self._deep_merge_dicts(shared_dict, experiment_dict)
-        
+
         # Parse schedule configurations in the merged dict
         from .config_loader import parse_schedule_configs, create_experiment_config
+
         merged_dict = parse_schedule_configs(merged_dict)
-        
+
         return create_experiment_config(merged_dict)
-        
-    def _deep_merge_dicts(self, base_dict: Dict[str, Any], override_dict: Dict[str, Any]) -> Dict[str, Any]:
+
+    def _deep_merge_dicts(
+        self, base_dict: Dict[str, Any], override_dict: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """Deep merge two dictionaries, with override_dict taking precedence.
-        
+
         Parameters
         ----------
         base_dict : Dict[str, Any]
             Base dictionary (shared config)
         override_dict : Dict[str, Any]
             Override dictionary (individual experiment config)
-            
+
         Returns
         -------
         Dict[str, Any]
             Merged dictionary
         """
         import copy
-        
+
         result = copy.deepcopy(base_dict)
-        
+
         for key, value in override_dict.items():
-            if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+            if (
+                key in result
+                and isinstance(result[key], dict)
+                and isinstance(value, dict)
+            ):
                 # Special handling for schedule configurations
-                if self._is_schedule_config(value) or self._is_schedule_config(result[key]):
+                if self._is_schedule_config(value) or self._is_schedule_config(
+                    result[key]
+                ):
                     # Don't merge schedule configs - let experiment config fully override
                     result[key] = value
                 else:
@@ -436,17 +488,17 @@ class BatchExperimentConfig:
             elif value is not None:  # Only override if experiment value is not None
                 result[key] = value
             # If value is None, keep the base_dict value (don't override with None)
-                
+
         return result
-        
+
     def _is_schedule_config(self, config: Dict[str, Any]) -> bool:
         """Check if a dictionary looks like a schedule configuration.
-        
+
         Parameters
         ----------
         config : Dict[str, Any]
             Dictionary to check
-            
+
         Returns
         -------
         bool
@@ -454,14 +506,22 @@ class BatchExperimentConfig:
         """
         if not isinstance(config, dict):
             return False
-            
+
         # Check for schedule-specific keys
-        schedule_keys = ['value', 'breakpoints', 'values', 'start', 'end', 'alpha', 'thresholds']
+        schedule_keys = [
+            "value",
+            "breakpoints",
+            "values",
+            "start",
+            "end",
+            "alpha",
+            "thresholds",
+        ]
         return any(key in config for key in schedule_keys)
-        
+
     def _discover_protein_experiments(self) -> List[ExperimentConfig]:
         """Discover protein experiments from directory structure.
-        
+
         Returns
         -------
         List[ExperimentConfig]
@@ -469,21 +529,25 @@ class BatchExperimentConfig:
         """
         from pathlib import Path
         import copy
-        
+
         experiments = []
         protein_dir = Path(self.protein_directory)
-        
+
         # Find all protein subdirectories
         for protein_subdir in protein_dir.iterdir():
             if not protein_subdir.is_dir():
                 continue
-                
+
             protein_id = protein_subdir.name
-            
+
             # Look for structure and density files
-            structure_file = protein_subdir / self.structure_pattern.format(protein_id=protein_id)
-            density_file = protein_subdir / self.density_pattern.format(protein_id=protein_id)
-            
+            structure_file = protein_subdir / self.structure_pattern.format(
+                protein_id=protein_id
+            )
+            density_file = protein_subdir / self.density_pattern.format(
+                protein_id=protein_id
+            )
+
             if structure_file.exists() and density_file.exists():
                 # Create experiment config
                 if self.shared_config:
@@ -493,17 +557,21 @@ class BatchExperimentConfig:
                     exp_config.structure.structure_path = str(structure_file)
                     exp_config.density.map_path = str(density_file)
                     exp_config.output_dir = str(Path(self.output_base_dir) / protein_id)
-                    exp_config.input_data_dir = str(Path(self.input_base_dir) / protein_id)
+                    exp_config.input_data_dir = str(
+                        Path(self.input_base_dir) / protein_id
+                    )
                 else:
                     # Create minimal config
                     exp_config = ExperimentConfig(
                         name=protein_id,
                         structure=StructureConfig(structure_path=str(structure_file)),
-                        density=DensityConfig(map_path=str(density_file), resolution=2.0),
+                        density=DensityConfig(
+                            map_path=str(density_file), resolution=2.0
+                        ),
                         output_dir=str(Path(self.output_base_dir) / protein_id),
-                        input_data_dir=str(Path(self.input_base_dir) / protein_id)
+                        input_data_dir=str(Path(self.input_base_dir) / protein_id),
                     )
-                
+
                 experiments.append(exp_config)
-        
+
         return experiments

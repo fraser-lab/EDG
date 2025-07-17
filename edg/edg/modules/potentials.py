@@ -5,12 +5,9 @@ Author: Karson Chrispens (karson.chrispens@ucsf.edu)
 """
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
-from typing import Optional, Dict, Any, Set, List, Union, Tuple, cast
-from copy import deepcopy
+from typing import Optional, Dict, Any, List, Union, Tuple
 import numpy as np
 import torch
-import torch.nn.functional as F
 
 from boltz.data import const
 from boltz.model.potentials.schedules import *
@@ -20,7 +17,7 @@ from edg.utils.interpolation import (
 )
 
 from .density.density import XMap_torch, DifferentiableTransformer
-from .density.loss import batched_hybrid_loss, batched_squared_error
+from .density.loss import batched_squared_error
 
 
 class Potential(ABC):

@@ -1,15 +1,12 @@
 import pytest
 import edg
-import gemmi
-import numpy as np
 import torch
 
-from edg import DensityGuidedDiffusion
 from pathlib import Path
 from edg.utils.utility import try_gpu
-from edg.edg.modules.density.density import downsample_fft, to_density
+from edg.edg.modules.density.density import to_density
 from edg.data.io import structure_to_density_input
-from einops import rearrange, repeat
+from einops import rearrange
 
 
 @pytest.fixture(scope="class")

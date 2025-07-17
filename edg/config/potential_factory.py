@@ -4,9 +4,8 @@ This module provides utilities to create potential objects with
 proper scheduling from configuration specifications.
 """
 
-from typing import List, Dict, Any, Optional, Union
+from typing import List, Any, Optional, Union
 import numpy as np
-from pathlib import Path
 
 from .config_schema import ExperimentConfig, DensityGuidanceConfig
 from .schedules import ParameterSchedule
@@ -16,7 +15,6 @@ from edg.edg.modules.potentials import (
     get_potentials,
 )
 from edg.edg.modules.density.density import XMap_torch
-from edg.qfit.volume import XMap
 
 
 def create_potentials_from_config(

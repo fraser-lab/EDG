@@ -1,12 +1,9 @@
 import numpy as np
-import copy
-import math
 import logging
 import itertools as itl
 from .base_structure import _BaseStructure
 from .math import *
 from .rotamers import ROTAMERS
-import time
 
 
 logger = logging.getLogger(__name__)
@@ -284,25 +281,29 @@ class _RotamerResidue(_BaseResidue):
                         self.complete_residue_recursive(atom)
                     except RuntimeError as e:
                         failed_atoms.append((atom, str(e)))
-                        logger.warning(f"Failed to rebuild atom {atom} with NaN coordinates: {e}")
-        
+                        logger.warning(
+                            f"Failed to rebuild atom {atom} with NaN coordinates: {e}"
+                        )
+
         if failed_atoms:
             failed_names = [atom for atom, _ in failed_atoms]
             logger.warning(
                 f"Complex geometric reconstruction failed for {len(failed_atoms)} atoms: {failed_names}. "
                 f"Attempting fallback placement with ideal geometry..."
             )
-            
+
             # Try fallback placement using ideal geometry
             fallback_failed = []
             for atom, error_msg in failed_atoms:
                 try:
                     self._add_atom_with_ideal_geometry(atom)
-                    logger.info(f"Successfully placed {atom} using ideal geometry fallback")
+                    logger.info(
+                        f"Successfully placed {atom} using ideal geometry fallback"
+                    )
                 except Exception as e:
                     fallback_failed.append((atom, str(e)))
                     logger.warning(f"Fallback placement also failed for {atom}: {e}")
-            
+
             if fallback_failed:
                 fallback_names = [atom for atom, _ in fallback_failed]
                 logger.warning(
@@ -469,7 +470,7 @@ class _RotamerResidue(_BaseResidue):
             f"  angle:{bond_angle}±{bond_angle_sd}\n"
             f"  dihedral_angle:{dihed_angle}"
         )
-        
+
         # Try primary geometric rebuilding
         try:
             new_coor = self.calc_coordinates(
@@ -488,28 +489,30 @@ class _RotamerResidue(_BaseResidue):
             return
         except RuntimeError as e:
             logger.warning(f"Primary geometric rebuild failed for {atom}: {e}")
-        
+
         # Try alternative bond angle atoms if available
         alternative_angles = []
         for angle in self._rotamers["bond_angle"]:
             if angle[0][1] == ref_atom and angle[0][2] == atom:
                 if angle[0][0][0] != "H" and angle[0][0] != bond_angle_atom:
                     alternative_angles.append(angle)
-        
+
         for alt_angle in alternative_angles:
             try:
                 alt_bond_angle_atom = alt_angle[0][0]
                 alt_bond_angle, alt_bond_angle_sd = alt_angle[1]
-                
+
                 if alt_bond_angle_atom not in self.name:
                     continue  # Skip if we don't have this atom
-                
+
                 alt_bond_angle_coor = self.coor[
                     np.argwhere(self.name == alt_bond_angle_atom)[0]
                 ]
-                
-                logger.debug(f"Trying alternative bond angle atom {alt_bond_angle_atom} for {atom}")
-                
+
+                logger.debug(
+                    f"Trying alternative bond angle atom {alt_bond_angle_atom} for {atom}"
+                )
+
                 new_coor = self.calc_coordinates(
                     dihedral_atom_coor.flatten(),
                     alt_bond_angle_coor.flatten(),
@@ -521,12 +524,14 @@ class _RotamerResidue(_BaseResidue):
                     np.deg2rad(dihed_angle),
                 )
                 new_coor = [round(x, 3) for x in new_coor]
-                logger.info(f"Rebuilt {atom} at {new_coor} using alternative angle atom {alt_bond_angle_atom}")
+                logger.info(
+                    f"Rebuilt {atom} at {new_coor} using alternative angle atom {alt_bond_angle_atom}"
+                )
                 self.add_atom(atom, atom[0], new_coor)
                 return
             except RuntimeError:
                 continue  # Try next alternative
-        
+
         # Try approximate positioning as last resort
         try:
             new_coor = self._approximate_atom_position(ref_atom, ref_coor, bond_length)
@@ -535,7 +540,7 @@ class _RotamerResidue(_BaseResidue):
             return
         except Exception:
             pass
-        
+
         # If all attempts fail, log detailed warning and skip atom
         logger.warning(
             f"Unable to rebuild atom {atom} in {self}. "
@@ -548,52 +553,55 @@ class _RotamerResidue(_BaseResidue):
 
     def _approximate_atom_position(self, ref_atom, ref_coor, bond_length):
         """Approximate atom positioning as fallback when geometric rebuild fails.
-        
+
         Uses simple vector math to place atom at approximate position based on
         reference atom and typical bond geometry.
-        
+
         Args:
             ref_atom: Name of reference atom
             ref_coor: Coordinates of reference atom
             bond_length: Expected bond length
-            
+
         Returns:
             np.ndarray: Approximate coordinates for the atom
         """
         # Find other atoms in the residue to determine general direction
         available_atoms = []
         for other_atom in self.name:
-            if other_atom != ref_atom and other_atom not in ["H", "D"]:  # Skip hydrogens/deuterium
+            if other_atom != ref_atom and other_atom not in [
+                "H",
+                "D",
+            ]:  # Skip hydrogens/deuterium
                 other_idx = np.argwhere(self.name == other_atom)[0][0]
                 other_coor = self.coor[other_idx]
                 if not np.any(np.isnan(other_coor)):
                     available_atoms.append((other_atom, other_coor))
-        
+
         if len(available_atoms) == 0:
             raise RuntimeError("No valid atoms available for approximate positioning")
-        
+
         # Calculate center of mass of available atoms
         center_of_mass = np.mean([coor for _, coor in available_atoms], axis=0)
-        
+
         # Direction vector from center of mass to reference atom
         com_to_ref = ref_coor.flatten() - center_of_mass
         com_to_ref_norm = np.linalg.norm(com_to_ref)
-        
+
         if com_to_ref_norm > 0:
             # Place atom in direction away from center of mass
             direction = com_to_ref / com_to_ref_norm
         else:
             # If reference atom is at center of mass, use random direction
             direction = np.array([1.0, 0.0, 0.0])
-        
+
         # Add some randomness to avoid perfect alignment
         random_perturbation = np.random.normal(0, 0.1, 3)
         direction += random_perturbation
         direction = direction / np.linalg.norm(direction)
-        
+
         # Place atom at bond length distance in calculated direction
         approx_coor = ref_coor.flatten() + direction * bond_length
-        
+
         return [round(x, 3) for x in approx_coor]
 
     @staticmethod
@@ -619,21 +627,27 @@ class _RotamerResidue(_BaseResidue):
         # Progressive expansion of search ranges for better success rate
         expansion_factors = [1.0, 1.5, 2.0, 3.0]
         search_points = [5, 8, 10, 12]  # Increase resolution as we expand
-        
+
         for expansion_factor, n_points in zip(expansion_factors, search_points):
             # Expand search ranges
             expanded_sig_L = sig_L * expansion_factor
             expanded_sig_theta = sig_theta * expansion_factor
-            
+
             # Generate parameter options with higher resolution
-            theta_options_larger = np.linspace(theta, theta + expanded_sig_theta, n_points, endpoint=False)
+            theta_options_larger = np.linspace(
+                theta, theta + expanded_sig_theta, n_points, endpoint=False
+            )
             theta_options_smaller = np.linspace(
                 theta, theta - expanded_sig_theta, n_points, endpoint=False
             )[1:]
             theta_options = [theta, *theta_options_larger, *theta_options_smaller]
 
-            L_options_larger = np.linspace(L, L + expanded_sig_L, n_points, endpoint=False)
-            L_options_smaller = np.linspace(L, L - expanded_sig_L, n_points, endpoint=False)[1:]
+            L_options_larger = np.linspace(
+                L, L + expanded_sig_L, n_points, endpoint=False
+            )
+            L_options_smaller = np.linspace(
+                L, L - expanded_sig_L, n_points, endpoint=False
+            )[1:]
             L_options = [L, *L_options_larger, *L_options_smaller]
 
             tries = itl.product(theta_options, L_options)
@@ -822,7 +836,7 @@ class _RotamerResidue(_BaseResidue):
                 f"  chi / calc_chis: {chi}/({calc_chis})\n"
                 f"  correct_chi: {correct_chi}"
             )
-            raise ValueError(f"Couldn't determine a matching chi.")
+            raise ValueError("Couldn't determine a matching chi.")
 
         x = positions[correct_chi][
             0
@@ -951,147 +965,183 @@ class _RotamerResidue(_BaseResidue):
         )  # ensuring this is not a float
         setattr(self, "_selection", selection)
         setattr(self, "natoms", self.natoms + 1)
-        
+
         # Propagate new atom to parent structure levels
         # Note: This is complex because we need to maintain proper indexing
         # For now, skip parent propagation and rely on the residue-level changes
         # The issue will be resolved when build_hierarchy() is called with proper atom counts
-        
+
         logger.info(
             f"Added new atom {name} at {coor} with B-factor {mean_b_new:.2f} and occupancy {target_q_new:.2f}"
         )
 
     def _add_atom_with_ideal_geometry(self, atom_name):
         """Add missing atom using ideal geometry as fallback when complex reconstruction fails.
-        
+
         Uses the rotamer data to get proper bond lengths, angles, and connectivity.
-        
+
         Args:
             atom_name: Name of the atom to add
-            
+
         Raises:
             RuntimeError: If atom cannot be placed even with ideal geometry
         """
-        logger.info(f"Attempting ideal geometry fallback for atom {atom_name} in residue {self}")
-        
+        logger.info(
+            f"Attempting ideal geometry fallback for atom {atom_name} in residue {self}"
+        )
+
         # Get bond distance from rotamer data
-        if not hasattr(self, '_rotamers') or 'bond_dist' not in self._rotamers:
-            raise RuntimeError(f"No rotamer bond distance data available for residue {self.resn[0]}")
-        
+        if not hasattr(self, "_rotamers") or "bond_dist" not in self._rotamers:
+            raise RuntimeError(
+                f"No rotamer bond distance data available for residue {self.resn[0]}"
+            )
+
         # Find which atom this should be bonded to from connectivity
-        if 'connectivity' not in self._rotamers or atom_name not in self._rotamers['connectivity']:
-            raise RuntimeError(f"No connectivity data for atom {atom_name} in residue {self.resn[0]}")
-        
-        connectivity = self._rotamers['connectivity'][atom_name]
+        if (
+            "connectivity" not in self._rotamers
+            or atom_name not in self._rotamers["connectivity"]
+        ):
+            raise RuntimeError(
+                f"No connectivity data for atom {atom_name} in residue {self.resn[0]}"
+            )
+
+        connectivity = self._rotamers["connectivity"][atom_name]
         if len(connectivity) < 2:
             raise RuntimeError(f"Insufficient connectivity data for atom {atom_name}")
-        
+
         ref_atom = connectivity[0]  # First connected atom
-        if ref_atom == 'n/a' or ref_atom == 'START' or ref_atom == 'END':
+        if ref_atom == "n/a" or ref_atom == "START" or ref_atom == "END":
             raise RuntimeError(f"Cannot place backbone-connected atom {atom_name}")
-        
+
         # Check if reference atom exists
         if ref_atom not in self.name:
-            raise RuntimeError(f"Reference atom {ref_atom} not found for placing {atom_name}")
-        
+            raise RuntimeError(
+                f"Reference atom {ref_atom} not found for placing {atom_name}"
+            )
+
         # Get bond distance from rotamer data
-        if ref_atom not in self._rotamers['bond_dist'] or atom_name not in self._rotamers['bond_dist'][ref_atom]:
-            raise RuntimeError(f"No bond distance data for {ref_atom}-{atom_name} in residue {self.resn[0]}")
-        
-        bond_length, bond_sd = self._rotamers['bond_dist'][ref_atom][atom_name]
-        
+        if (
+            ref_atom not in self._rotamers["bond_dist"]
+            or atom_name not in self._rotamers["bond_dist"][ref_atom]
+        ):
+            raise RuntimeError(
+                f"No bond distance data for {ref_atom}-{atom_name} in residue {self.resn[0]}"
+            )
+
+        bond_length, bond_sd = self._rotamers["bond_dist"][ref_atom][atom_name]
+
         # Find bond angle from rotamer data
         bond_angle = None
         angle_atom = None
-        if 'bond_angle' in self._rotamers:
-            for angle_data in self._rotamers['bond_angle']:
+        if "bond_angle" in self._rotamers:
+            for angle_data in self._rotamers["bond_angle"]:
                 atoms_triple, (angle_val, angle_sd) = angle_data
-                if len(atoms_triple) == 3 and atoms_triple[1] == ref_atom and atoms_triple[2] == atom_name:
+                if (
+                    len(atoms_triple) == 3
+                    and atoms_triple[1] == ref_atom
+                    and atoms_triple[2] == atom_name
+                ):
                     angle_atom = atoms_triple[0]
                     bond_angle = angle_val
                     break
-        
+
         if bond_angle is None or angle_atom is None:
             # Use reasonable defaults based on atom types
-            if atom_name.startswith('O'):
+            if atom_name.startswith("O"):
                 bond_angle = 120.0  # sp2 oxygen
-                angle_atom = 'CB' if 'CB' in self.name else 'CA'
-            elif atom_name.startswith('N'):
-                bond_angle = 120.0  # sp2 nitrogen  
-                angle_atom = 'CB' if 'CB' in self.name else 'CA'
+                angle_atom = "CB" if "CB" in self.name else "CA"
+            elif atom_name.startswith("N"):
+                bond_angle = 120.0  # sp2 nitrogen
+                angle_atom = "CB" if "CB" in self.name else "CA"
             else:
                 bond_angle = 109.5  # sp3 carbon
-                angle_atom = 'CB' if 'CB' in self.name else 'CA'
-        
+                angle_atom = "CB" if "CB" in self.name else "CA"
+
         # Check if angle atom exists
         if angle_atom not in self.name:
-            raise RuntimeError(f"Angle atom {angle_atom} not found for placing {atom_name}")
-        
+            raise RuntimeError(
+                f"Angle atom {angle_atom} not found for placing {atom_name}"
+            )
+
         # Find dihedral from rotamer data or use default
         dihedral_angle = 180.0  # Default trans
-        dihedral_atom = 'CA'
-        
-        if 'dihedral' in self._rotamers:
-            for dihedral_data in self._rotamers['dihedral']:
+        dihedral_atom = "CA"
+
+        if "dihedral" in self._rotamers:
+            for dihedral_data in self._rotamers["dihedral"]:
                 atoms_quad, angles = dihedral_data
-                if len(atoms_quad) == 4 and atoms_quad[1] == angle_atom and atoms_quad[2] == ref_atom and atoms_quad[3] == atom_name:
+                if (
+                    len(atoms_quad) == 4
+                    and atoms_quad[1] == angle_atom
+                    and atoms_quad[2] == ref_atom
+                    and atoms_quad[3] == atom_name
+                ):
                     dihedral_atom = atoms_quad[0]
                     dihedral_angle = angles[0]
                     break
-        
+
         # Ensure dihedral atom exists
         if dihedral_atom not in self.name:
             # Try common atoms as fallback
-            for fallback in ['CA', 'CB', 'N']:
-                if fallback in self.name and fallback != ref_atom and fallback != angle_atom:
+            for fallback in ["CA", "CB", "N"]:
+                if (
+                    fallback in self.name
+                    and fallback != ref_atom
+                    and fallback != angle_atom
+                ):
                     dihedral_atom = fallback
                     break
             else:
-                raise RuntimeError(f"No suitable dihedral reference atom found for placing {atom_name}")
-        
+                raise RuntimeError(
+                    f"No suitable dihedral reference atom found for placing {atom_name}"
+                )
+
         # Get coordinates
         ref_idx = np.argwhere(self.name == ref_atom)[0][0]
         ref_coor = self.coor[ref_idx]
-        
+
         angle_idx = np.argwhere(self.name == angle_atom)[0][0]
         angle_coor = self.coor[angle_idx]
-        
+
         dihedral_idx = np.argwhere(self.name == dihedral_atom)[0][0]
         dihedral_coor = self.coor[dihedral_idx]
-        
+
         # Calculate position using rotamer geometry
         new_coor = self._simple_ideal_placement(
-            ref_coor, angle_coor, dihedral_coor,
-            bond_length, bond_angle, dihedral_angle
+            ref_coor, angle_coor, dihedral_coor, bond_length, bond_angle, dihedral_angle
         )
-        
+
         # Determine element from atom name
         element = atom_name[0]  # First character is usually the element
-        if element in ['O', 'N', 'C', 'S', 'P']:
+        if element in ["O", "N", "C", "S", "P"]:
             pass  # Valid elements
         else:
-            element = 'C'  # Default fallback
-        
+            element = "C"  # Default fallback
+
         # Add the atom
         self.add_atom(atom_name, element, new_coor)
-        logger.info(f"Successfully placed {atom_name} at {new_coor} using ideal geometry")
+        logger.info(
+            f"Successfully placed {atom_name} at {new_coor} using ideal geometry"
+        )
 
-    def _simple_ideal_placement(self, ref_coor, angle_coor, dihedral_coor, bond_length, angle_deg, dihedral_deg):
+    def _simple_ideal_placement(
+        self, ref_coor, angle_coor, dihedral_coor, bond_length, angle_deg, dihedral_deg
+    ):
         """Simple geometric calculation for ideal atom placement."""
         import numpy as np
-        
+
         # Convert angles to radians
         angle = np.radians(angle_deg)
         dihedral = np.radians(dihedral_deg)
-        
+
         # Vector from angle_coor to ref_coor
         v1 = ref_coor - angle_coor
         v1_norm = v1 / np.linalg.norm(v1)
-        
+
         # Vector from dihedral_coor to angle_coor
         v2 = angle_coor - dihedral_coor
         v2_norm = v2 / np.linalg.norm(v2)
-        
+
         # Calculate perpendicular vector for dihedral rotation
         cross = np.cross(v2_norm, v1_norm)
         if np.linalg.norm(cross) < 1e-6:
@@ -1101,25 +1151,33 @@ class _RotamerResidue(_BaseResidue):
             else:
                 cross = np.cross(v1_norm, [0, 1, 0])
         cross_norm = cross / np.linalg.norm(cross)
-        
+
         # Rotate v1 by the bond angle
         cos_angle = np.cos(angle)
         sin_angle = np.sin(angle)
-        
+
         # Use Rodrigues' rotation formula
         k = cross_norm
-        v_rot = v1_norm * cos_angle + np.cross(k, v1_norm) * sin_angle + k * np.dot(k, v1_norm) * (1 - cos_angle)
-        
+        v_rot = (
+            v1_norm * cos_angle
+            + np.cross(k, v1_norm) * sin_angle
+            + k * np.dot(k, v1_norm) * (1 - cos_angle)
+        )
+
         # Apply dihedral rotation around v1 axis
         cos_dihedral = np.cos(dihedral)
         sin_dihedral = np.sin(dihedral)
-        
+
         k2 = v1_norm
-        v_final = v_rot * cos_dihedral + np.cross(k2, v_rot) * sin_dihedral + k2 * np.dot(k2, v_rot) * (1 - cos_dihedral)
-        
+        v_final = (
+            v_rot * cos_dihedral
+            + np.cross(k2, v_rot) * sin_dihedral
+            + k2 * np.dot(k2, v_rot) * (1 - cos_dihedral)
+        )
+
         # Scale by bond length and add to reference position
         new_position = ref_coor + v_final * bond_length
-        
+
         return new_position
 
     def reorder(self):

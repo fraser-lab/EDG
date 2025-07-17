@@ -77,9 +77,11 @@ class ParameterSweepAnalyzer:
 
         # Pattern 1: New descriptive directory format - boltz2_2.0A_200steps_3particles_adam_solver_lr0.0001
         # Extract from descriptive directory names first (most reliable for new structure)
-        descriptive_pattern = r"boltz\d+_([\d.]+)A_(\d+)steps_\d+particles_(\w+)_solver_lr([\d.]+)"
+        descriptive_pattern = (
+            r"boltz\d+_([\d.]+)A_(\d+)steps_\d+particles_(\w+)_solver_lr([\d.]+)"
+        )
         descriptive_match = re.search(descriptive_pattern, full_path)
-        
+
         if descriptive_match:
             params = {
                 "resolution": float(descriptive_match.group(1)),
@@ -87,7 +89,7 @@ class ParameterSweepAnalyzer:
                 "solver_type": descriptive_match.group(3),
                 "learning_rate": float(descriptive_match.group(4)),
             }
-            
+
             # Try to extract max_guidance_denoising_ratio from config file
             config_file = path.parent / "experiment_config.yaml"
             if config_file.exists() and HAS_YAML:
@@ -98,21 +100,30 @@ class ParameterSweepAnalyzer:
                         "density_guidance" in config
                         and "max_guidance_denoising_ratio" in config["density_guidance"]
                     ):
-                        guidance_ratio = config["density_guidance"]["max_guidance_denoising_ratio"]
+                        guidance_ratio = config["density_guidance"][
+                            "max_guidance_denoising_ratio"
+                        ]
                         # Handle both direct values and nested schedules
-                        if isinstance(guidance_ratio, dict) and "values" in guidance_ratio:
+                        if (
+                            isinstance(guidance_ratio, dict)
+                            and "values" in guidance_ratio
+                        ):
                             # Handle schedule case - take the first non-zero value
                             values = guidance_ratio["values"]
                             if isinstance(values, list):
                                 for val in values:
                                     if isinstance(val, (int, float)) and val > 0:
-                                        params["max_guidance_denoising_ratio"] = float(val)
+                                        params["max_guidance_denoising_ratio"] = float(
+                                            val
+                                        )
                                         break
                         elif isinstance(guidance_ratio, (int, float)):
-                            params["max_guidance_denoising_ratio"] = float(guidance_ratio)
+                            params["max_guidance_denoising_ratio"] = float(
+                                guidance_ratio
+                            )
                 except Exception as e:
                     print(f"Warning: Could not parse config file {config_file}: {e}")
-            
+
             return params
 
         # Pattern 2: Legacy format - lr{lr}_ratio{ratio}_steps{steps}
@@ -207,10 +218,10 @@ class ParameterSweepAnalyzer:
     def _extract_run_id(self, scores_file: Path) -> Optional[str]:
         """
         Extract run ID from path for multiple runs with same parameters.
-        
+
         Args:
             scores_file: Path to the scores.csv file
-            
+
         Returns:
             Run identifier (e.g., "_1", "_2") or None if not found
         """
@@ -299,7 +310,7 @@ class ParameterSweepAnalyzer:
 
         # Detect directory structure (new shared input caching vs. old structure)
         shared_processing_dir = self.results_dir / "shared_boltz_processing"
-        
+
         if shared_processing_dir.exists():
             print("Detected new shared input caching directory structure")
             # New structure: look for scores.csv in shared_boltz_processing subdirectories
@@ -308,7 +319,7 @@ class ParameterSweepAnalyzer:
             print("Detected legacy directory structure")
             # Legacy structure: recursive search for scores.csv
             scores_files = list(self.results_dir.rglob("scores.csv"))
-            
+
         print(f"Found {len(scores_files)} scores.csv files")
 
         for scores_file in scores_files:
@@ -342,7 +353,13 @@ class ParameterSweepAnalyzer:
 
         # Display basic statistics
         print("\nParameter ranges:")
-        for param in ["learning_rate", "max_guidance_denoising_ratio", "num_steps", "resolution", "solver_type"]:
+        for param in [
+            "learning_rate",
+            "max_guidance_denoising_ratio",
+            "num_steps",
+            "resolution",
+            "solver_type",
+        ]:
             if param in self.df.columns:
                 if param == "solver_type":
                     print(f"  {param}: {self.df[param].unique().tolist()}")
@@ -361,14 +378,16 @@ class ParameterSweepAnalyzer:
         print("BEST PARAMETER CONFIGURATION")
         print("=" * 60)
         print(f"Learning Rate: {best_row['learning_rate']}")
-        if 'max_guidance_denoising_ratio' in best_row:
-            print(f"Max Guidance Denoising Ratio: {best_row['max_guidance_denoising_ratio']}")
-        if 'resolution' in best_row:
+        if "max_guidance_denoising_ratio" in best_row:
+            print(
+                f"Max Guidance Denoising Ratio: {best_row['max_guidance_denoising_ratio']}"
+            )
+        if "resolution" in best_row:
             print(f"Resolution: {best_row['resolution']} Å")
-        if 'solver_type' in best_row:
+        if "solver_type" in best_row:
             print(f"Solver Type: {best_row['solver_type']}")
         print(f"Number of Steps: {best_row['num_steps']}")
-        if 'run_id' in best_row:
+        if "run_id" in best_row:
             print(f"Run ID: {best_row['run_id']}")
         print(f"Best Final Score: {best_row['best_final_score']:.2f}")
         print(f"Mean Final Score: {best_row['mean_final_score']:.2f}")
@@ -404,7 +423,10 @@ class ParameterSweepAnalyzer:
             ax = axes[i // 2, i % 2]
 
             # Determine the best columns to use for pivot table
-            if "max_guidance_denoising_ratio" in self.df.columns and len(self.df["max_guidance_denoising_ratio"].unique()) > 1:
+            if (
+                "max_guidance_denoising_ratio" in self.df.columns
+                and len(self.df["max_guidance_denoising_ratio"].unique()) > 1
+            ):
                 # Traditional 2D heatmap with guidance ratio
                 pivot = self.df.pivot_table(
                     values=metric,
@@ -412,25 +434,28 @@ class ParameterSweepAnalyzer:
                     columns="max_guidance_denoising_ratio",
                     aggfunc="mean",
                 )
-            elif "resolution" in self.df.columns and len(self.df["resolution"].unique()) > 1:
+            elif (
+                "resolution" in self.df.columns
+                and len(self.df["resolution"].unique()) > 1
+            ):
                 # Alternative heatmap with resolution
                 pivot = self.df.pivot_table(
                     values=metric,
-                    index="learning_rate", 
+                    index="learning_rate",
                     columns="resolution",
                     aggfunc="mean",
                 )
             else:
                 # Fallback: single dimension plot
                 grouped = self.df.groupby("learning_rate")[metric].mean()
-                ax.plot(grouped.index, grouped.values, marker='o')
+                ax.plot(grouped.index, grouped.values, marker="o")
                 ax.set_title(f"{metric} vs Learning Rate")
                 ax.set_xlabel("Learning Rate")
                 ax.set_ylabel(metric)
                 continue
 
             # Plot heatmap if we have a valid pivot table
-            if 'pivot' in locals() and pivot is not None and not pivot.empty:
+            if "pivot" in locals() and pivot is not None and not pivot.empty:
                 if HAS_SEABORN:
                     sns.heatmap(
                         pivot,
@@ -465,12 +490,20 @@ class ParameterSweepAnalyzer:
         fig, axes = plt.subplots(2, 2, figsize=(16, 10))
 
         # Choose available parameters dynamically
-        available_params = [col for col in ["learning_rate", "max_guidance_denoising_ratio", "num_steps", "resolution"] 
-                          if col in self.df.columns and len(self.df[col].unique()) > 1]
-        
+        available_params = [
+            col
+            for col in [
+                "learning_rate",
+                "max_guidance_denoising_ratio",
+                "num_steps",
+                "resolution",
+            ]
+            if col in self.df.columns and len(self.df[col].unique()) > 1
+        ]
+
         for i, param in enumerate(available_params[:4]):  # Only plot first 4 parameters
             ax = axes[i // 2, i % 2]
-            
+
             if param == "solver_type" and param in self.df.columns:
                 # Handle categorical parameter
                 if HAS_SEABORN:
@@ -508,14 +541,22 @@ class ParameterSweepAnalyzer:
 
         # Choose 3 parameters for 3D plot
         x_param = "learning_rate"
-        y_param = "max_guidance_denoising_ratio" if "max_guidance_denoising_ratio" in self.df.columns else "resolution"
+        y_param = (
+            "max_guidance_denoising_ratio"
+            if "max_guidance_denoising_ratio" in self.df.columns
+            else "resolution"
+        )
         z_param = "num_steps"
-        
+
         # Fallback if parameters are missing
         if y_param not in self.df.columns:
-            y_param = available_params[1] if len(available_params) > 1 else "learning_rate"
+            y_param = (
+                available_params[1] if len(available_params) > 1 else "learning_rate"
+            )
         if z_param not in self.df.columns:
-            z_param = available_params[2] if len(available_params) > 2 else "learning_rate"
+            z_param = (
+                available_params[2] if len(available_params) > 2 else "learning_rate"
+            )
 
         scatter = ax.scatter(
             self.df[x_param],
@@ -569,14 +610,16 @@ class ParameterSweepAnalyzer:
                 if scores_data:
                     # Create label with available parameters
                     label_parts = [f"lr={row['learning_rate']}"]
-                    if 'max_guidance_denoising_ratio' in row:
-                        label_parts.append(f"ratio={row['max_guidance_denoising_ratio']}")
-                    if 'resolution' in row:
+                    if "max_guidance_denoising_ratio" in row:
+                        label_parts.append(
+                            f"ratio={row['max_guidance_denoising_ratio']}"
+                        )
+                    if "resolution" in row:
                         label_parts.append(f"res={row['resolution']}Å")
                     label_parts.append(f"steps={row['num_steps']}")
-                    if 'run_id' in row:
+                    if "run_id" in row:
                         label_parts.append(f"run{row['run_id']}")
-                    
+
                     label = ", ".join(label_parts)
                     ax.plot(scores_data, label=label, linewidth=2)
             except Exception as e:
@@ -603,7 +646,7 @@ class ParameterSweepAnalyzer:
             groupby_params.append("resolution")
         if "num_steps" in self.df.columns:
             groupby_params.append("num_steps")
-        
+
         summary_stats = (
             self.df.groupby(groupby_params)
             .agg(
@@ -644,9 +687,19 @@ class ParameterSweepAnalyzer:
             # Parameter ranges
             f.write("PARAMETER RANGES\n")
             f.write("-" * 20 + "\n")
-            for param in ["learning_rate", "max_guidance_denoising_ratio", "num_steps", "resolution", "solver_type"]:
+            for param in [
+                "learning_rate",
+                "max_guidance_denoising_ratio",
+                "num_steps",
+                "resolution",
+                "solver_type",
+            ]:
                 if param in self.df.columns:
-                    values = sorted(self.df[param].unique()) if param != "solver_type" else list(self.df[param].unique())
+                    values = (
+                        sorted(self.df[param].unique())
+                        if param != "solver_type"
+                        else list(self.df[param].unique())
+                    )
                     f.write(f"{param}: {values}\n")
             f.write("\n")
 
@@ -655,14 +708,16 @@ class ParameterSweepAnalyzer:
             f.write("BEST CONFIGURATION\n")
             f.write("-" * 20 + "\n")
             f.write(f"Learning Rate: {best_config['learning_rate']}\n")
-            if 'max_guidance_denoising_ratio' in best_config:
-                f.write(f"Max Guidance Denoising Ratio: {best_config['max_guidance_denoising_ratio']}\n")
-            if 'resolution' in best_config:
+            if "max_guidance_denoising_ratio" in best_config:
+                f.write(
+                    f"Max Guidance Denoising Ratio: {best_config['max_guidance_denoising_ratio']}\n"
+                )
+            if "resolution" in best_config:
                 f.write(f"Resolution: {best_config['resolution']} Å\n")
-            if 'solver_type' in best_config:
+            if "solver_type" in best_config:
                 f.write(f"Solver Type: {best_config['solver_type']}\n")
             f.write(f"Number of Steps: {best_config['num_steps']}\n")
-            if 'run_id' in best_config:
+            if "run_id" in best_config:
                 f.write(f"Run ID: {best_config['run_id']}\n")
             f.write(f"Best Final Score: {best_config['best_final_score']:.2f}\n")
             f.write(f"Mean Final Score: {best_config['mean_final_score']:.2f}\n")
@@ -674,22 +729,28 @@ class ParameterSweepAnalyzer:
             top_10 = self.df.nsmallest(10, "best_final_score")
             for i, (_, row) in enumerate(top_10.iterrows(), 1):
                 config_parts = [f"lr={row['learning_rate']}"]
-                if 'max_guidance_denoising_ratio' in row:
+                if "max_guidance_denoising_ratio" in row:
                     config_parts.append(f"ratio={row['max_guidance_denoising_ratio']}")
-                if 'resolution' in row:
+                if "resolution" in row:
                     config_parts.append(f"res={row['resolution']}Å")
                 config_parts.append(f"steps={row['num_steps']}")
-                if 'run_id' in row:
+                if "run_id" in row:
                     config_parts.append(f"run{row['run_id']}")
                 config_parts.append(f"score={row['best_final_score']:.2f}")
-                
+
                 f.write(f"{i:2d}. {', '.join(config_parts)}\n")
             f.write("\n")
 
             # Parameter effect analysis
             f.write("PARAMETER EFFECT ANALYSIS\n")
             f.write("-" * 30 + "\n")
-            for param in ["learning_rate", "max_guidance_denoising_ratio", "num_steps", "resolution", "solver_type"]:
+            for param in [
+                "learning_rate",
+                "max_guidance_denoising_ratio",
+                "num_steps",
+                "resolution",
+                "solver_type",
+            ]:
                 if param in self.df.columns:
                     grouped = self.df.groupby(param)["best_final_score"].agg(
                         ["mean", "std", "min"]

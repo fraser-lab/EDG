@@ -5,7 +5,7 @@ DensityGuidedDiffusion optimizers from ExperimentConfig objects.
 """
 
 from pathlib import Path
-from typing import Optional, Any, Dict
+from typing import Any, Dict
 import logging
 
 from .config_schema import ExperimentConfig
@@ -95,6 +95,7 @@ def create_optimizer_from_config(
         resolution=config.density.resolution,
         step_scale=config.diffusion.step_scale,
         ckpt_path=Path(checkpoint_path),
+        model=config.model.pre_loaded_model,  # Pass pre-loaded model if available
         model_version=config.model.version,
         ccd_path=Path(ccd_path),
         device=device,
@@ -107,9 +108,7 @@ def create_optimizer_from_config(
     return optimizer
 
 
-def process_structure_from_config(
-    structure, config: ExperimentConfig
-):
+def process_structure_from_config(structure, config: ExperimentConfig):
     """Process structure according to configuration.
 
     Parameters
@@ -149,9 +148,7 @@ def process_structure_from_config(
         structure.build_hierarchy()
 
     # Final processing
-    structure = structure.reorder().extract(
-        structure.select("active", True)
-    )
+    structure = structure.reorder().extract(structure.select("active", True))
 
     num_atoms = structure.active.sum()
     logger.info(f"Processed structure: {num_atoms} active atoms")

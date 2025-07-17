@@ -11,34 +11,26 @@ Updated: 19 Dec 2024
 from pathlib import Path
 import os
 import copy
-from functools import partial
-from typing import Optional, Tuple, Union, List
+from typing import Optional, Union
 import warnings
 
 import numpy as np
 import torch
-import torch.nn.functional as F
 from tqdm import tqdm
-from einops import rearrange, repeat
+from einops import repeat
 
 from boltz.main import BoltzDiffusionParams, Boltz2DiffusionParams
 from boltz.model.models.boltz1 import Boltz1
 from boltz.model.models.boltz2 import Boltz2
-from boltz.data.pad import pad_dim
 from boltz.model.potentials.schedules import (
-    PiecewiseStepFunction,
     PiecewiseSchedule,
-    ExponentialInterpolation,
     ExponentialInterpolationWithBounds,
-    ResolutionScaling,
 )
 
 from edg.data import Structure
 from edg.edg.modules.density.density import (
     DifferentiableTransformer,
     XMap_torch,
-    normalize,
-    to_f_density,
     scale_map,
 )
 from edg.data.structure import Ensemble
@@ -49,7 +41,6 @@ from edg.data.sf import (
     ELECTRON_SCATTERING_FACTORS,
     ATOMIC_NUM_TO_ELEMENT,
 )
-from edg.edg.modules.diffusion import DiffusionStepper
 from edg.edg.modules.guided_diffusion import DensityGuidedDiffusionStepper
 from edg.utils.utility import try_gpu
 from edg.edg.modules.potentials import SubstructurePotential, DensityPotential

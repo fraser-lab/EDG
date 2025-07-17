@@ -1,10 +1,8 @@
 import pytest
 import edg
 import gemmi
-import numpy as np
 import torch
 
-from edg import DensityGuidedDiffusion
 from pathlib import Path
 from edg.utils.utility import try_gpu
 from einops import rearrange

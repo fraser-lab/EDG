@@ -6,7 +6,6 @@ import torch.nn.functional as F
 import numpy as np
 from numpy.typing import NDArray
 import warnings
-from einops import rearrange
 
 from edg.qfit.volume import XMap, GridParameters, Resolution
 from edg.qfit.unitcell import UnitCell

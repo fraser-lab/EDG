@@ -25,7 +25,6 @@ from edg.edg.modules.density.density import (
 # Import the new CUDA implementation
 from edg.edg.modules.ops.dilate_points_cuda import (
     dilate_atom_centric,
-    DilateAtomCentricCUDA,
 )
 
 from edg.data.io import structure_to_density_input
@@ -293,7 +292,6 @@ class TestAtomDensityCUDA:
 
         # Plot comparison figures
         import matplotlib.pyplot as plt
-        from matplotlib.gridspec import GridSpec
         from matplotlib.colors import SymLogNorm
 
         # Find maximum value position in result_cuda

@@ -10,10 +10,8 @@ import argparse
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-import tempfile
 import time
-from pathlib import Path
-from typing import Optional, Union, Tuple, List, NamedTuple
+from typing import Optional, Union, List, NamedTuple
 
 import torch
 import numpy as np
@@ -418,9 +416,9 @@ def download_structure_factors(pdb_id: str, output_dir: str) -> Optional[str]:
         total=3,
         status_forcelist=[429, 500, 502, 503, 504],
         backoff_factor=2,
-        allowed_methods=["HEAD", "GET", "OPTIONS"]
+        allowed_methods=["HEAD", "GET", "OPTIONS"],
     )
-    
+
     # Create session with retry strategy
     session = requests.Session()
     adapter = HTTPAdapter(max_retries=retry_strategy)
@@ -580,7 +578,9 @@ def process_single_structure(
             )
             shift = True  # Shift to center in unit cell
 
-        density = density_generator.generate_map(shift=shift, occupancy_scale = 1. / len(ensemble))
+        density = density_generator.generate_map(
+            shift=shift, occupancy_scale=1.0 / len(ensemble)
+        )
         density_file = os.path.join(
             pdb_output_dir, f"{pdb_id.lower()}_ensemble_{resolution}A.ccp4"
         )
