@@ -448,7 +448,7 @@ class DiffusionStepper:
             steering_vars["resample_weights"] = resample_weights
             steering_vars["potentials"] = potentials
 
-        if self.model.steering_args["guidance_update"]:
+        if self.model.steering_args["physical_guidance_update"]:
             scaled_guidance_update = torch.zeros(
                 (diffusion_samples * num_particles, *atom_mask.shape[1:], 3),
                 dtype=torch.float32,
@@ -562,7 +562,7 @@ class DiffusionStepper:
             steering_vars["resample_weights"] = resample_weights
             steering_vars["potentials"] = potentials
 
-        if self.model.steering_args["guidance_update"]:
+        if self.model.steering_args["physical_guidance_update"]:
             scaled_guidance_update = torch.zeros(
                 (diffusion_samples * num_particles, *atom_mask.shape[1:], 3),
                 dtype=torch.float32,
@@ -688,7 +688,7 @@ class DiffusionStepper:
             steering_vars["resample_weights"] = resample_weights
             steering_vars["potentials"] = potentials
 
-        if self.model.steering_args["guidance_update"]:
+        if self.model.steering_args["physical_guidance_update"]:
             scaled_guidance_update = torch.zeros(
                 (diffusion_samples * num_particles, *atom_mask.shape[1:], 3),
                 dtype=torch.float32,

@@ -292,16 +292,19 @@ def save_config(config: ExperimentConfig, output_path: Union[str, Path]) -> None
 
 def convert_schedules_to_dict(data: Any) -> Any:
     """Convert ParameterSchedule objects to dictionaries for YAML serialization.
+    
+    Also handles non-serializable objects like pre-loaded models.
 
     Parameters
     ----------
     data : Any
-        Data that may contain ParameterSchedule objects
+        Data that may contain ParameterSchedule objects or non-serializable objects
 
     Returns
     -------
     Any
-        Data with ParameterSchedule objects converted to dictionaries
+        Data with ParameterSchedule objects converted to dictionaries and
+        non-serializable objects replaced with placeholders
     """
     if isinstance(data, ParameterSchedule):
         # Convert schedule to dict representation
@@ -309,11 +312,30 @@ def convert_schedules_to_dict(data: Any) -> Any:
         schedule_dict["type"] = data.__class__.__name__.replace("Config", "").lower()
         return schedule_dict
     elif isinstance(data, dict):
-        return {k: convert_schedules_to_dict(v) for k, v in data.items()}
+        result = {}
+        for k, v in data.items():
+            # Handle pre-loaded model object specifically
+            if k == "pre_loaded_model" and v is not None:
+                # Replace non-serializable model with placeholder
+                result[k] = f"<pre_loaded_model_instance:{type(v).__name__}>"
+            else:
+                result[k] = convert_schedules_to_dict(v)
+        return result
     elif isinstance(data, list):
         return [convert_schedules_to_dict(item) for item in data]
     else:
-        return data
+        # Check if object is serializable by trying to represent it
+        try:
+            # Test if object can be represented as dict for YAML
+            if hasattr(data, '__dict__'):
+                # Try to convert to dict - if it fails, it's not serializable
+                test_dict = dict(data.__dict__)
+                return data
+            else:
+                return data
+        except (TypeError, ValueError):
+            # If not serializable, return a placeholder
+            return f"<non_serializable_object:{type(data).__name__}>"
 
 
 def create_experiment_config(config_data: Dict[str, Any]) -> ExperimentConfig:

@@ -536,7 +536,7 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
             )
 
             if (
-                self.model.steering_args["guidance_update"]
+                self.model.steering_args["physical_guidance_update"]
                 and scaled_guidance_update is not None
             ):
                 scaled_guidance_update = torch.einsum(
@@ -612,7 +612,7 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
                 log_G = energy_traj[:, -2] - energy_traj[:, -1]
 
             # Compute ll difference between guided and unguided transition distribution
-            if self.model.steering_args["guidance_update"] and noise_var > 0:
+            if self.model.steering_args["physical_guidance_update"] and noise_var > 0:
                 ll_difference = (eps**2 - (eps + scaled_guidance_update) ** 2).sum(
                     dim=(-1, -2)
                 ) / (2 * noise_var)
@@ -629,7 +629,7 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
 
         # Compute guidance update to x_0 prediction
         if (
-            self.model.steering_args["guidance_update"]
+            self.model.steering_args["physical_guidance_update"]
             # and self.current_step < num_sampling_steps - 1
         ):
             # Compute original denoising magnitude before guidance
@@ -696,7 +696,7 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
             if atom_coords_denoised is not None:
                 atom_coords_denoised = atom_coords_denoised[resample_indices]
             energy_traj = energy_traj[resample_indices]
-            if self.model.steering_args["guidance_update"]:
+            if self.model.steering_args["physical_guidance_update"]:
                 scaled_guidance_update = scaled_guidance_update[resample_indices]
 
         # cache FK steering variables
@@ -741,7 +741,7 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
         #     if atom_coords_denoised is not None:
         #         atom_coords_denoised = atom_coords_denoised[resample_indices]
         #     energy_traj = energy_traj[resample_indices]
-        #     if self.model.steering_args["guidance_update"]:
+        #     if self.model.steering_args["physical_guidance_update"]:
         #         scaled_guidance_update = scaled_guidance_update[resample_indices]
 
         unpad_coords_next = atom_coords_next[
@@ -1030,7 +1030,7 @@ class DensityGuidedDiffusionStepper(DiffusionStepper):
                     score += component_energy  # Total ensemble energy for reporting
 
         if (
-            self.model.steering_args["guidance_update"]
+            self.model.steering_args["physical_guidance_update"]
             and self.current_step < num_sampling_steps - 1
         ):
             # Compute original denoising magnitude before guidance

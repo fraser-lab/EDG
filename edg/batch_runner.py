@@ -106,9 +106,9 @@ class BatchRunner:
         logger.info(
             f"Batch completed: {summary['completed_experiments']}/{summary['total_experiments']} successful"
         )
-        if summary["failed_experiments"]:
+        if summary["failed_experiment_names"]:
             logger.warning(
-                f"Failed experiments: {', '.join(summary['failed_experiments'])}"
+                f"Failed experiments: {', '.join(summary['failed_experiment_names'])}"
             )
 
         return summary

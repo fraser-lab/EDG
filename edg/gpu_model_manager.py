@@ -128,29 +128,50 @@ class GPUModelManager:
         logger.debug(f"Loading {model_version} model on {device}")
 
         # Import here to avoid circular imports
-        from boltz.main import BoltzDiffusionParams, Boltz2DiffusionParams
         from boltz.main import (
-            BoltzPairformerParams,
-            BoltzMSAParams,
+            BoltzDiffusionParams,
+            Boltz2DiffusionParams,
             BoltzSteeringParams,
+            PairformerArgs,
+            PairformerArgsV2,
+            MSAModuleArgs,
         )
-        from boltz.main import BoltzPredictParams
+        from edg.edg.modules.diffusion import PredictArgs
         from dataclasses import asdict
 
         # Create default parameters (similar to DiffusionStepper)
-        predict_args = BoltzPredictParams()
-        pairformer_args = BoltzPairformerParams()
-        msa_args = BoltzMSAParams()
-        steering_args = model_kwargs.get("steering_args", BoltzSteeringParams())
+        predict_args = PredictArgs()
+
+        # Set args based on model version
+        if model_version == "boltz1":
+            pairformer_args = PairformerArgs()
+        else:  # boltz2
+            pairformer_args = PairformerArgsV2()
+
+        # MSAModuleArgs with correct parameters based on boltz repo
+        msa_args = MSAModuleArgs(
+            subsample_msa=True,
+            num_subsampled_msa=1024,
+            use_paired_feature=(model_version == "boltz2"),
+        )
+
+        # Create proper BoltzSteeringParams from config (like optimizer_factory.py does)
+        steering_config = model_kwargs.get("steering_args", None)
+        steering_args = BoltzSteeringParams()
+        if steering_config is not None:
+            # Convert config object to BoltzSteeringParams
+            steering_args.fk_steering = steering_config.enabled
+            steering_args.physical_guidance_update = steering_config.guidance_update
+            steering_args.num_particles = steering_config.num_particles
 
         # Create diffusion args based on model version
         if model_version == "boltz1":
             diffusion_args = BoltzDiffusionParams(
-                step_scale=model_kwargs.get("step_scale", 1.638)
+                step_scale=model_kwargs.get("step_scale") or 1.638
             )
         else:  # boltz2
             diffusion_args = Boltz2DiffusionParams(
-                step_scale=model_kwargs.get("step_scale", 1.5)
+                step_scale=model_kwargs.get("step_scale") or 1.5
             )
 
         # Load model
@@ -158,25 +179,25 @@ class GPUModelManager:
             model = Boltz1.load_from_checkpoint(
                 checkpoint_path,
                 strict=True,
-                predict_args=asdict(predict_args),
+                predict_args=asdict(predict_args),  # Convert dataclass to dict
                 map_location="cpu",
                 diffusion_process_args=asdict(diffusion_args),
                 ema=False,
-                use_kernels=True,
+                use_kernels=True,  # Required parameter for Boltz1
                 pairformer_args=asdict(pairformer_args),
-                msa_args=asdict(msa_args),
+                msa_args=asdict(msa_args),  # Correct parameter name
                 steering_args=asdict(steering_args),
             )
         else:  # boltz2
             model = Boltz2.load_from_checkpoint(
                 checkpoint_path,
                 strict=True,
-                predict_args=asdict(predict_args),
+                predict_args=asdict(predict_args),  # Convert dataclass to dict
                 map_location="cpu",
                 diffusion_process_args=asdict(diffusion_args),
                 ema=False,
                 pairformer_args=asdict(pairformer_args),
-                msa_args=asdict(msa_args),
+                msa_args=asdict(msa_args),  # Correct parameter name
                 steering_args=asdict(steering_args),
             )
 
