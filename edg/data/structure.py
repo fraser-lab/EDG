@@ -717,21 +717,132 @@ class Structure(_BaseStructure):
             Structure with missing atoms completed
         """
         structure = self.copy()
-        if not np.all(structure.active):
-            if not np.any(structure.active):
-                print(f"No active atoms in {structure}")
-                return structure
-            else:
-                for residue in structure.residues:
-                    if not np.all(residue.active[:4]):
-                        print(
-                            f"Skipping missing residue {residue.resn[0]} {residue.resi[0]} with missing backbone atoms"
-                        )
-                        continue
-                    if not np.all(residue.active):
-                        print(f"Completing residue {residue.resn[0]} {residue.resi[0]}")
-                        residue.complete_residue()
+        
+        # Check if any residues need completion
+        if not np.any(structure.active):
+            print(f"No active atoms in {structure}")
+            return structure
+            
+        # Track residues that need completion and collect new atoms
+        completed_residues = []
+        
+        # Process each residue to check for missing atoms
+        for residue in structure.residues:
+            if not np.all(residue.active[:4]):
+                print(
+                    f"Skipping missing residue {residue.resn[0]} {residue.resi[0]} with missing backbone atoms"
+                )
+                continue
+            
+            # Check if residue has the expected number of atoms based on rotamer definition
+            expected_atoms = []
+            if hasattr(residue, '_rotamers') and 'atoms' in residue._rotamers:
+                expected_atoms = residue._rotamers['atoms']
+            
+            # If residue is missing atoms from the expected set, complete it
+            if expected_atoms:
+                missing_atoms = [atom for atom in expected_atoms if atom not in residue.name]
+                if missing_atoms:
+                    print(f"Completing residue {residue.resn[0]} {residue.resi[0]} - missing {len(missing_atoms)} atoms: {missing_atoms}")
+                    initial_count = len(residue.name)
+                    residue.complete_residue()
+                    final_count = len(residue.name)
+                    if final_count > initial_count:
+                        completed_residues.append(residue)
+            elif not np.all(residue.active):
+                # Fallback: if residue has inactive atoms, try to complete
+                print(f"Completing residue {residue.resn[0]} {residue.resi[0]} with inactive atoms")
+                initial_count = len(residue.name)
+                residue.complete_residue()
+                final_count = len(residue.name)
+                if final_count > initial_count:
+                    completed_residues.append(residue)
+        
+        # If residues were completed, rebuild the structure to incorporate new atoms
+        if completed_residues:
+            print(f"Rebuilding structure to incorporate atoms from {len(completed_residues)} completed residues")
+            structure = structure._rebuild_structure_from_residues()
+        
         return structure
+
+    def _rebuild_structure_from_residues(self):
+        """Rebuild the Structure's data arrays from all residues to incorporate newly added atoms.
+        
+        This method recreates the Structure's atom arrays by collecting data from all 
+        residues, including any atoms that were added during residue completion.
+        
+        Returns:
+            Structure: A new Structure object with updated atom data
+        """
+        print("Rebuilding structure from residues to incorporate newly added atoms")
+        
+        # Dynamically determine all attributes present in the original structure's data
+        all_attributes = list(self.data.keys())
+        new_data = {attr: [] for attr in all_attributes}
+        
+        # Define appropriate dtypes for known attributes, with fallbacks
+        dtype_map = {
+            "record": '<U6', "name": '<U4', "resn": '<U3', "resi": np.int32,
+            "icode": '<U1', "e": '<U1', "chain": '<U1', "altloc": '<U1',
+            "b": np.float64, "q": np.float64, "charge": np.float64, 
+            "coor": np.float64, "active": bool,
+            # ANISOU parameters (optional)
+            "u00": np.float64, "u11": np.float64, "u22": np.float64,
+            "u01": np.float64, "u02": np.float64, "u12": np.float64
+        }
+        
+        # Process all residues using the Structure's residues property
+        for residue in self.residues:
+            # For each atom in the residue, collect all attribute data
+            for i in range(len(residue.name)):
+                for attr in all_attributes:
+                    # Get attribute value with appropriate fallback
+                    if hasattr(residue, attr):
+                        attr_data = getattr(residue, attr)
+                        if hasattr(attr_data, '__len__') and len(attr_data) > i:
+                            value = attr_data[i]
+                        else:
+                            # Handle scalar or insufficient length
+                            value = attr_data if not hasattr(attr_data, '__len__') else (attr_data[0] if len(attr_data) > 0 else None)
+                    else:
+                        # Provide sensible defaults for missing attributes
+                        if attr == "record":
+                            value = "ATOM"
+                        elif attr in ["icode", "altloc", "e", "chain"]:
+                            value = ""
+                        elif attr in ["charge"] + [f"u{i}{j}" for i in "012" for j in "012" if i <= j]:
+                            value = 0.0
+                        elif attr == "active":
+                            value = True
+                        else:
+                            value = 0.0  # Safe fallback for numeric attributes
+                    
+                    new_data[attr].append(value)
+        
+        # Convert lists to numpy arrays with appropriate dtypes
+        for attr in new_data:
+            target_dtype = dtype_map.get(attr, np.float64)
+            try:
+                new_data[attr] = np.array(new_data[attr], dtype=target_dtype)
+            except (ValueError, TypeError) as e:
+                print(f"Warning: Could not convert {attr} to {target_dtype}, using default dtype: {e}")
+                new_data[attr] = np.array(new_data[attr])
+        
+        print(f"Rebuilt structure with {len(new_data['name'])} atoms (was {len(self.name)})")
+        
+        # Create new Structure object with updated data, preserving all metadata
+        kwargs = getattr(self, '_kwargs', {}).copy()
+        if hasattr(self, 'resolution'):
+            kwargs['resolution'] = self.resolution
+        
+        new_structure = Structure(new_data, **kwargs)
+        
+        # Preserve additional attributes that aren't part of the main data
+        for attr_name in ['link_data', 'scale', 'cryst_info']:
+            if hasattr(self, attr_name):
+                setattr(new_structure, attr_name, getattr(self, attr_name))
+            
+        return new_structure
 
     @property
     def n_residue_conformers(self):
