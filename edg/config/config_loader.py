@@ -179,6 +179,45 @@ def map_override_key(key: str) -> str:
     return mapping.get(key, key)
 
 
+def infer_schedule_type(config_dict: Dict[str, Any]) -> Optional[str]:
+    """Infer schedule type from configuration fields.
+    
+    Parameters
+    ----------
+    config_dict : Dict[str, Any]
+        Dictionary that may represent a schedule configuration
+        
+    Returns
+    -------
+    Optional[str]
+        Inferred schedule type or None if not a schedule
+    """
+    if not isinstance(config_dict, dict):
+        return None
+    
+    # Check for exponential with bounds
+    if all(field in config_dict for field in ["start", "end", "alpha", "start_t", "end_t"]):
+        return "exponential_bounds"
+    
+    # Check for basic exponential
+    if all(field in config_dict for field in ["start", "end", "alpha"]):
+        return "exponential"
+    
+    # Check for piecewise step
+    if "thresholds" in config_dict and "values" in config_dict:
+        return "piecewise_step"
+    
+    # Check for piecewise 
+    if "breakpoints" in config_dict and "values" in config_dict:
+        return "piecewise"
+    
+    # Check for resolution scaling
+    if "resolution_schedule" in config_dict and "reference_resolution" in config_dict:
+        return "resolution_scaling"
+    
+    return None
+
+
 def parse_schedule_configs(config_data: Dict[str, Any]) -> Dict[str, Any]:
     """Parse schedule configurations in nested config data.
 
@@ -206,17 +245,19 @@ def parse_schedule_configs(config_data: Dict[str, Any]) -> Dict[str, Any]:
                 except ValueError:
                     # Not a valid schedule config, treat as nested dict
                     pass
-            # Check for implicit piecewise schedule (breakpoints + values)
-            elif "breakpoints" in value and "values" in value:
-                try:
-                    # Add implicit type for piecewise schedule
-                    schedule_config = dict(value)
-                    schedule_config["type"] = "piecewise"
-                    result[key] = parse_schedule_config(schedule_config)
-                    continue
-                except ValueError:
-                    # Not a valid schedule config, treat as nested dict
-                    pass
+            # Check for implicit schedule based on field patterns
+            else:
+                inferred_type = infer_schedule_type(value)
+                if inferred_type:
+                    try:
+                        # Add implicit type for schedule
+                        schedule_config = dict(value)
+                        schedule_config["type"] = inferred_type
+                        result[key] = parse_schedule_config(schedule_config)
+                        continue
+                    except ValueError:
+                        # Not a valid schedule config, treat as nested dict
+                        pass
 
             # Recursively process nested dictionaries
             result[key] = parse_schedule_configs(value)

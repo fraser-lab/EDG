@@ -140,6 +140,45 @@ class ResolutionScalingConfig(ParameterSchedule):
         )
 
 
+def infer_schedule_type(config_dict: Dict[str, Any]) -> Optional[str]:
+    """Infer schedule type from configuration fields.
+    
+    Parameters
+    ----------
+    config_dict : Dict[str, Any]
+        Dictionary that may represent a schedule configuration
+        
+    Returns
+    -------
+    Optional[str]
+        Inferred schedule type or None if not a schedule
+    """
+    if not isinstance(config_dict, dict):
+        return None
+    
+    # Check for exponential with bounds
+    if all(field in config_dict for field in ["start", "end", "alpha", "start_t", "end_t"]):
+        return "exponential_bounds"
+    
+    # Check for basic exponential
+    if all(field in config_dict for field in ["start", "end", "alpha"]):
+        return "exponential"
+    
+    # Check for piecewise step
+    if "thresholds" in config_dict and "values" in config_dict:
+        return "piecewise_step"
+    
+    # Check for piecewise 
+    if "breakpoints" in config_dict and "values" in config_dict:
+        return "piecewise"
+    
+    # Check for resolution scaling
+    if "resolution_schedule" in config_dict and "reference_resolution" in config_dict:
+        return "resolution_scaling"
+    
+    return None
+
+
 def parse_schedule_config(
     config: Union[Dict[str, Any], float, int, ParameterSchedule],
 ) -> ParameterSchedule:
@@ -174,12 +213,25 @@ def parse_schedule_config(
     if schedule_type == "constant":
         return ConstantScheduleConfig(**config_data)
     elif schedule_type == "piecewise":
-        # Parse nested values (only parse dict values as schedules)
+        # Parse nested values (parse dict values as schedules with type inference)
         if "values" in config_data:
             parsed_values = []
             for v in config_data["values"]:
-                if isinstance(v, dict) and "type" in v:
-                    parsed_values.append(parse_schedule_config(v))
+                if isinstance(v, dict):
+                    if "type" in v:
+                        # Explicit type provided
+                        parsed_values.append(parse_schedule_config(v))
+                    else:
+                        # Try to infer type from fields
+                        inferred_type = infer_schedule_type(v)
+                        if inferred_type:
+                            # Add type and parse as schedule
+                            schedule_config = dict(v)
+                            schedule_config["type"] = inferred_type
+                            parsed_values.append(parse_schedule_config(schedule_config))
+                        else:
+                            # Not a schedule, keep as is
+                            parsed_values.append(v)
                 else:
                     parsed_values.append(v)
             config_data["values"] = parsed_values
