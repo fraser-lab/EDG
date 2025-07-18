@@ -507,7 +507,9 @@ def extract_sequences_and_ligands_from_structure(
         resn = residue.resn[0]
 
         # Convert 3-letter amino acid codes to 1-letter
+        # Includes standard amino acids and common non-canonical residues
         aa_mapping = {
+            # Standard amino acids
             "ALA": "A",
             "ARG": "R",
             "ASN": "N",
@@ -528,9 +530,86 @@ def extract_sequences_and_ligands_from_structure(
             "TRP": "W",
             "TYR": "Y",
             "VAL": "V",
+            # Non-canonical and modified amino acids (NOTE: Some of these will still break due to atom count mismatches, but at least we can see the conversion is better)
+            "MSE": "M",  # Selenomethionine -> Methionine
+            "SEP": "S",  # Phosphoserine -> Serine
+            "TPO": "T",  # Phosphothreonine -> Threonine
+            "PTR": "Y",  # Phosphotyrosine -> Tyrosine
+            "MLY": "K",  # N-dimethyl-lysine -> Lysine
+            "MLZ": "K",  # N-methyl-lysine -> Lysine
+            "MEN": "N",  # N-methyl-asparagine -> Asparagine
+            "HYP": "P",  # 4-hydroxyproline -> Proline
+            "CSO": "C",  # S-hydroxycysteine -> Cysteine
+            "OCS": "C",  # Cysteinesulfenic acid -> Cysteine
+            "PCA": "E",  # Pyroglutamic acid -> Glutamic acid
+            "KCX": "K",  # Lysine NZ-carboxylic acid -> Lysine
+            "CAS": "C",  # S-(dimethylarsenic)cysteine -> Cysteine
+            "CSD": "C",  # 3-sulfinoalanine -> Cysteine
+            "CME": "C",  # S,S-(2-hydroxyethyl)cysteine -> Cysteine
+            "CXM": "M",  # N-carboxymethionine -> Methionine
+            "DAL": "A",  # D-alanine -> Alanine
+            "DAS": "D",  # D-aspartic acid -> Aspartic acid
+            "DCY": "C",  # D-cysteine -> Cysteine
+            "DGL": "E",  # D-glutamic acid -> Glutamic acid
+            "DGN": "Q",  # D-glutamine -> Glutamine
+            "DHI": "H",  # D-histidine -> Histidine
+            "DIL": "I",  # D-isoleucine -> Isoleucine
+            "DLE": "L",  # D-leucine -> Leucine
+            "DLY": "K",  # D-lysine -> Lysine
+            "DNE": "N",  # D-asparagine -> Asparagine
+            "DPN": "F",  # D-phenylalanine -> Phenylalanine
+            "DPR": "P",  # D-proline -> Proline
+            "DSN": "S",  # D-serine -> Serine
+            "DTH": "T",  # D-threonine -> Threonine
+            "DTR": "W",  # D-tryptophan -> Tryptophan
+            "DTY": "Y",  # D-tyrosine -> Tyrosine
+            "DVA": "V",  # D-valine -> Valine
+            "M3L": "K",  # N-trimethyllysine -> Lysine
+            "FME": "M",  # N-formylmethionine -> Methionine
+            "NEP": "H",  # N1-phosphonohistidine -> Histidine
+            "ALY": "K",  # N(6)-acetyllysine -> Lysine
+            "ARM": "R",  # Deoxy-D-arginine -> Arginine
+            "ASX": "N",  # Asparagine or aspartic acid -> Asparagine
+            "GLX": "Q",  # Glutamine or glutamic acid -> Glutamine
+            "LLP": "K",  # 2-lysine -> Lysine
+            "MGN": "Q",  # 2-methylglutamine -> Glutamine
+            "MHS": "H",  # 1-N-methylhistidine -> Histidine
+            "TRN": "W",  # AZA-tryptophan -> Tryptophan
+            "SAC": "S",  # N-acetylserine -> Serine
+            "SAR": "G",  # Sarcosine -> Glycine
+            "SET": "S",  # S-ethylcysteine -> Serine
+            "SUI": "G",  # 1,2-dihydro-2-oxopyrimidine-4-carboxylic acid -> Glycine
         }
 
         if resn in aa_mapping:
+            # Log non-canonical residue conversions
+            converted_aa = aa_mapping[resn]
+            if resn not in [
+                "ALA",
+                "ARG",
+                "ASN",
+                "ASP",
+                "CYS",
+                "GLU",
+                "GLN",
+                "GLY",
+                "HIS",
+                "ILE",
+                "LEU",
+                "LYS",
+                "MET",
+                "PHE",
+                "PRO",
+                "SER",
+                "THR",
+                "TRP",
+                "TYR",
+                "VAL",
+            ]:
+                logger.debug(
+                    f"Converting non-canonical residue {resn} {residue.resi[0]} to {converted_aa}"
+                )
+
             # Find or create sequence for this chain
             chain_seq = None
             for seq in sequences:
@@ -543,8 +622,10 @@ def extract_sequences_and_ligands_from_structure(
                 sequences.append(chain_seq)
 
             # Add residue info for sorting
-            chain_seq["residues"].append(
-                {"resi": residue.resi[0], "aa": aa_mapping[resn]}
+            chain_seq["residues"].append({"resi": residue.resi[0], "aa": converted_aa})
+        else:
+            logger.warning(
+                f"Skipping unknown residue type: {resn} {residue.resi[0]} in chain {chain_id}"
             )
 
     # Sort residues by number and build final sequences

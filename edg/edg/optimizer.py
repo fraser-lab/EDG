@@ -22,6 +22,8 @@ from einops import repeat
 from boltz.main import BoltzDiffusionParams, Boltz2DiffusionParams
 from boltz.model.models.boltz1 import Boltz1
 from boltz.model.models.boltz2 import Boltz2
+
+# from boltz.model.potentials.potentials import get_potentials
 from boltz.model.potentials.schedules import (
     PiecewiseSchedule,
     ExponentialInterpolationWithBounds,
@@ -43,7 +45,11 @@ from edg.data.sf import (
 )
 from edg.edg.modules.guided_diffusion import DensityGuidedDiffusionStepper
 from edg.utils.utility import try_gpu
-from edg.edg.modules.potentials import SubstructurePotential, DensityPotential
+from edg.edg.modules.potentials import (
+    SubstructurePotential,
+    DensityPotential,
+    get_potentials,
+)
 from edg.edg.modules.adaptive_solver import AdaptiveSolverConfig
 
 # Import config types (avoid circular import by using TYPE_CHECKING)
@@ -374,6 +380,8 @@ class DensityGuidedDiffusion:
                 scattering_params=self.scattering_params,
                 atom_selection=atom_selection,
                 reference_coords=coords,
+                steering_args=self.stepper.model.steering_args,
+                boltz2=self.model_version == "boltz2",
             )
         else:
             # Fallback to hardcoded potential creation for backward compatibility
@@ -413,6 +421,12 @@ class DensityGuidedDiffusion:
             )
 
             potentials = [density_potential]
+            potentials.extend(
+                get_potentials(
+                    # steering_args=self.stepper.model.steering_args,
+                    # boltz2=self.model_version == "boltz2",
+                )
+            )
 
         if partial_diffusion:
             if diffusion_kwargs is None:

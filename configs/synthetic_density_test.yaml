@@ -2,7 +2,7 @@ name: synthetic_density_test
 output_base_dir: results/synthetic_density_test
 input_base_dir: input/synthetic_density_test
 continue_on_error: true
-max_parallel: 3
+max_parallel: 1
 shared_config:
   name: null
   output_dir: null
@@ -136,248 +136,248 @@ experiments:
 #   substructure:
 #     enabled: true
 #     selection: chain A and resi 99-104
-- name: 8wjy
-  structure:
-    structure_path: tests/resources/altloc_data/mmcif_files/8wjy.cif
-  density:
-    map_path: synthetic_density_output/8wjy/8wjy_ensemble_2.0A.ccp4
-    resolution: 2.0
-  output_dir: results/synthetic_density_test/8wjy
-  input_data_dir: input/synthetic_density_test/8wjy
-  substructure:
-    enabled: true
-    selection: chain A and resi 241-245
-- name: 8wa9
-  structure:
-    structure_path: tests/resources/altloc_data/mmcif_files/8wa9.cif
-  density:
-    map_path: synthetic_density_output/8wa9/8wa9_ensemble_2.0A.ccp4
-    resolution: 2.0
-  output_dir: results/synthetic_density_test/8wa9
-  input_data_dir: input/synthetic_density_test/8wa9
-  substructure:
-    enabled: true
-    selection: chain B and resi 230-234
-- name: 8w6x
-  structure:
-    structure_path: tests/resources/altloc_data/mmcif_files/8w6x.cif
-  density:
-    map_path: synthetic_density_output/8w6x/8w6x_ensemble_2.0A.ccp4
-    resolution: 2.0
-  output_dir: results/synthetic_density_test/8w6x
-  input_data_dir: input/synthetic_density_test/8w6x
-  substructure:
-    enabled: true
-    selection: chain A and resi 545-551
-- name: 8vq1
-  structure:
-    structure_path: tests/resources/altloc_data/mmcif_files/8vq1.cif
-  density:
-    map_path: synthetic_density_output/8vq1/8vq1_ensemble_2.0A.ccp4
-    resolution: 2.0
-  output_dir: results/synthetic_density_test/8vq1
-  input_data_dir: input/synthetic_density_test/8vq1
-  substructure:
-    enabled: true
-    selection: chain A and resi 151-157
-- name: 8vpw
-  structure:
-    structure_path: tests/resources/altloc_data/mmcif_files/8vpw.cif
-  density:
-    map_path: synthetic_density_output/8vpw/8vpw_ensemble_2.0A.ccp4
-    resolution: 2.0
-  output_dir: results/synthetic_density_test/8vpw
-  input_data_dir: input/synthetic_density_test/8vpw
-  substructure:
-    enabled: true
-    selection: chain A and resi 151-157
-- name: 8v9i
-  structure:
-    structure_path: tests/resources/altloc_data/mmcif_files/8v9i.cif
-  density:
-    map_path: synthetic_density_output/8v9i/8v9i_ensemble_2.0A.ccp4
-    resolution: 2.0
-  output_dir: results/synthetic_density_test/8v9i
-  input_data_dir: input/synthetic_density_test/8v9i
-  substructure:
-    enabled: true
-    selection: chain A and resi 318-322
-- name: 8v6p
-  structure:
-    structure_path: tests/resources/altloc_data/mmcif_files/8v6p.cif
-  density:
-    map_path: synthetic_density_output/8v6p/8v6p_ensemble_2.0A.ccp4
-    resolution: 2.0
-  output_dir: results/synthetic_density_test/8v6p
-  input_data_dir: input/synthetic_density_test/8v6p
-  substructure:
-    enabled: true
-    selection: chain C and resi 435-467
-- name: 8v4a
-  structure:
-    structure_path: tests/resources/altloc_data/mmcif_files/8v4a.cif
-  density:
-    map_path: synthetic_density_output/8v4a/8v4a_ensemble_2.0A.ccp4
-    resolution: 2.0
-  output_dir: results/synthetic_density_test/8v4a
-  input_data_dir: input/synthetic_density_test/8v4a
-  substructure:
-    enabled: true
-    selection: chain D and resi 463-467
-- name: 8uw0
-  structure:
-    structure_path: tests/resources/altloc_data/mmcif_files/8uw0.cif
-  density:
-    map_path: synthetic_density_output/8uw0/8uw0_ensemble_2.0A.ccp4
-    resolution: 2.0
-  output_dir: results/synthetic_density_test/8uw0
-  input_data_dir: input/synthetic_density_test/8uw0
-  substructure:
-    enabled: true
-    selection: chain A and resi 19-25
-- name: 8uvz
-  structure:
-    structure_path: tests/resources/altloc_data/mmcif_files/8uvz.cif
-  density:
-    map_path: synthetic_density_output/8uvz/8uvz_ensemble_2.0A.ccp4
-    resolution: 2.0
-  output_dir: results/synthetic_density_test/8uvz
-  input_data_dir: input/synthetic_density_test/8uvz
-  substructure:
-    enabled: true
-    selection: chain A and resi 97-105
-- name: 8u91
-  structure:
-    structure_path: tests/resources/altloc_data/mmcif_files/8u91.cif
-  density:
-    map_path: synthetic_density_output/8u91/8u91_ensemble_2.0A.ccp4
-    resolution: 2.0
-  output_dir: results/synthetic_density_test/8u91
-  input_data_dir: input/synthetic_density_test/8u91
-  substructure:
-    enabled: true
-    selection: chain A and resi 140-149
-- name: 8u90
-  structure:
-    structure_path: tests/resources/altloc_data/mmcif_files/8u90.cif
-  density:
-    map_path: synthetic_density_output/8u90/8u90_ensemble_2.0A.ccp4
-    resolution: 2.0
-  output_dir: results/synthetic_density_test/8u90
-  input_data_dir: input/synthetic_density_test/8u90
-  substructure:
-    enabled: true
-    selection: chain A and resi 136-140
-- name: 8u8w
-  structure:
-    structure_path: tests/resources/altloc_data/mmcif_files/8u8w.cif
-  density:
-    map_path: synthetic_density_output/8u8w/8u8w_ensemble_2.0A.ccp4
-    resolution: 2.0
-  output_dir: results/synthetic_density_test/8u8w
-  input_data_dir: input/synthetic_density_test/8u8w
-  substructure:
-    enabled: true
-    selection: chain A and resi 136-140
-- name: 8u6c
-  structure:
-    structure_path: tests/resources/altloc_data/mmcif_files/8u6c.cif
-  density:
-    map_path: synthetic_density_output/8u6c/8u6c_ensemble_2.0A.ccp4
-    resolution: 2.0
-  output_dir: results/synthetic_density_test/8u6c
-  input_data_dir: input/synthetic_density_test/8u6c
-  substructure:
-    enabled: true
-    selection: chain B and resi 83-88
-- name: 8u69
-  structure:
-    structure_path: tests/resources/altloc_data/mmcif_files/8u69.cif
-  density:
-    map_path: synthetic_density_output/8u69/8u69_ensemble_2.0A.ccp4
-    resolution: 2.0
-  output_dir: results/synthetic_density_test/8u69
-  input_data_dir: input/synthetic_density_test/8u69
-  substructure:
-    enabled: true
-    selection: chain A and resi 89-95
-- name: 8tt5
-  structure:
-    structure_path: tests/resources/altloc_data/mmcif_files/8tt5.cif
-  density:
-    map_path: synthetic_density_output/8tt5/8tt5_ensemble_2.0A.ccp4
-    resolution: 2.0
-  output_dir: results/synthetic_density_test/8tt5
-  input_data_dir: input/synthetic_density_test/8tt5
-  substructure:
-    enabled: true
-    selection: chain B and resi 195-206
-- name: 8tt4
-  structure:
-    structure_path: tests/resources/altloc_data/mmcif_files/8tt4.cif
-  density:
-    map_path: synthetic_density_output/8tt4/8tt4_ensemble_2.0A.ccp4
-    resolution: 2.0
-  output_dir: results/synthetic_density_test/8tt4
-  input_data_dir: input/synthetic_density_test/8tt4
-  substructure:
-    enabled: true
-    selection: chain A and resi 147-172
-- name: 8tt2
-  structure:
-    structure_path: tests/resources/altloc_data/mmcif_files/8tt2.cif
-  density:
-    map_path: synthetic_density_output/8tt2/8tt2_ensemble_2.0A.ccp4
-    resolution: 2.0
-  output_dir: results/synthetic_density_test/8tt2
-  input_data_dir: input/synthetic_density_test/8tt2
-  substructure:
-    enabled: true
-    selection: chain B and resi 150-171
-- name: 8tsz
-  structure:
-    structure_path: tests/resources/altloc_data/mmcif_files/8tsz.cif
-  density:
-    map_path: synthetic_density_output/8tsz/8tsz_ensemble_2.0A.ccp4
-    resolution: 2.0
-  output_dir: results/synthetic_density_test/8tsz
-  input_data_dir: input/synthetic_density_test/8tsz
-  substructure:
-    enabled: true
-    selection: chain A and resi 149-157
-- name: 8tsy
-  structure:
-    structure_path: tests/resources/altloc_data/mmcif_files/8tsy.cif
-  density:
-    map_path: synthetic_density_output/8tsy/8tsy_ensemble_2.0A.ccp4
-    resolution: 2.0
-  output_dir: results/synthetic_density_test/8tsy
-  input_data_dir: input/synthetic_density_test/8tsy
-  substructure:
-    enabled: true
-    selection: chain A and resi 149-157
-- name: 8tsx
-  structure:
-    structure_path: tests/resources/altloc_data/mmcif_files/8tsx.cif
-  density:
-    map_path: synthetic_density_output/8tsx/8tsx_ensemble_2.0A.ccp4
-    resolution: 2.0
-  output_dir: results/synthetic_density_test/8tsx
-  input_data_dir: input/synthetic_density_test/8tsx
-  substructure:
-    enabled: true
-    selection: chain A and resi 149-159
-- name: 8tsu
-  structure:
-    structure_path: tests/resources/altloc_data/mmcif_files/8tsu.cif
-  density:
-    map_path: synthetic_density_output/8tsu/8tsu_ensemble_2.0A.ccp4
-    resolution: 2.0
-  output_dir: results/synthetic_density_test/8tsu
-  input_data_dir: input/synthetic_density_test/8tsu
-  substructure:
-    enabled: true
-    selection: chain A and resi 149-157
+# - name: 8wjy
+#   structure:
+#     structure_path: tests/resources/altloc_data/mmcif_files/8wjy.cif
+#   density:
+#     map_path: synthetic_density_output/8wjy/8wjy_ensemble_2.0A.ccp4
+#     resolution: 2.0
+#   output_dir: results/synthetic_density_test/8wjy
+#   input_data_dir: input/synthetic_density_test/8wjy
+#   substructure:
+#     enabled: true
+#     selection: chain A and resi 241-245
+# - name: 8wa9
+#   structure:
+#     structure_path: tests/resources/altloc_data/mmcif_files/8wa9.cif
+#   density:
+#     map_path: synthetic_density_output/8wa9/8wa9_ensemble_2.0A.ccp4
+#     resolution: 2.0
+#   output_dir: results/synthetic_density_test/8wa9
+#   input_data_dir: input/synthetic_density_test/8wa9
+#   substructure:
+#     enabled: true
+#     selection: chain B and resi 230-234
+# - name: 8w6x
+#   structure:
+#     structure_path: tests/resources/altloc_data/mmcif_files/8w6x.cif
+#   density:
+#     map_path: synthetic_density_output/8w6x/8w6x_ensemble_2.0A.ccp4
+#     resolution: 2.0
+#   output_dir: results/synthetic_density_test/8w6x
+#   input_data_dir: input/synthetic_density_test/8w6x
+#   substructure:
+#     enabled: true
+#     selection: chain A and resi 545-551
+# - name: 8vq1
+#   structure:
+#     structure_path: tests/resources/altloc_data/mmcif_files/8vq1.cif
+#   density:
+#     map_path: synthetic_density_output/8vq1/8vq1_ensemble_2.0A.ccp4
+#     resolution: 2.0
+#   output_dir: results/synthetic_density_test/8vq1
+#   input_data_dir: input/synthetic_density_test/8vq1
+#   substructure:
+#     enabled: true
+#     selection: chain A and resi 151-157
+# - name: 8vpw
+#   structure:
+#     structure_path: tests/resources/altloc_data/mmcif_files/8vpw.cif
+#   density:
+#     map_path: synthetic_density_output/8vpw/8vpw_ensemble_2.0A.ccp4
+#     resolution: 2.0
+#   output_dir: results/synthetic_density_test/8vpw
+#   input_data_dir: input/synthetic_density_test/8vpw
+#   substructure:
+#     enabled: true
+#     selection: chain A and resi 151-157
+# - name: 8v9i
+#   structure:
+#     structure_path: tests/resources/altloc_data/mmcif_files/8v9i.cif
+#   density:
+#     map_path: synthetic_density_output/8v9i/8v9i_ensemble_2.0A.ccp4
+#     resolution: 2.0
+#   output_dir: results/synthetic_density_test/8v9i
+#   input_data_dir: input/synthetic_density_test/8v9i
+#   substructure:
+#     enabled: true
+#     selection: chain A and resi 318-322
+# - name: 8v6p
+#   structure:
+#     structure_path: tests/resources/altloc_data/mmcif_files/8v6p.cif
+#   density:
+#     map_path: synthetic_density_output/8v6p/8v6p_ensemble_2.0A.ccp4
+#     resolution: 2.0
+#   output_dir: results/synthetic_density_test/8v6p
+#   input_data_dir: input/synthetic_density_test/8v6p
+#   substructure:
+#     enabled: true
+#     selection: chain C and resi 435-467
+# - name: 8v4a
+#   structure:
+#     structure_path: tests/resources/altloc_data/mmcif_files/8v4a.cif
+#   density:
+#     map_path: synthetic_density_output/8v4a/8v4a_ensemble_2.0A.ccp4
+#     resolution: 2.0
+#   output_dir: results/synthetic_density_test/8v4a
+#   input_data_dir: input/synthetic_density_test/8v4a
+#   substructure:
+#     enabled: true
+#     selection: chain D and resi 463-467
+# - name: 8uw0
+#   structure:
+#     structure_path: tests/resources/altloc_data/mmcif_files/8uw0.cif
+#   density:
+#     map_path: synthetic_density_output/8uw0/8uw0_ensemble_2.0A.ccp4
+#     resolution: 2.0
+#   output_dir: results/synthetic_density_test/8uw0
+#   input_data_dir: input/synthetic_density_test/8uw0
+#   substructure:
+#     enabled: true
+#     selection: chain A and resi 19-25
+# - name: 8uvz
+#   structure:
+#     structure_path: tests/resources/altloc_data/mmcif_files/8uvz.cif
+#   density:
+#     map_path: synthetic_density_output/8uvz/8uvz_ensemble_2.0A.ccp4
+#     resolution: 2.0
+#   output_dir: results/synthetic_density_test/8uvz
+#   input_data_dir: input/synthetic_density_test/8uvz
+#   substructure:
+#     enabled: true
+#     selection: chain A and resi 97-105
+# - name: 8u91
+#   structure:
+#     structure_path: tests/resources/altloc_data/mmcif_files/8u91.cif
+#   density:
+#     map_path: synthetic_density_output/8u91/8u91_ensemble_2.0A.ccp4
+#     resolution: 2.0
+#   output_dir: results/synthetic_density_test/8u91
+#   input_data_dir: input/synthetic_density_test/8u91
+#   substructure:
+#     enabled: true
+#     selection: chain A and resi 140-149
+# - name: 8u90
+#   structure:
+#     structure_path: tests/resources/altloc_data/mmcif_files/8u90.cif
+#   density:
+#     map_path: synthetic_density_output/8u90/8u90_ensemble_2.0A.ccp4
+#     resolution: 2.0
+#   output_dir: results/synthetic_density_test/8u90
+#   input_data_dir: input/synthetic_density_test/8u90
+#   substructure:
+#     enabled: true
+#     selection: chain A and resi 136-140
+# - name: 8u8w
+#   structure:
+#     structure_path: tests/resources/altloc_data/mmcif_files/8u8w.cif
+#   density:
+#     map_path: synthetic_density_output/8u8w/8u8w_ensemble_2.0A.ccp4
+#     resolution: 2.0
+#   output_dir: results/synthetic_density_test/8u8w
+#   input_data_dir: input/synthetic_density_test/8u8w
+#   substructure:
+#     enabled: true
+#     selection: chain A and resi 136-140
+# - name: 8u6c
+#   structure:
+#     structure_path: tests/resources/altloc_data/mmcif_files/8u6c.cif
+#   density:
+#     map_path: synthetic_density_output/8u6c/8u6c_ensemble_2.0A.ccp4
+#     resolution: 2.0
+#   output_dir: results/synthetic_density_test/8u6c
+#   input_data_dir: input/synthetic_density_test/8u6c
+#   substructure:
+#     enabled: true
+#     selection: chain B and resi 83-88
+# - name: 8u69
+#   structure:
+#     structure_path: tests/resources/altloc_data/mmcif_files/8u69.cif
+#   density:
+#     map_path: synthetic_density_output/8u69/8u69_ensemble_2.0A.ccp4
+#     resolution: 2.0
+#   output_dir: results/synthetic_density_test/8u69
+#   input_data_dir: input/synthetic_density_test/8u69
+#   substructure:
+#     enabled: true
+#     selection: chain A and resi 89-95
+# - name: 8tt5
+#   structure:
+#     structure_path: tests/resources/altloc_data/mmcif_files/8tt5.cif
+#   density:
+#     map_path: synthetic_density_output/8tt5/8tt5_ensemble_2.0A.ccp4
+#     resolution: 2.0
+#   output_dir: results/synthetic_density_test/8tt5
+#   input_data_dir: input/synthetic_density_test/8tt5
+#   substructure:
+#     enabled: true
+#     selection: chain B and resi 195-206
+# - name: 8tt4
+#   structure:
+#     structure_path: tests/resources/altloc_data/mmcif_files/8tt4.cif
+#   density:
+#     map_path: synthetic_density_output/8tt4/8tt4_ensemble_2.0A.ccp4
+#     resolution: 2.0
+#   output_dir: results/synthetic_density_test/8tt4
+#   input_data_dir: input/synthetic_density_test/8tt4
+#   substructure:
+#     enabled: true
+#     selection: chain A and resi 147-172
+# - name: 8tt2
+#   structure:
+#     structure_path: tests/resources/altloc_data/mmcif_files/8tt2.cif
+#   density:
+#     map_path: synthetic_density_output/8tt2/8tt2_ensemble_2.0A.ccp4
+#     resolution: 2.0
+#   output_dir: results/synthetic_density_test/8tt2
+#   input_data_dir: input/synthetic_density_test/8tt2
+#   substructure:
+#     enabled: true
+#     selection: chain B and resi 150-171
+# - name: 8tsz
+#   structure:
+#     structure_path: tests/resources/altloc_data/mmcif_files/8tsz.cif
+#   density:
+#     map_path: synthetic_density_output/8tsz/8tsz_ensemble_2.0A.ccp4
+#     resolution: 2.0
+#   output_dir: results/synthetic_density_test/8tsz
+#   input_data_dir: input/synthetic_density_test/8tsz
+#   substructure:
+#     enabled: true
+#     selection: chain A and resi 149-157
+# - name: 8tsy
+#   structure:
+#     structure_path: tests/resources/altloc_data/mmcif_files/8tsy.cif
+#   density:
+#     map_path: synthetic_density_output/8tsy/8tsy_ensemble_2.0A.ccp4
+#     resolution: 2.0
+#   output_dir: results/synthetic_density_test/8tsy
+#   input_data_dir: input/synthetic_density_test/8tsy
+#   substructure:
+#     enabled: true
+#     selection: chain A and resi 149-157
+# - name: 8tsx
+#   structure:
+#     structure_path: tests/resources/altloc_data/mmcif_files/8tsx.cif
+#   density:
+#     map_path: synthetic_density_output/8tsx/8tsx_ensemble_2.0A.ccp4
+#     resolution: 2.0
+#   output_dir: results/synthetic_density_test/8tsx
+#   input_data_dir: input/synthetic_density_test/8tsx
+#   substructure:
+#     enabled: true
+#     selection: chain A and resi 149-159
+# - name: 8tsu
+#   structure:
+#     structure_path: tests/resources/altloc_data/mmcif_files/8tsu.cif
+#   density:
+#     map_path: synthetic_density_output/8tsu/8tsu_ensemble_2.0A.ccp4
+#     resolution: 2.0
+#   output_dir: results/synthetic_density_test/8tsu
+#   input_data_dir: input/synthetic_density_test/8tsu
+#   substructure:
+#     enabled: true
+#     selection: chain A and resi 149-157
 - name: 8th9
   structure:
     structure_path: tests/resources/altloc_data/mmcif_files/8th9.cif

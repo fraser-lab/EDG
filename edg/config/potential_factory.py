@@ -9,6 +9,7 @@ import numpy as np
 
 from .config_schema import ExperimentConfig, DensityGuidanceConfig
 from .schedules import ParameterSchedule
+# from boltz.model.potentials.potentials import get_potentials
 from edg.edg.modules.potentials import (
     DensityPotential,
     SubstructurePotential,
@@ -26,6 +27,8 @@ def create_potentials_from_config(
     scattering_params: Any,
     atom_selection: Optional[np.ndarray] = None,
     reference_coords: Optional[Any] = None,
+    steering_args: Optional[dict] = None,
+    boltz2: bool = False,
 ) -> List[Any]:
     """Create potential objects from experiment configuration.
 
@@ -45,6 +48,12 @@ def create_potentials_from_config(
         Scattering parameters
     atom_selection : Optional[np.ndarray]
         Optional atom selection for density potential
+    reference_coords : Optional[Any]
+        Reference coordinates for substructure potential
+    steering_args : Optional[dict]
+        Steering arguments for default potentials
+    boltz2 : bool
+        Whether using Boltz-2 model for default potentials
 
     Returns
     -------
@@ -85,7 +94,10 @@ def create_potentials_from_config(
 
     # Add default potentials if requested
     if config.potentials.use_default_potentials:
-        default_potentials = get_potentials()
+        default_potentials = get_potentials(
+            # steering_args=steering_args,
+            # boltz2=boltz2,
+        )
         potentials.extend(default_potentials)
 
     return potentials

@@ -21,7 +21,6 @@ from dataclasses import asdict, dataclass
 
 from edg.utils.utility import try_gpu
 from edg.data.structure import Structure
-from edg.edg.modules.potentials import get_potentials
 from boltz.main import check_inputs, process_inputs, BoltzProcessedInput
 from boltz.data.module.inference import BoltzInferenceDataModule
 from boltz.data.module.inferencev2 import Boltz2InferenceDataModule
@@ -434,11 +433,8 @@ class DiffusionStepper:
         steering_vars = {}
 
         if self.model.steering_args["fk_steering"]:
-            potentials = get_potentials()
-            if extra_potentials is not None:
-                potentials.extend(extra_potentials)
-                # reverse the ordering so substructure and density come before physicality potentials
-                potentials.reverse()
+            # Use only extra_potentials from config (which already includes default potentials if requested)
+            potentials = extra_potentials if extra_potentials is not None else []
             num_particles = self.model.steering_args["num_particles"]
             energy_traj = torch.empty((num_particles, 0), device=self.device)
             resample_weights = torch.ones(num_particles, device=self.device).reshape(
@@ -548,11 +544,8 @@ class DiffusionStepper:
         steering_vars = {}
 
         if self.model.steering_args["fk_steering"]:
-            potentials = get_potentials()
-            if extra_potentials is not None:
-                potentials.extend(extra_potentials)
-                # reverse the ordering so substructure and density come before physicality potentials
-                potentials.reverse()
+            # Use only extra_potentials from config (which already includes default potentials if requested)
+            potentials = extra_potentials if extra_potentials is not None else []
             num_particles = self.model.steering_args["num_particles"]
             energy_traj = torch.empty((num_particles, 0), device=self.device)
             resample_weights = torch.ones(num_particles, device=self.device).reshape(
@@ -674,11 +667,8 @@ class DiffusionStepper:
         steering_vars = {}
 
         if self.model.steering_args["fk_steering"]:
-            potentials = get_potentials()
-            if extra_potentials is not None:
-                potentials.extend(extra_potentials)
-                # reverse the ordering so substructure and density come before physicality potentials
-                potentials.reverse()
+            # Use only extra_potentials from config (which already includes default potentials if requested)
+            potentials = extra_potentials if extra_potentials is not None else []
             num_particles = self.model.steering_args["num_particles"]
             energy_traj = torch.empty((num_particles, 0), device=self.device)
             resample_weights = torch.ones(num_particles, device=self.device).reshape(
