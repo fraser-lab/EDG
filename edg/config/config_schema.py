@@ -40,7 +40,8 @@ class SteeringConfig:
     """Configuration for FK steering parameters."""
 
     enabled: bool = True
-    guidance_update: bool = True
+    physical_guidance_update: bool = True
+    contact_guidance_update: bool = False
     num_particles: int = 3
     fk_resampling_interval: int = 1
     fk_lambda: float = 0.5

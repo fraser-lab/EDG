@@ -1,5 +1,11 @@
 import torch
-from typing import Callable, Tuple
+import threading
+from typing import Callable, Tuple, Optional, Dict
+
+
+# Global cache for quadrature roots and weights to avoid redundant computations
+_QUADRATURE_CACHE: Dict[Tuple[int, str, torch.dtype], Tuple[torch.Tensor, torch.Tensor]] = {}
+_CACHE_LOCK = threading.Lock()
 
 
 class GaussLegendreQuadrature(torch.nn.Module):
@@ -24,9 +30,42 @@ class GaussLegendreQuadrature(torch.nn.Module):
         """
         super().__init__()
         self.num_points = num_points
-        self.roots, self.weights = self._get_legendre_roots_and_weights(
-            num_points, device, dtype
-        )
+        self.device = device
+        self.dtype = dtype
+        self._roots: Optional[torch.Tensor] = None
+        self._weights: Optional[torch.Tensor] = None
+        self._lock = threading.Lock()
+
+    @property
+    def roots(self) -> torch.Tensor:
+        """Get the quadrature roots, computing them if necessary."""
+        if self._roots is None:
+            self._roots, self._weights = self._get_cached_roots_and_weights()
+        return self._roots
+
+    @property
+    def weights(self) -> torch.Tensor:
+        """Get the quadrature weights, computing them if necessary."""
+        if self._weights is None:
+            self._roots, self._weights = self._get_cached_roots_and_weights()
+        return self._weights
+
+    def _get_cached_roots_and_weights(self) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Get roots and weights from cache or compute them thread-safely."""
+        cache_key = (self.num_points, str(self.device), self.dtype)
+        
+        with _CACHE_LOCK:
+            if cache_key in _QUADRATURE_CACHE:
+                cached_roots, cached_weights = _QUADRATURE_CACHE[cache_key]
+                # Return copies to avoid shared tensor modifications
+                return cached_roots.clone(), cached_weights.clone()
+            
+            # Compute once and cache
+            roots, weights = self._compute_legendre_roots_and_weights_safe(
+                self.num_points, self.device, self.dtype
+            )
+            _QUADRATURE_CACHE[cache_key] = (roots.clone(), weights.clone())
+            return roots, weights
 
     def forward(
         self,
@@ -84,10 +123,12 @@ class GaussLegendreQuadrature(torch.nn.Module):
 
         return integral
 
-    def _get_legendre_roots_and_weights(
+    def _compute_legendre_roots_and_weights_safe(
         self, num_points: int, device: torch.device, dtype: torch.dtype
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Numerically compute Legendre polynomial roots and weights. Generally taken from SciPy:
+        """Numerically compute Legendre polynomial roots and weights in a thread-safe manner.
+        
+        Generally taken from SciPy:
         https://github.com/scipy/scipy/blob/main/scipy/special/_orthogonal.py#L160
 
         Parameters
@@ -104,19 +145,24 @@ class GaussLegendreQuadrature(torch.nn.Module):
         Tuple[torch.Tensor, torch.Tensor]
             Roots and weights of the Legendre polynomial
         """
-        diagonal = torch.zeros(num_points, device=device, dtype=dtype)
+        # Use torch.no_grad() to avoid potential autograd threading issues
+        with torch.no_grad():
+            diagonal = torch.zeros(num_points, device=device, dtype=dtype)
 
-        k_values = torch.arange(1, num_points, device=device, dtype=dtype)
-        off_diagonal = k_values / torch.sqrt(4 * k_values.pow(2) - 1)
+            k_values = torch.arange(1, num_points, device=device, dtype=dtype)
+            off_diagonal = k_values / torch.sqrt(4 * k_values.pow(2) - 1)
 
-        tridiag = torch.diag(diagonal)
-        if num_points > 1:
-            tridiag = (
-                tridiag + torch.diag(off_diagonal, 1) + torch.diag(off_diagonal, -1)
-            )
-        eigenvalues, eigenvectors = torch.linalg.eigh(tridiag)
+            tridiag = torch.diag(diagonal)
+            if num_points > 1:
+                tridiag = (
+                    tridiag + torch.diag(off_diagonal, 1) + torch.diag(off_diagonal, -1)
+                )
+            
+            # Force immediate computation by detaching from any computation graph
+            tridiag = tridiag.detach()
+            eigenvalues, eigenvectors = torch.linalg.eigh(tridiag)
 
-        roots = eigenvalues
-        weights = 2.0 * eigenvectors[0, :].pow(2)
+            roots = eigenvalues.detach()
+            weights = (2.0 * eigenvectors[0, :].pow(2)).detach()
 
-        return roots, weights
+            return roots, weights

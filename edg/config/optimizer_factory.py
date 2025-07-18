@@ -42,7 +42,8 @@ def create_optimizer_from_config(
     # Create steering args
     steering_args = BoltzSteeringParams()
     steering_args.fk_steering = config.steering.enabled
-    steering_args.physical_guidance_update = config.steering.guidance_update
+    steering_args.physical_guidance_update = config.steering.physical_guidance_update
+    steering_args.contact_guidance_update = config.steering.contact_guidance_update
     steering_args.num_particles = config.steering.num_particles
 
     # Create adaptive solver config if enabled

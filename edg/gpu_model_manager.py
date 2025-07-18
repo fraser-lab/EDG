@@ -161,8 +161,9 @@ class GPUModelManager:
         if steering_config is not None:
             # Convert config object to BoltzSteeringParams
             steering_args.fk_steering = steering_config.enabled
-            steering_args.physical_guidance_update = steering_config.guidance_update
+            steering_args.physical_guidance_update = steering_config.physical_guidance_update
             steering_args.num_particles = steering_config.num_particles
+            steering_args.contact_guidance_update = steering_config.contact_guidance_update
 
         # Create diffusion args based on model version
         if model_version == "boltz1":
