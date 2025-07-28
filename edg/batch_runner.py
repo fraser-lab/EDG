@@ -8,14 +8,15 @@ This module provides functionality to run multiple experiments in batch:
 - Supports continue-on-error mode with GPU recovery
 """
 
+import copy
+import json
 import logging
+import threading
 import time
+import traceback
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Dict, Any, List, Optional
-import traceback
-import json
-import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from edg.config import BatchExperimentConfig, ExperimentConfig
 from edg.experiment_runner import run_experiment
@@ -300,7 +301,7 @@ class BatchRunner:
         )
 
     def _run_single_experiment_parallel(self, config: ExperimentConfig) -> Any:
-        """Run a single experiment with GPU assignment.
+        """Run a single experiment using parallel GPU allocation with retry logic.
 
         Parameters
         ----------
@@ -312,13 +313,12 @@ class BatchRunner:
         Any
             Experiment result
         """
-        device = None
-        model = None
+        # Acquire GPU with retry logic
+        device, model = self.gpu_manager.get_gpu_and_model_with_retry(
+            base_timeout=30.0, max_retries=3
+        )
 
         try:
-            # Get GPU and model from manager
-            device, model = self.gpu_manager.get_gpu_and_model(timeout=30.0)
-
             # Create modified config with assigned device and model
             modified_config = self._create_config_with_device_and_model(
                 config, device, model
@@ -326,47 +326,54 @@ class BatchRunner:
 
             # Run experiment
             logger.info(f"Running experiment {config.name} on {device}")
-            result = run_experiment(modified_config)
 
+            result = run_experiment(modified_config)
+            logger.info(f"Successfully completed experiment {config.name} on {device}")
             return result
 
         except Exception as e:
-            # Handle CUDA OOM specifically
-            if (
-                "out of memory" in str(e).lower()
-                and device
-                and device.startswith("cuda")
-            ):
+            # Log detailed error information
+            logger.error(f"Experiment {config.name} failed on {device}: {str(e)}")
+
+            # Handle CUDA OOM specifically with enhanced recovery
+            if "out of memory" in str(e).lower() and device.startswith("cuda"):
                 logger.warning(
-                    f"CUDA OOM error on {device} for experiment {config.name}"
+                    f"CUDA OOM error on {device} for experiment {config.name}. "
+                    "Attempting model reload for recovery..."
                 )
 
-                # Try to reload model on this GPU for NEXT experiment
-                if self.gpu_manager.reload_model_on_gpu(
-                    device=device,
-                    model_version=config.model.version,
-                    checkpoint_path=Path(
-                        config.model.checkpoint_path or "~/.boltz/boltz1_conf.ckpt"
-                    ),
-                    ccd_path=Path(config.model.ccd_path or "~/.boltz/ccd.pkl"),
-                    step_scale=config.diffusion.step_scale,
-                    steering_args=config.steering,
-                ):
-                    logger.info(
-                        f"Successfully reloaded model on {device} for next experiment"
+                try:
+                    # Try to reload model on this GPU for NEXT experiment
+                    success = self.gpu_manager.reload_model_on_gpu(
+                        device=device,
+                        model_version=config.model.version,
+                        checkpoint_path=Path(
+                            config.model.checkpoint_path or "~/.boltz/boltz1_conf.ckpt"
+                        ),
+                        ccd_path=Path(config.model.ccd_path or "~/.boltz/ccd.pkl"),
+                        step_scale=config.diffusion.step_scale,
+                        steering_args=config.steering,
                     )
-                else:
+
+                    if success:
+                        logger.info(
+                            f"Successfully reloaded model on {device} for next experiment"
+                        )
+                    else:
+                        logger.error(
+                            f"Failed to reload model on {device} - may affect next experiment"
+                        )
+                except Exception as reload_error:
                     logger.error(
-                        f"Failed to reload model on {device} - may affect next experiment"
+                        f"Error during model reload on {device}: {reload_error}"
                     )
 
-            # Always re-raise the exception (no retry)
+            # Re-raise the original exception
             raise
-
         finally:
             # Always release GPU back to pool
-            if device:
-                self.gpu_manager.release_gpu(device)
+            logger.debug(f"Released {device}")
+            self.gpu_manager.release_gpu(device)
 
     def _create_config_with_device_and_model(
         self, config: ExperimentConfig, device: str, model
@@ -388,8 +395,6 @@ class BatchRunner:
             Modified configuration with device and model set
         """
         # Create a copy of the config
-        import copy
-
         modified_config = copy.deepcopy(config)
 
         # Set device and model
@@ -399,7 +404,7 @@ class BatchRunner:
         return modified_config
 
     def _handle_experiment_error(self, config: ExperimentConfig, error: Exception):
-        """Handle experiment error with proper logging and storage.
+        """Handle experiment error with enhanced categorization and logging.
 
         Parameters
         ----------
@@ -408,22 +413,89 @@ class BatchRunner:
         error : Exception
             The error that occurred
         """
-        error_msg = f"Experiment {config.name} failed: {str(error)}"
-        logger.error(error_msg)
-        if logger.isEnabledFor(logging.DEBUG):
-            logger.debug(f"Full traceback:\n{traceback.format_exc()}")
+        error_str = str(error)
+        tb_str = traceback.format_exc()
 
-        # Store failure
+        # Categorize error type for better analysis
+        error_category = self._categorize_error(error_str, tb_str)
+
+        # Log current GPU state for context
+        gpu_stats = self.gpu_manager.get_queue_stats() if self.gpu_manager else {}
+
+        error_msg = (
+            f"Experiment {config.name} failed [{error_category}]: {error_str}. "
+            f"GPU state: {gpu_stats.get('queue_size', 'unknown')}/{gpu_stats.get('total_gpus', 'unknown')} available"
+        )
+        logger.error(error_msg)
+
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(f"Full traceback:\n{tb_str}")
+
+        # Store failure with enhanced metadata
         with self.results_lock:
             self.results.append(
                 {
                     "experiment_name": config.name,
                     "status": "failed",
-                    "error": str(error),
-                    "traceback": traceback.format_exc(),
+                    "error": error_str,
+                    "error_category": error_category,
+                    "traceback": tb_str,
+                    "gpu_state_at_failure": gpu_stats,
+                    "timestamp": time.time(),
                 }
             )
             self.failed_experiments.append(config.name)
+
+    def _categorize_error(self, error_str: str, traceback_str: str) -> str:
+        """Categorize error for better analysis and reporting.
+
+        Parameters
+        ----------
+        error_str : str
+            String representation of the error
+        traceback_str : str
+            Full traceback string
+
+        Returns
+        -------
+        str
+            Error category for classification
+        """
+        # Define error patterns with priorities (most specific first)
+        error_patterns = [
+            # GPU/CUDA specific errors (highest priority)
+            ("cuda_oom", ["out of memory", "cuda out of memory"]),
+            ("gpu_queue_timeout", ["queue.empty", "failed to acquire gpu"]),
+            ("model_loading_failure", ["no model loaded"]),
+            ("cuda_memory_error", ["memory", "cuda"]),  # Both keywords must be present
+            # Computation errors
+            ("tensor_size_mismatch", ["tensor", "size", "match"]),
+            ("tensor_shape_error", ["tensor", "dimension", "shape"]),
+            ("diffusion_computation_error", ["diffusion", "guided_diffusion"]),
+            ("density_calculation_error", ["density", "calculator"]),
+            ("potential_gradient_error", ["potential", "gradient"]),
+            # File/IO errors
+            ("file_not_found", ["filenotfounderror", "no such file"]),
+            ("file_permission_error", ["permission", "access"]),
+            # Configuration errors
+            ("configuration_error", ["validation", "config"]),
+            # Common Python errors
+            ("key_error", ["keyerror"]),
+            ("attribute_error", ["attributeerror"]),
+            ("type_error", ["typeerror"]),
+            ("value_error", ["valueerror"]),
+        ]
+
+        error_lower = error_str.lower()
+        tb_lower = traceback_str.lower()
+        combined_text = error_lower + " " + tb_lower
+
+        # Check patterns in order of priority
+        for category, keywords in error_patterns:
+            if all(keyword in combined_text for keyword in keywords):
+                return category
+
+        return "unknown"
 
     def _save_progress(self, progress_file: Path, completed: int, total: int):
         """Save progress to file (thread-safe).
@@ -447,8 +519,10 @@ class BatchRunner:
                 "elapsed_time": time.time() - self.start_time if self.start_time else 0,
             }
 
-            if self.gpu_manager:
+            # Only include GPU info if debugging to reduce I/O overhead
+            if self.gpu_manager and logger.isEnabledFor(logging.DEBUG):
                 progress_data["gpu_models"] = self.gpu_manager.get_model_info()
+                progress_data["gpu_state"] = self.gpu_manager.get_queue_stats()
 
             with open(progress_file, "w") as f:
                 json.dump(progress_data, f, indent=2)
