@@ -12,6 +12,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 import time
 from typing import Optional, Union, List, NamedTuple
+from copy import deepcopy
 
 import torch
 import numpy as np
@@ -470,7 +471,7 @@ def extract_altloc_conformations(
     # Add main conformation (no altloc or altloc A)
     main_selection = structure.select("altloc '' or altloc A")
     if main_selection.sum() > 0:
-        main_struct = structure.extract(main_selection)
+        main_struct = deepcopy(structure.extract(main_selection)) # Use deepcopy to avoid modifying original structure
         main_struct.altloc = ""  # Clear altloc identifiers
         main_struct.q = 1.0
         conformations.append(main_struct)
@@ -480,7 +481,7 @@ def extract_altloc_conformations(
         if altloc and altloc != "A":
             alt_selection = structure.select(f"altloc '' or altloc {altloc}")
             if alt_selection.sum() > 0:
-                alt_struct = structure.extract(alt_selection)
+                alt_struct = deepcopy(structure.extract(alt_selection))
                 alt_struct.altloc = ""  # Clear altloc identifiers
                 alt_struct.q = 1.0
                 conformations.append(alt_struct)
