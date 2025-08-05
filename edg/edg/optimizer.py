@@ -326,6 +326,8 @@ class DensityGuidedDiffusion:
     ) -> Structure:
         os.makedirs(output_dir, exist_ok=True)
 
+        self.structure = self.structure.normalize_occupancy()
+
         coords, elements, b_factors, occupancies, active, resolution = (
             structure_to_density_input(self.structure)
         )

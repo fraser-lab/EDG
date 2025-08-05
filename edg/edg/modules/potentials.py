@@ -701,6 +701,10 @@ class SubstructurePotential(HarmonicPotential):
         ref_coords_source = ref_coords_source.to(
             dtype=coords.dtype, device=coords.device
         )
+        if torch.any(index[0] >= ref_coords.shape[-2]):
+            raise IndexError(
+                f"Index (total size: {len(index[0])}) exceeds the number of atoms in reference coordinates {ref_coords.shape[-2]}."
+            )
         ref_coords[..., index[0], :] = ref_coords_source
 
         r_ij = coords.index_select(-2, index[0]) - ref_coords.index_select(-2, index[0])

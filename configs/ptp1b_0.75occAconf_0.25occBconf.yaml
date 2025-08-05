@@ -1,0 +1,257 @@
+# PTP1B 0.75occAconf_0.25occBconf learning rate sweep configuration
+name: ptp1b_0.75occAconf_0.25occBconf_lr_ens_sweep
+output_base_dir: results/ptp1b_0.75occAconf_0.25occBconf_lr_ens_sweep
+input_base_dir: input/ptp1b_0.75occAconf_0.25occBconf_lr_ens_sweep
+continue_on_error: true
+max_parallel: 1
+
+shared_config:
+  name: null
+  output_dir: null
+  input_data_dir: null
+  structure:
+    structure_path: /home/kchrispens/adp-replicate/tests/resources/6b8x/6b8x_synthetic_0.75occAconf_0.25occBconf_shifted.cif
+    clean_structure: true
+    keep_type: protein
+    remove_all_ligands: true
+    remove_alternative_conformations: true
+    complete_residues: true
+  density:
+    map_path: /home/kchrispens/adp-replicate/tests/resources/6b8x/6b8x_0.75occAconf_0.25occBconf_2A.ccp4
+    resolution: 2.0
+    em_mode: false
+  boltz_input_yaml: /home/kchrispens/adp-replicate/_notebooks/input/ptp1b/test_ptp1b.yaml
+  model:
+    version: boltz2
+    checkpoint_path: /home/kchrispens/.boltz/boltz2_conf.ckpt
+  diffusion:
+    num_steps: 200
+  steering:
+    enabled: true
+    physical_guidance_update: true
+    num_particles: 3
+    fk_resampling_interval: 1
+    fk_lambda: 0.5
+    num_gd_steps: 20
+  adaptive_solver:
+    type: adam
+    learning_rate: 0.01  # Will be overridden in experiments
+    max_iterations: 20
+    line_search: true
+    adaptive_line_search: true
+  density_guidance:
+    base_weight:
+      type: piecewise
+      breakpoints: [0.125, 0.375]
+      values: [0, 1.0, 0]
+    guidance_interval: 1
+    resampling_weight:
+      type: piecewise
+      breakpoints: [0.125, 0.25, 0.375]
+      values:
+        - 0.01
+        - type: exponential_bounds
+          start: 0.01
+          end: 50
+          alpha: 150
+          start_t: 0.125
+          end_t: 0.25
+        - 50
+        - 0.0
+    scale_guidance_to_denoising: true
+    max_guidance_denoising_ratio: 1.0
+    resolution:
+      type: piecewise
+      breakpoints: [0.25]
+      values: [2.0, 8.0]
+  substructure:
+    enabled: true
+    selection: chain A and resi 175-192
+    guidance_weight: 0.05
+    resampling_weight: 0.0
+    buffer: 0.5
+  optimization:
+    ensemble_size: 4
+    partial_diffusion: false
+    save_interval: 10
+    save_maps: true
+    save_scores: true
+  potentials:
+    use_default_potentials: true
+
+experiments:
+# Ensemble size 1
+- name: lr_0.005_ens_1
+  output_dir: results/ptp1b_0.75occAconf_0.25occBconf_lr_ens_sweep/lr_0.005_ens_1
+  input_data_dir: input/ptp1b_0.75occAconf_0.25occBconf_lr_ens_sweep/lr_0.005_ens_1
+  optimization:
+    ensemble_size: 1
+  adaptive_solver:
+    learning_rate: 0.005
+- name: lr_0.01_ens_1
+  output_dir: results/ptp1b_0.75occAconf_0.25occBconf_lr_ens_sweep/lr_0.01_ens_1
+  input_data_dir: input/ptp1b_0.75occAconf_0.25occBconf_lr_ens_sweep/lr_0.01_ens_1
+  optimization:
+    ensemble_size: 1
+  adaptive_solver:
+    learning_rate: 0.01
+- name: lr_0.02_ens_1
+  output_dir: results/ptp1b_0.75occAconf_0.25occBconf_lr_ens_sweep/lr_0.02_ens_1
+  input_data_dir: input/ptp1b_0.75occAconf_0.25occBconf_lr_ens_sweep/lr_0.02_ens_1
+  optimization:
+    ensemble_size: 1
+  adaptive_solver:
+    learning_rate: 0.02
+- name: lr_0.05_ens_1
+  output_dir: results/ptp1b_0.75occAconf_0.25occBconf_lr_ens_sweep/lr_0.05_ens_1
+  input_data_dir: input/ptp1b_0.75occAconf_0.25occBconf_lr_ens_sweep/lr_0.05_ens_1
+  optimization:
+    ensemble_size: 1
+  adaptive_solver:
+    learning_rate: 0.05
+- name: lr_0.1_ens_1
+  output_dir: results/ptp1b_0.75occAconf_0.25occBconf_lr_ens_sweep/lr_0.1_ens_1
+  input_data_dir: input/ptp1b_0.75occAconf_0.25occBconf_lr_ens_sweep/lr_0.1_ens_1
+  optimization:
+    ensemble_size: 1
+  adaptive_solver:
+    learning_rate: 0.1
+- name: lr_0.2_ens_1
+  output_dir: results/ptp1b_0.75occAconf_0.25occBconf_lr_ens_sweep/lr_0.2_ens_1
+  input_data_dir: input/ptp1b_0.75occAconf_0.25occBconf_lr_ens_sweep/lr_0.2_ens_1
+  optimization:
+    ensemble_size: 1
+  adaptive_solver:
+    learning_rate: 0.2
+
+# Ensemble size 2
+- name: lr_0.005_ens_2
+  output_dir: results/ptp1b_0.75occAconf_0.25occBconf_lr_ens_sweep/lr_0.005_ens_2
+  input_data_dir: input/ptp1b_0.75occAconf_0.25occBconf_lr_ens_sweep/lr_0.005_ens_2
+  optimization:
+    ensemble_size: 2
+  adaptive_solver:
+    learning_rate: 0.005
+- name: lr_0.01_ens_2
+  output_dir: results/ptp1b_0.75occAconf_0.25occBconf_lr_ens_sweep/lr_0.01_ens_2
+  input_data_dir: input/ptp1b_0.75occAconf_0.25occBconf_lr_ens_sweep/lr_0.01_ens_2
+  optimization:
+    ensemble_size: 2
+  adaptive_solver:
+    learning_rate: 0.01
+- name: lr_0.02_ens_2
+  output_dir: results/ptp1b_0.75occAconf_0.25occBconf_lr_ens_sweep/lr_0.02_ens_2
+  input_data_dir: input/ptp1b_0.75occAconf_0.25occBconf_lr_ens_sweep/lr_0.02_ens_2
+  optimization:
+    ensemble_size: 2
+  adaptive_solver:
+    learning_rate: 0.02
+- name: lr_0.05_ens_2
+  output_dir: results/ptp1b_0.75occAconf_0.25occBconf_lr_ens_sweep/lr_0.05_ens_2
+  input_data_dir: input/ptp1b_0.75occAconf_0.25occBconf_lr_ens_sweep/lr_0.05_ens_2
+  optimization:
+    ensemble_size: 2
+  adaptive_solver:
+    learning_rate: 0.05
+- name: lr_0.1_ens_2
+  output_dir: results/ptp1b_0.75occAconf_0.25occBconf_lr_ens_sweep/lr_0.1_ens_2
+  input_data_dir: input/ptp1b_0.75occAconf_0.25occBconf_lr_ens_sweep/lr_0.1_ens_2
+  optimization:
+    ensemble_size: 2
+  adaptive_solver:
+    learning_rate: 0.1
+- name: lr_0.2_ens_2
+  output_dir: results/ptp1b_0.75occAconf_0.25occBconf_lr_ens_sweep/lr_0.2_ens_2
+  input_data_dir: input/ptp1b_0.75occAconf_0.25occBconf_lr_ens_sweep/lr_0.2_ens_2
+  optimization:
+    ensemble_size: 2
+  adaptive_solver:
+    learning_rate: 0.2
+
+# Ensemble size 4
+- name: lr_0.005_ens_4
+  output_dir: results/ptp1b_0.75occAconf_0.25occBconf_lr_ens_sweep/lr_0.005_ens_4
+  input_data_dir: input/ptp1b_0.75occAconf_0.25occBconf_lr_ens_sweep/lr_0.005_ens_4
+  optimization:
+    ensemble_size: 4
+  adaptive_solver:
+    learning_rate: 0.005
+- name: lr_0.01_ens_4
+  output_dir: results/ptp1b_0.75occAconf_0.25occBconf_lr_ens_sweep/lr_0.01_ens_4
+  input_data_dir: input/ptp1b_0.75occAconf_0.25occBconf_lr_ens_sweep/lr_0.01_ens_4
+  optimization:
+    ensemble_size: 4
+  adaptive_solver:
+    learning_rate: 0.01
+- name: lr_0.02_ens_4
+  output_dir: results/ptp1b_0.75occAconf_0.25occBconf_lr_ens_sweep/lr_0.02_ens_4
+  input_data_dir: input/ptp1b_0.75occAconf_0.25occBconf_lr_ens_sweep/lr_0.02_ens_4
+  optimization:
+    ensemble_size: 4
+  adaptive_solver:
+    learning_rate: 0.02
+- name: lr_0.05_ens_4
+  output_dir: results/ptp1b_0.75occAconf_0.25occBconf_lr_ens_sweep/lr_0.05_ens_4
+  input_data_dir: input/ptp1b_0.75occAconf_0.25occBconf_lr_ens_sweep/lr_0.05_ens_4
+  optimization:
+    ensemble_size: 4
+  adaptive_solver:
+    learning_rate: 0.05
+- name: lr_0.1_ens_4
+  output_dir: results/ptp1b_0.75occAconf_0.25occBconf_lr_ens_sweep/lr_0.1_ens_4
+  input_data_dir: input/ptp1b_0.75occAconf_0.25occBconf_lr_ens_sweep/lr_0.1_ens_4
+  optimization:
+    ensemble_size: 4
+  adaptive_solver:
+    learning_rate: 0.1
+- name: lr_0.2_ens_4
+  output_dir: results/ptp1b_0.75occAconf_0.25occBconf_lr_ens_sweep/lr_0.2_ens_4
+  input_data_dir: input/ptp1b_0.75occAconf_0.25occBconf_lr_ens_sweep/lr_0.2_ens_4
+  optimization:
+    ensemble_size: 4
+  adaptive_solver:
+    learning_rate: 0.2
+
+# Ensemble size 8
+- name: lr_0.005_ens_8
+  output_dir: results/ptp1b_0.75occAconf_0.25occBconf_lr_ens_sweep/lr_0.005_ens_8
+  input_data_dir: input/ptp1b_0.75occAconf_0.25occBconf_lr_ens_sweep/lr_0.005_ens_8
+  optimization:
+    ensemble_size: 8
+  adaptive_solver:
+    learning_rate: 0.005
+- name: lr_0.01_ens_8
+  output_dir: results/ptp1b_0.75occAconf_0.25occBconf_lr_ens_sweep/lr_0.01_ens_8
+  input_data_dir: input/ptp1b_0.75occAconf_0.25occBconf_lr_ens_sweep/lr_0.01_ens_8
+  optimization:
+    ensemble_size: 8
+  adaptive_solver:
+    learning_rate: 0.01
+- name: lr_0.02_ens_8
+  output_dir: results/ptp1b_0.75occAconf_0.25occBconf_lr_ens_sweep/lr_0.02_ens_8
+  input_data_dir: input/ptp1b_0.75occAconf_0.25occBconf_lr_ens_sweep/lr_0.02_ens_8
+  optimization:
+    ensemble_size: 8
+  adaptive_solver:
+    learning_rate: 0.02
+- name: lr_0.05_ens_8
+  output_dir: results/ptp1b_0.75occAconf_0.25occBconf_lr_ens_sweep/lr_0.05_ens_8
+  input_data_dir: input/ptp1b_0.75occAconf_0.25occBconf_lr_ens_sweep/lr_0.05_ens_8
+  optimization:
+    ensemble_size: 8
+  adaptive_solver:
+    learning_rate: 0.05
+- name: lr_0.1_ens_8
+  output_dir: results/ptp1b_0.75occAconf_0.25occBconf_lr_ens_sweep/lr_0.1_ens_8
+  input_data_dir: input/ptp1b_0.75occAconf_0.25occBconf_lr_ens_sweep/lr_0.1_ens_8
+  optimization:
+    ensemble_size: 8
+  adaptive_solver:
+    learning_rate: 0.1
+- name: lr_0.2_ens_8
+  output_dir: results/ptp1b_0.75occAconf_0.25occBconf_lr_ens_sweep/lr_0.2_ens_8
+  input_data_dir: input/ptp1b_0.75occAconf_0.25occBconf_lr_ens_sweep/lr_0.2_ens_8
+  optimization:
+    ensemble_size: 8
+  adaptive_solver:
+    learning_rate: 0.2

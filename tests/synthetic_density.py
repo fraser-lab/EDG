@@ -193,7 +193,7 @@ class SyntheticDensityGenerator:
             ]
         )
 
-        empty_array = np.zeros((grid_a, grid_b, grid_c), dtype=np.float32)
+        empty_array = np.zeros((grid_c, grid_b, grid_a), dtype=np.float32)
 
         ref_map = XMap(
             empty_array,
@@ -353,10 +353,8 @@ class SyntheticDensityGenerator:
         unit_cell = structure.unit_cell
         unit_cell_extent = np.array([unit_cell.a, unit_cell.b, unit_cell.c])
         
-        # Check if structure fits in unit cell
         fits_in_unit_cell = np.all(structure_extent <= unit_cell_extent)
         
-        # Calculate padding around structure
         if hasattr(self, 'ref_map') and hasattr(self.ref_map, 'origin'):
             grid_origin = self.ref_map.origin
             grid_extent = unit_cell_extent
@@ -969,8 +967,8 @@ if __name__ == "__main__":
     pdb = pdb.extract(pdb.select("not altloc C")).reorder()
     altA = pdb.select("altloc A")
     altB = pdb.select("altloc B")
-    Aocc = 0.25
-    Bocc = 0.75
+    Aocc = 0
+    Bocc = 1
     pdb.data["q"][altA] = Aocc
     pdb.data["q"][altB] = Bocc
     pdb = pdb.reorder()
@@ -1004,18 +1002,18 @@ if __name__ == "__main__":
     )
     
     density_generator.save_map(
-        f"/home/kchrispens/adp-replicate/tests/resources/6b8x/6b8x_{Aocc}occAconf_{Bocc}occBconf_2A.ccp4",
+        f"/home/kchrispens/adp-replicate/tests/resources/6b8x/6b8x{f'_{Aocc}occAconf' if Aocc > 0 else ''}{f'_{Bocc}occBconf' if Bocc > 0 else ''}_2A.ccp4",
         density,
     )
 
     # Save original structure
-    pdb.tofile(f"/home/kchrispens/adp-replicate/tests/resources/6b8x/6b8x_synthetic_{Aocc}occAconf_{Bocc}occBconf.cif")
+    pdb.tofile(f"/home/kchrispens/adp-replicate/tests/resources/6b8x/6b8x_synthetic{f'_{Aocc}occAconf' if Aocc > 0 else ''}{f'_{Bocc}occBconf' if Bocc > 0 else ''}.cif")
     
     # Save shifted structure for comparison (apply same shift as used in density calculation)
     shifted_pdb = pdb.copy()
     shifted_pdb.coor = shifted_pdb.coor - density_generator.coord_shift
     shifted_pdb.tofile(
-        f"/home/kchrispens/adp-replicate/tests/resources/6b8x/6b8x_synthetic_{Aocc}occAconf_{Bocc}occBconf_shifted.cif"
+        f"/home/kchrispens/adp-replicate/tests/resources/6b8x/6b8x_synthetic{f'_{Aocc}occAconf' if Aocc > 0 else ''}{f'_{Bocc}occBconf' if Bocc > 0 else ''}_shifted.cif"
     )
 
     ### Synthetic AAAWAAA data
