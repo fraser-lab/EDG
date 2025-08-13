@@ -41,7 +41,7 @@ class SyntheticDensityGenerator:
     from atomic structures (Structure or Ensemble objects) with optional
     experimental parameters. It supports both X-ray crystallography and electron
     microscopy scattering factors.
-    
+
     The class supports different coordinate system modes:
     - 'crystallographic': Use real unit cell from structure/reference map
     - 'synthetic': Create synthetic coordinate system centered at origin
@@ -56,7 +56,9 @@ class SyntheticDensityGenerator:
         unit_cell: Optional[NamedTuple] = None,
         em_mode: Optional[bool] = False,
         device: Optional[Union[str, torch.device]] = None,
-        coordinate_mode: Literal['crystallographic', 'synthetic', 'aligned'] = 'aligned',
+        coordinate_mode: Literal[
+            "crystallographic", "synthetic", "aligned"
+        ] = "aligned",
     ):
         """Initialize the synthetic density generator.
 
@@ -116,7 +118,7 @@ class SyntheticDensityGenerator:
             self._setup_from_parameters(resolution, unit_cell)
         else:
             raise ValueError("Either reference_map_file or resolution must be provided")
-            
+
         # Set up coordinate transformation based on mode
         self._setup_coordinate_system()
 
@@ -270,39 +272,41 @@ class SyntheticDensityGenerator:
         """Set up coordinate transformation based on the specified mode."""
         # Get structure bounds for coordinate system analysis
         structure_ref = self.structure[0] if self.is_ensemble else self.structure
-        
-        if self.coordinate_mode == 'crystallographic':
+
+        if self.coordinate_mode == "crystallographic":
             # Use crystallographic coordinates without shifting
             self.coord_shift = np.array([0.0, 0.0, 0.0])
             self.needs_centering = False
-            
-        elif self.coordinate_mode == 'synthetic':
+
+        elif self.coordinate_mode == "synthetic":
             # Center structure at origin of synthetic coordinate system
             # For AF3-style predictions where structure is at origin
             unit_cell = structure_ref.unit_cell
-            self.coord_shift = np.array([
-                unit_cell.c / 2.0,
-                unit_cell.b / 2.0,
-                unit_cell.a / 2.0,
-            ])
+            self.coord_shift = np.array(
+                [
+                    unit_cell.c / 2.0,
+                    unit_cell.b / 2.0,
+                    unit_cell.a / 2.0,
+                ]
+            )
             self.needs_centering = True
-            
-        elif self.coordinate_mode == 'aligned':
+
+        elif self.coordinate_mode == "aligned":
             # Automatically determine optimal alignment
             self.coord_shift = self._calculate_optimal_alignment(structure_ref)
             self.needs_centering = True
-            
+
         else:
             raise ValueError(f"Unknown coordinate_mode: {self.coordinate_mode}")
 
     def _calculate_optimal_alignment(self, structure: Structure) -> np.ndarray:
         """Calculate optimal coordinate shift to center structure in grid.
-        
+
         Parameters
         ----------
         structure : Structure
             Structure to analyze
-            
+
         Returns
         -------
         np.ndarray
@@ -313,32 +317,34 @@ class SyntheticDensityGenerator:
         min_coords = coords.min(axis=0)
         max_coords = coords.max(axis=0)
         structure_center = (min_coords + max_coords) / 2.0
-        
+
         # Get grid bounds in Cartesian coordinates
         # For synthetic maps, the grid typically spans the unit cell
         unit_cell = structure.unit_cell
-        if hasattr(self, 'ref_map') and hasattr(self.ref_map, 'origin'):
+        if hasattr(self, "ref_map") and hasattr(self.ref_map, "origin"):
             # Real reference map - use its coordinate system
             grid_origin = self.ref_map.origin
             grid_extent = np.array([unit_cell.a, unit_cell.b, unit_cell.c])
             grid_center = grid_origin + grid_extent / 2.0
         else:
             # Synthetic map - center of unit cell
-            grid_center = np.array([unit_cell.a / 2.0, unit_cell.b / 2.0, unit_cell.c / 2.0])
-        
+            grid_center = np.array(
+                [unit_cell.a / 2.0, unit_cell.b / 2.0, unit_cell.c / 2.0]
+            )
+
         # Calculate shift to center structure in grid
         optimal_shift = grid_center - structure_center
-        
+
         return optimal_shift
 
     def _analyze_structure_bounds(self, structure: Structure) -> dict:
         """Analyze structure coordinate bounds for diagnostic purposes.
-        
+
         Parameters
         ----------
         structure : Structure
             Structure to analyze
-            
+
         Returns
         -------
         dict
@@ -349,36 +355,36 @@ class SyntheticDensityGenerator:
         max_coords = coords.max(axis=0)
         structure_center = (min_coords + max_coords) / 2.0
         structure_extent = max_coords - min_coords
-        
+
         unit_cell = structure.unit_cell
         unit_cell_extent = np.array([unit_cell.a, unit_cell.b, unit_cell.c])
-        
+
         fits_in_unit_cell = np.all(structure_extent <= unit_cell_extent)
-        
-        if hasattr(self, 'ref_map') and hasattr(self.ref_map, 'origin'):
+
+        if hasattr(self, "ref_map") and hasattr(self.ref_map, "origin"):
             grid_origin = self.ref_map.origin
             grid_extent = unit_cell_extent
         else:
             grid_origin = np.array([0.0, 0.0, 0.0])
             grid_extent = unit_cell_extent
-            
+
         grid_max = grid_origin + grid_extent
-        
+
         # Check margins
         margin_low = min_coords - grid_origin
         margin_high = grid_max - max_coords
-        
+
         return {
-            'structure_bounds': (min_coords, max_coords),
-            'structure_center': structure_center,
-            'structure_extent': structure_extent,
-            'unit_cell_extent': unit_cell_extent,
-            'fits_in_unit_cell': fits_in_unit_cell,
-            'grid_origin': grid_origin,
-            'grid_extent': grid_extent,
-            'margins': (margin_low, margin_high),
-            'coordinate_mode': self.coordinate_mode,
-            'coord_shift': getattr(self, 'coord_shift', None),
+            "structure_bounds": (min_coords, max_coords),
+            "structure_center": structure_center,
+            "structure_extent": structure_extent,
+            "unit_cell_extent": unit_cell_extent,
+            "fits_in_unit_cell": fits_in_unit_cell,
+            "grid_origin": grid_origin,
+            "grid_extent": grid_extent,
+            "margins": (margin_low, margin_high),
+            "coordinate_mode": self.coordinate_mode,
+            "coord_shift": getattr(self, "coord_shift", None),
         }
 
     def generate_map_from_structure(
@@ -418,7 +424,7 @@ class SyntheticDensityGenerator:
         else:
             # Explicit override for backward compatibility
             should_shift = shift
-            
+
         if should_shift:
             coords = coords - torch.tensor(
                 self.coord_shift, dtype=coords.dtype, device=coords.device
@@ -606,7 +612,9 @@ def extract_altloc_conformations(
     # Add main conformation (no altloc or altloc A)
     main_selection = structure.select("altloc '' or altloc A")
     if main_selection.sum() > 0:
-        main_struct = deepcopy(structure.extract(main_selection)) # Use deepcopy to avoid modifying original structure
+        main_struct = deepcopy(
+            structure.extract(main_selection)
+        )  # Use deepcopy to avoid modifying original structure
         main_struct.altloc = ""  # Clear altloc identifiers
         main_struct.q = 1.0
         conformations.append(main_struct)
@@ -955,7 +963,7 @@ if __name__ == "__main__":
     #     "/home/kchrispens/adp-replicate/tests/resources/mac1_adpr_peptideflip/mac1_adpr_peptideflip_Aconf_shifted.cif"
     # )
 
-    ### PTP1B TEST CASE - FIXED COORDINATE HANDLING
+    ### PTP1B TEST CASE - OCCUPANCY LOOP
     print("=== Running PTP1B Test Case ===")
     pdb = Structure.fromfile(
         "/home/kchrispens/adp-replicate/tests/resources/6b8x/processed/6b8x-sf_single_001.cif"
@@ -967,54 +975,69 @@ if __name__ == "__main__":
     pdb = pdb.extract(pdb.select("not altloc C")).reorder()
     altA = pdb.select("altloc A")
     altB = pdb.select("altloc B")
-    Aocc = 0
-    Bocc = 1
-    pdb.data["q"][altA] = Aocc
-    pdb.data["q"][altB] = Bocc
+    pdb.data["b"][:] = 20.0
     pdb = pdb.reorder()
-    
-    print(f"Original structure bounds: {pdb.coor.min(axis=0)} to {pdb.coor.max(axis=0)}")
+
+    print(
+        f"Original structure bounds: {pdb.coor.min(axis=0)} to {pdb.coor.max(axis=0)}"
+    )
     print(f"Structure center: {pdb.coor.mean(axis=0)}")
     print(pdb)
 
     unit_cell = pdb.unit_cell
+    resolution = 1.74
 
-    density_generator = SyntheticDensityGenerator(
-        structure=pdb, 
-        resolution=2.0, 
-        unit_cell=unit_cell, 
-        em_mode=False,
-        coordinate_mode='crystallographic'
-    )
-    
-    # Analyze coordinate system for debugging
-    bounds_analysis = density_generator._analyze_structure_bounds(pdb)
-    print(f"Coordinate mode: {bounds_analysis['coordinate_mode']}")
-    print(f"Calculated shift: {bounds_analysis['coord_shift']}")
-    print(f"Structure fits in unit cell: {bounds_analysis['fits_in_unit_cell']}")
-    print(f"Margins: {bounds_analysis['margins']}")
-    
-    # Generate density map using automatic coordinate handling
-    density = density_generator.generate_map(
-        b_factor_scale=1.0, 
-        occupancy_scale=1.0
-        # No need to specify shift parameter - handled automatically
-    )
-    
-    density_generator.save_map(
-        f"/home/kchrispens/adp-replicate/tests/resources/6b8x/6b8x{f'_{Aocc}occAconf' if Aocc > 0 else ''}{f'_{Bocc}occBconf' if Bocc > 0 else ''}_2A.ccp4",
-        density,
-    )
+    # Loop over occupancies summing to 1 in increments of 0.25
+    occupancy_pairs = [(0.0, 1.0), (0.25, 0.75), (0.5, 0.5), (0.75, 0.25), (1.0, 0.0)]
 
-    # Save original structure
-    pdb.tofile(f"/home/kchrispens/adp-replicate/tests/resources/6b8x/6b8x_synthetic{f'_{Aocc}occAconf' if Aocc > 0 else ''}{f'_{Bocc}occBconf' if Bocc > 0 else ''}.cif")
-    
-    # Save shifted structure for comparison (apply same shift as used in density calculation)
-    shifted_pdb = pdb.copy()
-    shifted_pdb.coor = shifted_pdb.coor - density_generator.coord_shift
-    shifted_pdb.tofile(
-        f"/home/kchrispens/adp-replicate/tests/resources/6b8x/6b8x_synthetic{f'_{Aocc}occAconf' if Aocc > 0 else ''}{f'_{Bocc}occBconf' if Bocc > 0 else ''}_shifted.cif"
-    )
+    for Aocc, Bocc in occupancy_pairs:
+        print(f"\n--- Processing occupancies: A={Aocc}, B={Bocc} ---")
+
+        # Set occupancies
+        pdb_copy = deepcopy(pdb)
+        pdb_copy.data["q"][altA] = Aocc
+        pdb_copy.data["q"][altB] = Bocc
+        pdb_copy = pdb_copy.reorder()
+
+        density_generator = SyntheticDensityGenerator(
+            structure=pdb_copy,
+            resolution=resolution,
+            unit_cell=unit_cell,
+            em_mode=False,
+            coordinate_mode="crystallographic",
+        )
+
+        # Generate density map using automatic coordinate handling
+        density = density_generator.generate_map(
+            b_factor_scale=1.0,
+            occupancy_scale=1.0,
+            # No need to specify shift parameter - handled automatically
+        )
+
+        # Format occupancy values for filenames
+        Aocc_str = f"{Aocc:.2f}".replace(".", "p")
+        Bocc_str = f"{Bocc:.2f}".replace(".", "p")
+
+        density_generator.save_map(
+            f"/home/kchrispens/adp-replicate/tests/resources/6b8x/6b8x{f'_{Aocc}occAconf' if Aocc > 0 else ''}{f'_{Bocc}occBconf' if Bocc > 0 else ''}_{resolution}A.ccp4",
+            density,
+        )
+
+        # Save original structure
+        pdb.tofile(
+            f"/home/kchrispens/adp-replicate/tests/resources/6b8x/6b8x_synthetic{f'_{Aocc}occAconf' if Aocc > 0 else ''}{f'_{Bocc}occBconf' if Bocc > 0 else ''}.cif"
+        )
+
+        # Save shifted structure for comparison (apply same shift as used in density calculation)
+        shifted_pdb = pdb.copy()
+        shifted_pdb.coor = shifted_pdb.coor - density_generator.coord_shift
+        shifted_pdb.tofile(
+            f"/home/kchrispens/adp-replicate/tests/resources/6b8x/6b8x_synthetic{f'_{Aocc}occAconf' if Aocc > 0 else ''}{f'_{Bocc}occBconf' if Bocc > 0 else ''}_shifted.cif"
+        )
+
+        print(f"✓ Generated files for A={Aocc}, B={Bocc}")
+
+    print("=== PTP1B occupancy loop complete ===")
 
     ### Synthetic AAAWAAA data
     # pdb = Structure.fromfile(

@@ -4,7 +4,9 @@ from typing import Callable, Tuple, Optional, Dict
 
 
 # Global cache for quadrature roots and weights to avoid redundant computations
-_QUADRATURE_CACHE: Dict[Tuple[int, str, torch.dtype], Tuple[torch.Tensor, torch.Tensor]] = {}
+_QUADRATURE_CACHE: Dict[
+    Tuple[int, str, torch.dtype], Tuple[torch.Tensor, torch.Tensor]
+] = {}
 _CACHE_LOCK = threading.Lock()
 
 
@@ -53,13 +55,13 @@ class GaussLegendreQuadrature(torch.nn.Module):
     def _get_cached_roots_and_weights(self) -> Tuple[torch.Tensor, torch.Tensor]:
         """Get roots and weights from cache or compute them thread-safely."""
         cache_key = (self.num_points, str(self.device), self.dtype)
-        
+
         with _CACHE_LOCK:
             if cache_key in _QUADRATURE_CACHE:
                 cached_roots, cached_weights = _QUADRATURE_CACHE[cache_key]
                 # Return copies to avoid shared tensor modifications
                 return cached_roots.clone(), cached_weights.clone()
-            
+
             # Compute once and cache
             roots, weights = self._compute_legendre_roots_and_weights_safe(
                 self.num_points, self.device, self.dtype
@@ -127,7 +129,7 @@ class GaussLegendreQuadrature(torch.nn.Module):
         self, num_points: int, device: torch.device, dtype: torch.dtype
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Numerically compute Legendre polynomial roots and weights in a thread-safe manner.
-        
+
         Generally taken from SciPy:
         https://github.com/scipy/scipy/blob/main/scipy/special/_orthogonal.py#L160
 
@@ -157,7 +159,7 @@ class GaussLegendreQuadrature(torch.nn.Module):
                 tridiag = (
                     tridiag + torch.diag(off_diagonal, 1) + torch.diag(off_diagonal, -1)
                 )
-            
+
             # Force immediate computation by detaching from any computation graph
             tridiag = tridiag.detach()
             eigenvalues, eigenvectors = torch.linalg.eigh(tridiag)

@@ -292,7 +292,7 @@ def save_config(config: ExperimentConfig, output_path: Union[str, Path]) -> None
 
 def convert_schedules_to_dict(data: Any) -> Any:
     """Convert ParameterSchedule objects to dictionaries for YAML serialization.
-    
+
     Also handles non-serializable objects like pre-loaded models.
 
     Parameters
@@ -327,7 +327,7 @@ def convert_schedules_to_dict(data: Any) -> Any:
         # Check if object is serializable by trying to represent it
         try:
             # Test if object can be represented as dict for YAML
-            if hasattr(data, '__dict__'):
+            if hasattr(data, "__dict__"):
                 # Try to convert to dict - if it fails, it's not serializable
                 test_dict = dict(data.__dict__)
                 return data

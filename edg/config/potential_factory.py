@@ -9,6 +9,7 @@ import numpy as np
 
 from .config_schema import ExperimentConfig, DensityGuidanceConfig
 from .schedules import ParameterSchedule
+
 # from boltz.model.potentials.potentials import get_potentials
 from edg.edg.modules.potentials import (
     DensityPotential,

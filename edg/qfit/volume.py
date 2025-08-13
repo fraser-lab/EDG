@@ -45,7 +45,7 @@ def extend_to_p1(grid, offset, R_matrix, t_vector, grid_shape_out, out):
     # Apply offsets to grid indices (convert to fractional coordinates)
     # Note: offset ordering should match grid ordering (z, y, x)
     grid_z = z_idx + offset[0]  # offset[0] is z offset
-    grid_y = y_idx + offset[1]  # offset[1] is y offset  
+    grid_y = y_idx + offset[1]  # offset[1] is y offset
     grid_x = x_idx + offset[2]  # offset[2] is x offset
 
     # Stack coordinates for matrix multiplication (z, y, x order to match grid indexing)
@@ -55,13 +55,15 @@ def extend_to_p1(grid, offset, R_matrix, t_vector, grid_shape_out, out):
     # Apply symmetry operation: R @ coords + t
     # Note: R_matrix operates on (x, y, z) coordinates, so we need to reorder
     coords_xyz = coords_flat[:, [2, 1, 0]]  # Convert to (x, y, z) order
-    transformed_xyz = (R_matrix @ coords_xyz.T).T + t_vector * np.array([nx_out, ny_out, nz_out])
+    transformed_xyz = (R_matrix @ coords_xyz.T).T + t_vector * np.array(
+        [nx_out, ny_out, nz_out]
+    )
     transformed_zyx = transformed_xyz[:, [2, 1, 0]]  # Convert back to (z, y, x) order
 
     # Convert to integer grid coordinates and apply modulo wrapping
     out_coords = np.round(transformed_zyx).astype(int)
     out_z = np.mod(out_coords[:, 0], nz_out)
-    out_y = np.mod(out_coords[:, 1], ny_out) 
+    out_y = np.mod(out_coords[:, 1], ny_out)
     out_x = np.mod(out_coords[:, 2], nx_out)
 
     # Reshape back to grid shape for indexing
@@ -162,41 +164,47 @@ class EMMap(_BaseVolume):
 
     def extract(self, xyz, padding=3):
         """Extract a subregion of the EM map around the given coordinates.
-        
+
         Args:
             xyz (np.ndarray): Cartesian coordinates with shape (n_points, 3)
             padding (float): Padding in Angstroms to add around the coordinates
-            
+
         Returns:
             EMMap: New EMMap containing the extracted region
         """
         # Convert Cartesian coordinates to grid coordinates
-        grid_coor = (xyz - self.origin) / self.voxelspacing  # Shape: (n_points, 3) in (x, y, z) order
-        
+        grid_coor = (
+            xyz - self.origin
+        ) / self.voxelspacing  # Shape: (n_points, 3) in (x, y, z) order
+
         # Calculate padding in grid units
         grid_padding = padding / self.voxelspacing  # Shape: (3,) in (x, y, z) order
-        
+
         # Find bounding box in grid coordinates (x, y, z order)
         lb_xyz = grid_coor.min(axis=0) - grid_padding
         ru_xyz = grid_coor.max(axis=0) + grid_padding
         lb_xyz = np.floor(lb_xyz).astype(int)
         ru_xyz = np.ceil(ru_xyz).astype(int)
-        
+
         # Clamp bounds to array limits (non-periodic, so no wrapping)
         lb_xyz = np.maximum(lb_xyz, 0)
-        ru_xyz = np.minimum(ru_xyz, np.array(self.shape[::-1]))  # self.shape is (nz, ny, nx), so reverse to (nx, ny, nz)
-        
+        ru_xyz = np.minimum(
+            ru_xyz, np.array(self.shape[::-1])
+        )  # self.shape is (nz, ny, nx), so reverse to (nx, ny, nz)
+
         # Convert to (z, y, x) order for array slicing
         lb_zyx = lb_xyz[::-1]
         ru_zyx = ru_xyz[::-1]
-        
+
         # Extract the array region using proper slicing
-        array = self.array[lb_zyx[0]:ru_zyx[0], lb_zyx[1]:ru_zyx[1], lb_zyx[2]:ru_zyx[2]].copy()
-        
+        array = self.array[
+            lb_zyx[0] : ru_zyx[0], lb_zyx[1] : ru_zyx[1], lb_zyx[2] : ru_zyx[2]
+        ].copy()
+
         # Update grid parameters and origin
         grid_parameters = GridParameters(self.voxelspacing)
         new_origin = self.origin + lb_xyz * self.voxelspacing  # Keep in (x, y, z) order
-        
+
         return EMMap(array, grid_parameters=grid_parameters, origin=new_origin)
 
 
@@ -338,7 +346,7 @@ class XMap(_BaseVolume):
         shape = np.round(self.unit_cell.abc / self.grid_parameters.voxelspacing).astype(
             int
         )[::-1]  # Reverse to get (nz, ny, nx) ordering
-        
+
         # Create output array and XMap
         array = np.zeros(shape, np.float64)
         grid_parameters = GridParameters(self.voxelspacing)
@@ -349,24 +357,24 @@ class XMap(_BaseVolume):
             hkl=self.hkl,
             resolution=self.resolution,
         )
-        
+
         # Get grid offset (convert to z, y, x ordering to match grid indexing)
         offset = np.asarray([self.offset[2], self.offset[1], self.offset[0]], np.int32)
-        
+
         # Apply each symmetry operation using proper R matrix and t vector
         for symop in self.unit_cell.space_group.symop_list:
             R_matrix = symop.R  # 3x3 rotation matrix
             t_vector = symop.t  # 3x1 translation vector in fractional coordinates
-            
+
             extend_to_p1(
-                self.array, 
-                offset, 
-                R_matrix, 
-                t_vector, 
+                self.array,
+                offset,
+                R_matrix,
+                t_vector,
                 out.shape,  # grid_shape_out
-                out.array
+                out.array,
             )
-        
+
         return out
 
     def is_canonical_unit_cell(self):
@@ -391,11 +399,13 @@ class XMap(_BaseVolume):
 
         # Convert Cartesian coordinates to fractional coordinates
         frac_coor = orth_coor @ self.unit_cell.orth_to_frac.T
-        
+
         # Convert fractional coordinates to grid coordinates
         # Note: unit_cell_shape is in (nx, ny, nz) order, but we need (nz, ny, nx) for grid indexing
-        grid_coor = frac_coor * self.unit_cell_shape  # Shape: (n_atoms, 3) - coordinates in (x, y, z) order
-        
+        grid_coor = (
+            frac_coor * self.unit_cell_shape
+        )  # Shape: (n_atoms, 3) - coordinates in (x, y, z) order
+
         # Subtract offset (convert offset from (x, y, z) to match grid coordinates)
         grid_coor -= self.offset
 
@@ -407,12 +417,12 @@ class XMap(_BaseVolume):
         ru_xyz = grid_coor.max(axis=0) + grid_padding  # Upper bounds (x, y, z)
         lb_xyz = np.floor(lb_xyz).astype(int)
         ru_xyz = np.ceil(ru_xyz).astype(int)
-        
+
         # Convert to (z, y, x) order for array indexing
         lb = lb_xyz[::-1]  # (z, y, x) order
         ru = ru_xyz[::-1]  # (z, y, x) order
         shape = ru - lb  # Extract shape in (z, y, x) order
-        
+
         logger.debug(f"From old map size (voxels): {self.shape}")
         logger.debug(f"Extract between corners:    {lb}, {ru}")
         logger.debug(f"New map size (voxels):      {shape}")
@@ -424,11 +434,13 @@ class XMap(_BaseVolume):
         # Extract the density map region with proper periodic boundary conditions
         # Create coordinate arrays for each dimension
         z_indices = np.arange(lb[0], ru[0]) % self.shape[0]  # z dimension
-        y_indices = np.arange(lb[1], ru[1]) % self.shape[1]  # y dimension  
+        y_indices = np.arange(lb[1], ru[1]) % self.shape[1]  # y dimension
         x_indices = np.arange(lb[2], ru[2]) % self.shape[2]  # x dimension
-        
+
         # Use numpy's advanced indexing with proper broadcasting
-        z_grid, y_grid, x_grid = np.meshgrid(z_indices, y_indices, x_indices, indexing='ij')
+        z_grid, y_grid, x_grid = np.meshgrid(
+            z_indices, y_indices, x_indices, indexing="ij"
+        )
         density_map = self.array[z_grid, y_grid, x_grid]
 
         return XMap(
