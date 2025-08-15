@@ -895,24 +895,210 @@ if __name__ == "__main__":
         print("Running original test code...")
         print("Use --help to see command line options")
         print()
-    ### Mac1 synthetic data test case
+
+    # print("=== Running MAC1 Test Case ===")
+    # pdb_5sop = Structure.fromfile("/home/kchrispens/adp-replicate/tests/resources/mac1_synthetic/5sop.cif")
+    
+    # # Clean and prepare structures
+    # pdb_5sop = pdb_5sop.clean_structure(keep_type="protein")
+    
+    # pdb_5sop = pdb_5sop.reorder()
+    # pdb_5sop = pdb_5sop.complete_residues()
+    # pdb_5sop = pdb_5sop.reorder()
+    # pdb_5sop = pdb_5sop.extract(pdb_5sop.select("altloc A or altloc B or altloc ''"))
+    
+    # # Set B-factors to consistent value
+    # pdb_5sop.data["b"][:] = 20.0
+    
+    # print(f"5SOP structure bounds: {pdb_5sop.coor.min(axis=0)} to {pdb_5sop.coor.max(axis=0)}")
+    # print(f"5SOP center: {pdb_5sop.coor.mean(axis=0)}")
+    # print(pdb_5sop)
+    
+    # unit_cell = pdb_5sop.unit_cell
+    # resolution = 1.05 # Experimental resolution
+
+    # altA = pdb_5sop.select("altloc A")
+    # altB = pdb_5sop.select("altloc B")
+
+    # # Loop over occupancies summing to 1 in increments of 0.25
+    # # Using two main conformations (5SOP and 5SOQ) for the sweep
+    # occupancy_pairs = [(0.0, 1.0), (0.25, 0.75), (0.5, 0.5), (0.75, 0.25), (1.0, 0.0)]
+
+    # for Aocc, Bocc in occupancy_pairs:
+    #     print(f"\n--- Processing MAC1 occupancies: 5SOP_A={Aocc}, 5SOP_B={Bocc} ---")
+
+    #     # Create weighted ensemble
+    #     structure_copy = deepcopy(pdb_5sop)
+    #     structure_copy.data["q"][altA] = Aocc
+    #     structure_copy.data["q"][altB] = Bocc
+
+    #     density_generator = SyntheticDensityGenerator(
+    #         structure=structure_copy,
+    #         resolution=resolution,
+    #         unit_cell=unit_cell,
+    #         em_mode=False,
+    #         coordinate_mode="crystallographic",
+    #     )
+
+    #     # Generate density map using automatic coordinate handling
+    #     density = density_generator.generate_map(
+    #         b_factor_scale=1.0,
+    #         occupancy_scale=1.0,
+    #     )
+
+    #     # Format occupancy values for filenames
+    #     Aocc_str = f"{Aocc:.2f}".replace(".", "p")
+    #     Bocc_str = f"{Bocc:.2f}".replace(".", "p")
+
+    #     density_generator.save_map(
+    #         f"/home/kchrispens/adp-replicate/tests/resources/mac1_synthetic/5SOP{f'_{Aocc}occA' if Aocc > 0 else ''}{f'_{Bocc}occB' if Bocc > 0 else ''}_{resolution}A.ccp4",
+    #         density,
+    #     )
+
+    #     # Save ensemble structure
+    #     structure_copy.tofile(
+    #         f"/home/kchrispens/adp-replicate/tests/resources/mac1_synthetic/5SOP{f'_{Aocc}occA' if Aocc > 0 else ''}{f'_{Bocc}occB' if Bocc > 0 else ''}.cif"
+    #     )
+
+    #     # Save shifted structure for comparison (apply same shift as used in density calculation)
+    #     shifted_ensemble = deepcopy(structure_copy)
+    #     shifted_ensemble.coor = shifted_ensemble.coor - density_generator.coord_shift
+    #     shifted_ensemble.tofile(
+    #         f"/home/kchrispens/adp-replicate/tests/resources/mac1_synthetic/5SOP{f'_{Aocc}occA' if Aocc > 0 else ''}{f'_{Bocc}occB' if Bocc > 0 else ''}_shifted.cif"
+    #     )
+
+    #     print(f"✓ Generated MAC1 files for 5SOP_A={Aocc}, 5SOP_B={Bocc}")
+
+    # print("=== MAC1 occupancy loop complete ===")
+
+    # ### MAC1 TEST CASE - OCCUPANCY LOOP
+    # print("=== Running MAC1 Test Case ===")
     # pdb_5sop = Structure.fromfile("/home/kchrispens/adp-replicate/tests/resources/mac1_synthetic/5SOP_modified.pdb")
     # pdb_5soq = Structure.fromfile("/home/kchrispens/adp-replicate/tests/resources/mac1_synthetic/5SOQ_modified.pdb")
     # pdb_5sq8 = Structure.fromfile("/home/kchrispens/adp-replicate/tests/resources/mac1_synthetic/5SQ8_modified.pdb")
-    # pdb = Structure.fromfile("/home/kchrispens/adp-replicate/_notebooks/testing_more_AWA/boltz_results_test_more_AWA/predictions/test_more_AWA/boltz_out_more_AWA.cif")
-    # pdb = Structure.fromfile("/home/kchrispens/qfit-3.0/tests/more_AWA/multiconformer_model2.pdb")
+    
+    # # Clean and prepare structures
+    # pdb_5sop = pdb_5sop.clean_structure(keep_type="protein")
+    # pdb_5soq = pdb_5soq.clean_structure(keep_type="protein")
+    # pdb_5sq8 = pdb_5sq8.clean_structure(keep_type="protein")
+    
+    # pdb_5sop = pdb_5sop.reorder().complete_residues().reorder()
+    # pdb_5soq = pdb_5soq.reorder().complete_residues().reorder()
+    # pdb_5sq8 = pdb_5sq8.reorder().complete_residues().reorder()
+    
+    # # Set B-factors to consistent value
+    # pdb_5sop.data["b"][:] = 20.0
+    # pdb_5soq.data["b"][:] = 20.0
+    # pdb_5sq8.data["b"][:] = 20.0
+    
+    # print(f"5SOP structure bounds: {pdb_5sop.coor.min(axis=0)} to {pdb_5sop.coor.max(axis=0)}")
+    # print(f"5SOQ structure bounds: {pdb_5soq.coor.min(axis=0)} to {pdb_5soq.coor.max(axis=0)}")
+    # print(f"5SQ8 structure bounds: {pdb_5sq8.coor.min(axis=0)} to {pdb_5sq8.coor.max(axis=0)}")
+    # print(f"5SOP center: {pdb_5sop.coor.mean(axis=0)}")
+    # print(f"5SOQ center: {pdb_5soq.coor.mean(axis=0)}")
+    # print(f"5SQ8 center: {pdb_5sq8.coor.mean(axis=0)}")
+    # print(pdb_5sop)
+    # print(pdb_5soq)
+    # print(pdb_5sq8)
 
+    # # Create ensemble from all three structures
     # ensemble = Ensemble([pdb_5sop, pdb_5soq, pdb_5sq8])
+    
+    # unit_cell = pdb_5sop.unit_cell
+    # resolution = 2.0
 
-    # ref_map_file = "/home/kchrispens/adp-replicate/tests/resources/mac1_synthetic/5soq-sf.mtz"
-    # ref_map_file = "/home/kchrispens/adp-replicate/tests/resources/more_AWA/rfree_2A_Waltconf_1.ccp4"
+    # # Loop over occupancies summing to 1 in increments of 0.25
+    # # Using two main conformations (5SOP and 5SOQ) for the sweep
+    # occupancy_pairs = [(0.0, 1.0), (0.25, 0.75), (0.5, 0.5), (0.75, 0.25), (1.0, 0.0)]
 
-    # density_generator = SyntheticDensityGenerator(ensemble, ref_map_file)
-    # density_generator = SyntheticDensityGenerator(pdb, ref_map_file, resolution=2.)
+    # for Aocc, Bocc in occupancy_pairs:
+    #     print(f"\n--- Processing MAC1 occupancies: 5SOP={Aocc}, 5SOQ={Bocc} ---")
 
-    # density = density_generator.generate_map(shift=False) # , occupancy_scale=0.25)
+    #     # Create weighted ensemble
+    #     ensemble_copy = deepcopy(ensemble)
+    #     ensemble_copy[0].data["q"][:] = Aocc  # 5SOP
+    #     ensemble_copy[1].data["q"][:] = Bocc  # 5SOQ
+    #     ensemble_copy[2].data["q"][:] = 0.0   # 5SQ8 (not used in this sweep)
 
-    # density_generator.save_map("/home/kchrispens/adp-replicate/tests/resources/more_AWA/qfit_out.ccp4", density)
+    #     density_generator = SyntheticDensityGenerator(
+    #         structure=ensemble_copy,
+    #         resolution=resolution,
+    #         unit_cell=unit_cell,
+    #         em_mode=False,
+    #         coordinate_mode="crystallographic",
+    #     )
+
+    #     # Generate density map using automatic coordinate handling
+    #     density = density_generator.generate_map(
+    #         b_factor_scale=1.0,
+    #         occupancy_scale=1.0,
+    #     )
+
+    #     # Format occupancy values for filenames
+    #     Aocc_str = f"{Aocc:.2f}".replace(".", "p")
+    #     Bocc_str = f"{Bocc:.2f}".replace(".", "p")
+
+    #     density_generator.save_map(
+    #         f"/home/kchrispens/adp-replicate/tests/resources/mac1_synthetic/mac1{f'_{Aocc}occ5SOP' if Aocc > 0 else ''}{f'_{Bocc}occ5SOQ' if Bocc > 0 else ''}_{resolution}A.ccp4",
+    #         density,
+    #     )
+
+    #     # Save ensemble structure
+    #     ensemble_copy.tofile(
+    #         f"/home/kchrispens/adp-replicate/tests/resources/mac1_synthetic/mac1_synthetic{f'_{Aocc}occ5SOP' if Aocc > 0 else ''}{f'_{Bocc}occ5SOQ' if Bocc > 0 else ''}.cif"
+    #     )
+
+    #     # Save shifted structure for comparison (apply same shift as used in density calculation)
+    #     shifted_ensemble = deepcopy(ensemble_copy)
+    #     shifted_ensemble.coor = shifted_ensemble.coor - density_generator.coord_shift
+    #     shifted_ensemble.tofile(
+    #         f"/home/kchrispens/adp-replicate/tests/resources/mac1_synthetic/mac1_synthetic{f'_{Aocc}occ5SOP' if Aocc > 0 else ''}{f'_{Bocc}occ5SOQ' if Bocc > 0 else ''}_shifted.cif"
+    #     )
+
+    #     print(f"✓ Generated MAC1 files for 5SOP={Aocc}, 5SOQ={Bocc}")
+
+    # print("=== MAC1 occupancy loop complete ===")
+
+    # # Also create individual conformation maps for comparison
+    # print("\n=== Creating individual MAC1 conformation maps ===")
+    
+    # for name, structure in [("5SOP", pdb_5sop), ("5SOQ", pdb_5soq), ("5SQ8", pdb_5sq8)]:
+    #     print(f"--- Processing {name} individual conformation ---")
+        
+    #     structure_copy = deepcopy(structure)
+    #     structure_copy.data["q"][:] = 1.0  # Full occupancy
+        
+    #     density_generator = SyntheticDensityGenerator(
+    #         structure=structure_copy,
+    #         resolution=resolution,
+    #         unit_cell=unit_cell,
+    #         em_mode=False,
+    #         coordinate_mode="crystallographic",
+    #     )
+
+    #     density = density_generator.generate_map(
+    #         b_factor_scale=1.0,
+    #         occupancy_scale=1.0,
+    #     )
+
+    #     density_generator.save_map(
+    #         f"/home/kchrispens/adp-replicate/tests/resources/mac1_synthetic/mac1_1occ{name}_{resolution}A.ccp4",
+    #         density,
+    #     )
+
+    #     structure_copy.tofile(
+    #         f"/home/kchrispens/adp-replicate/tests/resources/mac1_synthetic/mac1_synthetic_1occ{name}.cif"
+    #     )
+
+    #     shifted_structure = deepcopy(structure_copy)
+    #     shifted_structure.coor = shifted_structure.coor - density_generator.coord_shift
+    #     shifted_structure.tofile(
+    #         f"/home/kchrispens/adp-replicate/tests/resources/mac1_synthetic/mac1_synthetic_1occ{name}_shifted.cif"
+    #     )
+
+    #     print(f"✓ Generated {name} individual conformation files")
+    
+    # print("=== MAC1 individual conformations complete ===")
 
     ### PEPTIDE FLIP TEST CASE
     # pdb_7kqp = Structure.fromfile(
@@ -964,80 +1150,80 @@ if __name__ == "__main__":
     # )
 
     ### PTP1B TEST CASE - OCCUPANCY LOOP
-    print("=== Running PTP1B Test Case ===")
-    pdb = Structure.fromfile(
-        "/home/kchrispens/adp-replicate/tests/resources/6b8x/processed/6b8x-sf_single_001.cif"
-    )
-    pdb = pdb.clean_structure(keep_type="protein")
-    pdb = pdb.reorder()
-    pdb = pdb.complete_residues()
-    pdb = pdb.reorder()
-    pdb = pdb.extract(pdb.select("not altloc C")).reorder()
-    altA = pdb.select("altloc A")
-    altB = pdb.select("altloc B")
-    pdb.data["b"][:] = 20.0
-    pdb = pdb.reorder()
+    # print("=== Running PTP1B Test Case ===")
+    # pdb = Structure.fromfile(
+    #     "/home/kchrispens/adp-replicate/tests/resources/6b8x/processed/6b8x-sf_single_001.cif"
+    # )
+    # pdb = pdb.clean_structure(keep_type="protein")
+    # pdb = pdb.reorder()
+    # pdb = pdb.complete_residues()
+    # pdb = pdb.reorder()
+    # pdb = pdb.extract(pdb.select("not altloc C")).reorder()
+    # altA = pdb.select("altloc A")
+    # altB = pdb.select("altloc B")
+    # pdb.data["b"][:] = 20.0
+    # pdb = pdb.reorder()
 
-    print(
-        f"Original structure bounds: {pdb.coor.min(axis=0)} to {pdb.coor.max(axis=0)}"
-    )
-    print(f"Structure center: {pdb.coor.mean(axis=0)}")
-    print(pdb)
+    # print(
+    #     f"Original structure bounds: {pdb.coor.min(axis=0)} to {pdb.coor.max(axis=0)}"
+    # )
+    # print(f"Structure center: {pdb.coor.mean(axis=0)}")
+    # print(pdb)
 
-    unit_cell = pdb.unit_cell
-    resolution = 1.74
+    # unit_cell = pdb.unit_cell
+    # resolution = 1.74
 
-    # Loop over occupancies summing to 1 in increments of 0.25
-    occupancy_pairs = [(0.0, 1.0), (0.25, 0.75), (0.5, 0.5), (0.75, 0.25), (1.0, 0.0)]
+    # # Loop over occupancies summing to 1 in increments of 0.25
+    # occupancy_pairs = [(0.0, 1.0), (0.25, 0.75), (0.5, 0.5), (0.75, 0.25), (1.0, 0.0)]
 
-    for Aocc, Bocc in occupancy_pairs:
-        print(f"\n--- Processing occupancies: A={Aocc}, B={Bocc} ---")
+    # for Aocc, Bocc in occupancy_pairs:
+    #     print(f"\n--- Processing occupancies: A={Aocc}, B={Bocc} ---")
 
-        # Set occupancies
-        pdb_copy = deepcopy(pdb)
-        pdb_copy.data["q"][altA] = Aocc
-        pdb_copy.data["q"][altB] = Bocc
-        pdb_copy = pdb_copy.reorder()
+    #     # Set occupancies
+    #     pdb_copy = deepcopy(pdb)
+    #     pdb_copy.data["q"][altA] = Aocc
+    #     pdb_copy.data["q"][altB] = Bocc
+    #     pdb_copy = pdb_copy.reorder()
 
-        density_generator = SyntheticDensityGenerator(
-            structure=pdb_copy,
-            resolution=resolution,
-            unit_cell=unit_cell,
-            em_mode=False,
-            coordinate_mode="crystallographic",
-        )
+    #     density_generator = SyntheticDensityGenerator(
+    #         structure=pdb_copy,
+    #         resolution=resolution,
+    #         unit_cell=unit_cell,
+    #         em_mode=False,
+    #         coordinate_mode="crystallographic",
+    #     )
 
-        # Generate density map using automatic coordinate handling
-        density = density_generator.generate_map(
-            b_factor_scale=1.0,
-            occupancy_scale=1.0,
-            # No need to specify shift parameter - handled automatically
-        )
+    #     # Generate density map using automatic coordinate handling
+    #     density = density_generator.generate_map(
+    #         b_factor_scale=1.0,
+    #         occupancy_scale=1.0,
+    #         # No need to specify shift parameter - handled automatically
+    #     )
 
-        # Format occupancy values for filenames
-        Aocc_str = f"{Aocc:.2f}".replace(".", "p")
-        Bocc_str = f"{Bocc:.2f}".replace(".", "p")
+    #     # Format occupancy values for filenames
+    #     Aocc_str = f"{Aocc:.2f}".replace(".", "p")
+    #     Bocc_str = f"{Bocc:.2f}".replace(".", "p")
 
-        density_generator.save_map(
-            f"/home/kchrispens/adp-replicate/tests/resources/6b8x/6b8x{f'_{Aocc}occAconf' if Aocc > 0 else ''}{f'_{Bocc}occBconf' if Bocc > 0 else ''}_{resolution}A.ccp4",
-            density,
-        )
+    #     density_generator.save_map(
+    #         f"/home/kchrispens/adp-replicate/tests/resources/6b8x/6b8x{f'_{Aocc}occAconf' if Aocc > 0 else ''}{f'_{Bocc}occBconf' if Bocc > 0 else ''}_{resolution}A.ccp4",
+    #         density,
+    #     )
 
-        # Save original structure
-        pdb.tofile(
-            f"/home/kchrispens/adp-replicate/tests/resources/6b8x/6b8x_synthetic{f'_{Aocc}occAconf' if Aocc > 0 else ''}{f'_{Bocc}occBconf' if Bocc > 0 else ''}.cif"
-        )
+    #     # Save original structure
+    #     pdb.tofile(
+    #         f"/home/kchrispens/adp-replicate/tests/resources/6b8x/6b8x_synthetic{f'_{Aocc}occAconf' if Aocc > 0 else ''}{f'_{Bocc}occBconf' if Bocc > 0 else ''}.cif"
+    #     )
 
-        # Save shifted structure for comparison (apply same shift as used in density calculation)
-        shifted_pdb = pdb.copy()
-        shifted_pdb.coor = shifted_pdb.coor - density_generator.coord_shift
-        shifted_pdb.tofile(
-            f"/home/kchrispens/adp-replicate/tests/resources/6b8x/6b8x_synthetic{f'_{Aocc}occAconf' if Aocc > 0 else ''}{f'_{Bocc}occBconf' if Bocc > 0 else ''}_shifted.cif"
-        )
+    #     # Save shifted structure for comparison (apply same shift as used in density calculation)
+    #     shifted_pdb = pdb.copy()
+    #     shifted_pdb.coor = shifted_pdb.coor - density_generator.coord_shift
+    #     shifted_pdb.tofile(
+    #         f"/home/kchrispens/adp-replicate/tests/resources/6b8x/6b8x_synthetic{f'_{Aocc}occAconf' if Aocc > 0 else ''}{f'_{Bocc}occBconf' if Bocc > 0 else ''}_shifted.cif"
+    #     )
 
-        print(f"✓ Generated files for A={Aocc}, B={Bocc}")
+    #     print(f"✓ Generated files for A={Aocc}, B={Bocc}")
 
-    print("=== PTP1B occupancy loop complete ===")
+    # print("=== PTP1B occupancy loop complete ===")
 
     ### Synthetic AAAWAAA data
     # pdb = Structure.fromfile(
