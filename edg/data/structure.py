@@ -446,6 +446,68 @@ class Structure(_BaseStructure):
                         multiconformer = Structure(data)
         return Structure(data)
 
+    def reweight_occupancies(self):
+        """Uniformly reweight occupancies of alternative conformers (altlocs) per residue.
+
+        For every residue, determine the distinct altloc identifiers present among its atoms. If more than
+        one altloc is present, set the occupancy (q) for every atom belonging to each altloc to 1 / N_altlocs
+        (where N_altlocs is the number of distinct altloc identifiers for that residue). If only a single
+        altloc exists (including the blank "" altloc), all atoms in that residue are given occupancy 1.0.
+
+        This does NOT attempt to conserve the original total occupancy if it was something other than 1.0;
+        it enforces a uniform distribution across present conformers.
+
+        Returns
+        -------
+        Structure
+            A new Structure object with reweighted occupancies.
+        """
+        data = {}
+        for attr in self.data:
+            array = getattr(self, attr)
+            # use copy to avoid side-effects
+            try:
+                data[attr] = np.copy(array)
+            except Exception:
+                data[attr] = array.copy() if hasattr(array, "copy") else array
+
+        if "q" not in data:
+            raise ValueError("Occupancy array 'q' not present in structure data.")
+
+        q_array = data["q"]
+
+        for chain in self.chains:
+            for residue in chain:
+                altlocs = list({al for al in residue.altloc})  # unique altlocs
+                if not altlocs:
+                    continue  # no altloc info
+
+                # Count distinct altlocs. Treat blank "" the same as any other; if only blank, set to 1.0
+                n_alt = len(altlocs)
+                resi_id = residue.resi[0]
+                chain_id = residue.chain[0]
+
+                # Build a mask for all atoms in this residue (across all altlocs)
+                residue_mask = (self.data["resi"] == resi_id) & (
+                    self.data["chain"] == chain_id
+                )
+
+                if n_alt <= 1:
+                    q_array[residue_mask] = 1.0
+                else:
+                    target_occ = 1.0 / n_alt
+                    for alt in altlocs:
+                        alt_mask = residue_mask & (self.data["altloc"] == alt)
+                        q_array[alt_mask] = target_occ
+
+        return Structure(
+            data,
+            link_data=getattr(self, "link_data", None),
+            scale=getattr(self, "scale", None),
+            cryst_info=getattr(self, "cryst_info", None),
+            resolution=getattr(self, "resolution", None),
+        )
+
     def remove_conformer(self, resi, chain, altloc1, altloc2):
         data = {}
         mask = (
@@ -1049,11 +1111,12 @@ class _Chain(_BaseStructure):
     def build_hierarchy(self):
         resi = self.resi
         # Handle any remaining None values in resi as defensive measure
-        if np.any(resi == None):
+        none_mask = np.equal(resi, None)  # noqa: E711 (intentional element-wise check)
+        if np.any(none_mask):
             logger.warning(
                 f"Found None residue indices in chain {self.chain[0]}, replacing with 1"
             )
-            resi = np.where(resi == None, 1, resi)
+            resi = np.where(none_mask, 1, resi)
         # order = np.argsort(resi)
         # resi = resi[order]
         # icode = self.icode[order]
@@ -1202,9 +1265,7 @@ class _Conformer(_BaseStructure):
         if not self._residues:
             self.build_residues()
         _ligands = [
-            l
-            for l in self._residues
-            if isinstance(l, _Ligand) and l.natoms > 3  # noqa: E741
+            lig for lig in self._residues if isinstance(lig, _Ligand) and lig.natoms > 3
         ]
         return _ligands
 

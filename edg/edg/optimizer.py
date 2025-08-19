@@ -256,7 +256,7 @@ class DensityGuidedDiffusion:
             steering_args=kwargs["steering_args"]
             if "steering_args" in kwargs
             else None,
-            method="MD",
+            method="X-RAY DIFFRACTION",
         )
 
         # Setup adaptive solver if specified

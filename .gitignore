@@ -200,6 +200,9 @@ tests/resources/**/*.pdb
 
 # stuff I don't want on working tree
 future/
+results/
+*sweep_analysis/
+input/
 
 # unignore
 !tests/resources/7pzt_sim_map.mrc

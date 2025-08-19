@@ -1091,7 +1091,7 @@ class DensityPotential(Potential):
         index, args, com_args = self.compute_args(feats, parameters)
 
         if index.shape[1] == 0:
-            return torch.zeros((num_ensembles, ensemble_size), device=coords.device)
+            return torch.zeros((num_ensembles), device=coords.device)
 
         expanded_args = {}
         for key, value in args.items():
