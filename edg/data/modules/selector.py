@@ -127,7 +127,15 @@ class _Selector:
                 else:
                     value = int(elements.pop())
                     mask = resi == value
-                selections.append(self.curr_sel[mask])
+                # Support mask being either over entire structure or already reduced to current selection
+                if mask.shape[0] == self.curr_sel.size:
+                    selections.append(self.curr_sel[mask])
+                elif mask.shape[0] == getattr(self.structure, "_name").size:
+                    selections.append(self.curr_sel[mask[self.curr_sel]])
+                else:
+                    raise IndexError(
+                        "Mask length does not match structure or current selection size for 'resi' selection"
+                    )
             selection = np.unique(np.concatenate(selections))
             return selection
         elif token in ("resn", "chain", "name", "altloc", "icode"):
@@ -138,8 +146,18 @@ class _Selector:
                 if value in ('""', "''"):
                     value = ""
                 mask = data == value
-                selections.append(self.curr_sel[mask])
-            selection = np.concatenate(selections)
+                if mask.shape[0] == self.curr_sel.size:
+                    selections.append(self.curr_sel[mask])
+                elif mask.shape[0] == getattr(self.structure, "_name").size:
+                    selections.append(self.curr_sel[mask[self.curr_sel]])
+                else:
+                    raise IndexError(
+                        "Mask length does not match structure or current selection size for identifier selection"
+                    )
+            if selections:
+                selection = np.unique(np.concatenate(selections))
+            else:
+                selection = np.array([], dtype=np.uintp)
             return selection
         elif token == "resseq":
             picks = set(s.pop())
@@ -156,8 +174,18 @@ class _Selector:
                 mask = resi_data == resi
                 if icode:
                     mask &= icode_data == icode
-                selections.append(self.curr_sel[mask])
-            selection = np.concatenate(selections)
+                if mask.shape[0] == self.curr_sel.size:
+                    selections.append(self.curr_sel[mask])
+                elif mask.shape[0] == getattr(self.structure, "_name").size:
+                    selections.append(self.curr_sel[mask[self.curr_sel]])
+                else:
+                    raise IndexError(
+                        "Mask length does not match structure or current selection size for 'resseq' selection"
+                    )
+            if selections:
+                selection = np.unique(np.concatenate(selections))
+            else:
+                selection = np.array([], dtype=np.uintp)
             return selection
         elif token in ("q", "b"):
             data = getattr(self.structure, token)
@@ -165,23 +193,31 @@ class _Selector:
             float_number = float(s.pop())
             loper = self._get_operator(operator_str)
             mask = loper(data, float_number)
-            selection = self.curr_sel[mask]
+            if mask.shape[0] == self.curr_sel.size:
+                selection = self.curr_sel[mask]
+            elif mask.shape[0] == getattr(self.structure, "_name").size:
+                selection = self.curr_sel[mask[self.curr_sel]]
+            else:
+                raise IndexError(
+                    "Mask length does not match structure or current selection size for numeric selection"
+                )
             return selection
 
-    def _get_operator(loperator):
-        if loperator in ("==", "!="):
-            oper = operator.eq
-        elif loperator == "<":
-            oper = operator.lt
-        elif loperator == ">":
-            oper = operator.gt
-        elif loperator == ">=":
-            oper = operator.ge
-        elif loperator == "<=":
-            oper = operator.le
-        else:
-            raise ValueError("Logic operator not recognized.")
-        return oper
+    def _get_operator(self, loperator):
+        # Map string comparison operators to Python operator functions
+        if loperator == "==":
+            return operator.eq
+        if loperator == "!=":
+            return operator.ne
+        if loperator == "<":
+            return operator.lt
+        if loperator == ">":
+            return operator.gt
+        if loperator == ">=":
+            return operator.ge
+        if loperator == "<=":
+            return operator.le
+        raise ValueError(f"Logic operator not recognized: {loperator}")
 
     def __call__(self, string, parse_all=True):
         self.expr_stack = []
