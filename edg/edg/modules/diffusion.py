@@ -237,12 +237,20 @@ class DiffusionStepper:
         )
 
         # Create data module based on model version
+        # Allow overriding worker count via environment to mitigate NFS issues
+        import os as _os
+
+        _nw_env = _os.environ.get("EDG_DATALOADER_WORKERS")
+        _nw_override = int(_nw_env) if _nw_env and _nw_env.isdigit() else None
+
         if self.model_version == "boltz1":
             data_module = BoltzInferenceDataModule(
                 manifest=processed.manifest,
                 target_dir=processed.targets_dir,
                 msa_dir=processed.msa_dir,
-                num_workers=2,  # NOTE: default in Boltz1 is 2
+                num_workers=_nw_override
+                if _nw_override is not None
+                else 2,  # default 2
                 constraints_dir=processed.constraints_dir,
             )
         else:  # boltz2
@@ -251,7 +259,9 @@ class DiffusionStepper:
                 target_dir=processed.targets_dir,
                 msa_dir=processed.msa_dir,
                 mol_dir=mol_dir,  # Required for Boltz2
-                num_workers=8,  # NOTE: default in Boltz2 is 8
+                num_workers=_nw_override
+                if _nw_override is not None
+                else 8,  # default 8
                 constraints_dir=processed.constraints_dir,
                 template_dir=processed_dir / "templates"
                 if (processed_dir / "templates").exists()
