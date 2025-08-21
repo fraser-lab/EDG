@@ -237,7 +237,7 @@ def copy_boltz_input_to_shared(
         raise FileNotFoundError(f"Boltz input YAML not found: {source_yaml}")
 
     # Copy to shared directory with consistent naming
-    target_yaml = shared_input_dir / f"{config.name}_shared.yaml"
+    target_yaml = shared_input_dir / "shared.yaml"
     shutil.copy2(source_yaml, target_yaml)
 
     logger.info(f"Copied Boltz input YAML to shared directory: {target_yaml}")
@@ -276,7 +276,7 @@ def create_config_with_shared_input(
     # Update paths to use shared directories
     new_config.input_data_dir = str(shared_input_dir)
     new_config.output_dir = str(shared_output_dir)  # Boltz processes here
-    new_config.shared_input_dir = str(shared_input_dir)
+    new_config.shared_input_dir = True
 
     # The actual run outputs will be handled separately by experiment_runner
     # to move them to run_output_dir

@@ -156,9 +156,40 @@ class BatchRunner:
                 )
 
             except Exception as e:
+                is_oom = "out of memory" in str(e).lower()
                 self._handle_experiment_error(experiment_config, e)
 
-                # Check if we should continue
+                # Attempt recovery if OOM and GPUs present
+                if is_oom and self.gpu_manager:
+                    # Try to recover each GPU (best-effort)
+                    for device in list(self.gpu_manager._gpu_models.keys()):  # type: ignore[attr-defined]
+                        try:
+                            self.gpu_manager.recover_from_oom(
+                                device,
+                                model_version=experiment_config.model.version,
+                                checkpoint_path=Path(
+                                    experiment_config.model.checkpoint_path
+                                    or (
+                                        "~/.boltz/boltz1_conf.ckpt"
+                                        if experiment_config.model.version == "boltz1"
+                                        else "~/.boltz/boltz2_conf.ckpt"
+                                    )
+                                ).expanduser(),
+                                ccd_path=Path(
+                                    experiment_config.model.ccd_path
+                                    or "~/.boltz/ccd.pkl"
+                                ).expanduser(),
+                                step_scale=experiment_config.diffusion.step_scale,
+                                steering_args=experiment_config.steering,
+                            )
+                        except Exception:
+                            pass
+                    logger.warning(
+                        "Recovered from OOM; continuing regardless of continue_on_error setting"
+                    )
+                    continue
+
+                # Check if we should continue (non-OOM)
                 if not self.batch_config.continue_on_error:
                     logger.error(
                         "Stopping batch execution due to error (continue_on_error=False)"
@@ -237,18 +268,47 @@ class BatchRunner:
                     )
 
                 except Exception as e:
+                    is_oom = "out of memory" in str(e).lower()
                     self._handle_experiment_error(config, e)
 
                     with self.results_lock:
                         self.completed_count += 1
                         completed = self.completed_count
 
-                    # Check if we should continue
+                    if is_oom and self.gpu_manager:
+                        # Recover this GPU specifically
+                        try:
+                            for device in list(self.gpu_manager._gpu_models.keys()):  # type: ignore[attr-defined]
+                                self.gpu_manager.recover_from_oom(
+                                    device,
+                                    model_version=config.model.version,
+                                    checkpoint_path=Path(
+                                        config.model.checkpoint_path
+                                        or (
+                                            "~/.boltz/boltz1_conf.ckpt"
+                                            if config.model.version == "boltz1"
+                                            else "~/.boltz/boltz2_conf.ckpt"
+                                        )
+                                    ).expanduser(),
+                                    ccd_path=Path(
+                                        config.model.ccd_path or "~/.boltz/ccd.pkl"
+                                    ).expanduser(),
+                                    step_scale=config.diffusion.step_scale,
+                                    steering_args=config.steering,
+                                )
+                        except Exception:
+                            pass
+                        logger.warning(
+                            "Recovered from OOM; continuing regardless of continue_on_error setting"
+                        )
+                        # Do not cancel remaining futures
+                        continue
+
+                    # Non-OOM error standard handling
                     if not self.batch_config.continue_on_error:
                         logger.error(
                             "Stopping batch execution due to error (continue_on_error=False)"
                         )
-                        # Cancel remaining futures
                         for f in future_to_config:
                             f.cancel()
                         break
@@ -343,14 +403,21 @@ class BatchRunner:
                 )
 
                 try:
-                    # Try to reload model on this GPU for NEXT experiment
-                    success = self.gpu_manager.reload_model_on_gpu(
+                    # Try recovery (kill stray processes + reload)
+                    success = self.gpu_manager.recover_from_oom(
                         device=device,
                         model_version=config.model.version,
                         checkpoint_path=Path(
-                            config.model.checkpoint_path or "~/.boltz/boltz1_conf.ckpt"
-                        ),
-                        ccd_path=Path(config.model.ccd_path or "~/.boltz/ccd.pkl"),
+                            config.model.checkpoint_path
+                            or (
+                                "~/.boltz/boltz1_conf.ckpt"
+                                if config.model.version == "boltz1"
+                                else "~/.boltz/boltz2_conf.ckpt"
+                            )
+                        ).expanduser(),
+                        ccd_path=Path(
+                            config.model.ccd_path or "~/.boltz/ccd.pkl"
+                        ).expanduser(),
                         step_scale=config.diffusion.step_scale,
                         steering_args=config.steering,
                     )
@@ -368,8 +435,20 @@ class BatchRunner:
                         f"Error during model reload on {device}: {reload_error}"
                     )
 
-            # Re-raise the original exception
-            raise
+            # Re-raise unless OOM (we already handled and recovery attempted)
+            if "out of memory" not in str(e).lower():
+                raise
+            else:
+                # Mark experiment failure (already recorded by upstream handler in parallel context)
+                logger.info(
+                    f"Continuing after OOM failure in experiment {config.name} (handled)"
+                )
+                return {
+                    "experiment_name": config.name,
+                    "status": "failed",
+                    "error": str(e),
+                    "error_category": "cuda_oom",
+                }
         finally:
             # Always release GPU back to pool
             logger.debug(f"Released {device}")

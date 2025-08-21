@@ -24,6 +24,7 @@ from edg.config.optimizer_factory import (
 )
 from edg.data.structure import Structure, Ensemble
 from edg.utils.shared_input import (
+    create_shared_input_directory,
     validate_shared_input_compatibility,
     copy_boltz_input_to_shared,
 )
@@ -172,10 +173,7 @@ def run_experiment(config: ExperimentConfig) -> Dict[str, Any]:
     """
     logger.info(f"Running experiment: {config.name}")
 
-    # Check if we're using a shared input directory
-    using_shared_input = config.shared_input_dir is not None
-
-    if using_shared_input:
+    if config.shared_input_dir:
         logger.info("Using shared input directory for parameter sweep optimization")
         return run_experiment_with_shared_input(config)
     else:
@@ -234,20 +232,13 @@ def run_experiment_with_shared_input(config: ExperimentConfig) -> Dict[str, Any]
     """
     logger.info(f"Running experiment with shared input: {config.name}")
 
-    shared_input_dir = Path(config.shared_input_dir)
-    shared_output_dir = Path(
-        config.output_dir
-    )  # This should be the shared output directory
-
-    # Validate shared input compatibility
-    if not validate_shared_input_compatibility(config, shared_input_dir):
-        raise ValueError(
-            f"Shared input directory is not compatible with current configuration: {shared_input_dir}"
-        )
+    shared_input_dir, shared_output_dir = create_shared_input_directory(
+        config, Path(config.output_dir)
+    )
 
     # Check if we need to copy Boltz input YAML to shared directory
     if config.boltz_input_yaml:
-        shared_yaml_path = shared_input_dir / f"{config.name}_shared.yaml"
+        shared_yaml_path = shared_input_dir / "shared.yaml"
         if not shared_yaml_path.exists():
             logger.info("Copying Boltz input YAML to shared directory")
             copy_boltz_input_to_shared(config, shared_input_dir)
@@ -293,7 +284,7 @@ def run_experiment_main_logic(
         # For shared input mode, check if we need to handle the YAML path differently
         if config.shared_input_dir:
             # Use the shared YAML file that was copied earlier
-            shared_yaml_path = input_data_dir / f"{config.name}_shared.yaml"
+            shared_yaml_path = input_data_dir / "shared.yaml"
             if shared_yaml_path.exists():
                 input_yaml_path = shared_yaml_path
             else:
@@ -685,6 +676,7 @@ def create_run_output_dir(config: ExperimentConfig, base_output_dir: Path) -> Pa
         f"{config.steering.num_particles}particles"
         if config.steering.enabled
         else "no_steering",
+        f"{config.optimization.ensemble_size}ens",
     ]
 
     if config.adaptive_solver.type != "none":

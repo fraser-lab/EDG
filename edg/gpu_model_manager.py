@@ -9,6 +9,8 @@ import queue
 import threading
 import time
 import random
+import os
+import subprocess
 from pathlib import Path
 from typing import Dict, Optional, Tuple, Union, List
 import torch
@@ -39,6 +41,9 @@ class GPUModelManager:
 
         # Initialize available GPUs
         self._initialize_gpu_list()
+        logger.info(
+            "GPU Model Manager initialized with max_parallel: %d", self.max_parallel
+        )
 
     def _initialize_gpu_list(self):
         """Initialize list of available GPUs."""
@@ -463,6 +468,138 @@ class GPUModelManager:
         """
         logger.debug(f"Released {device}")
         self._available_gpus.put(device)
+
+    # ------------------------------------------------------------------
+    # External GPU process management utilities
+    # ------------------------------------------------------------------
+    def kill_python_processes_on_device(
+        self, device: str, include_self: bool = False
+    ) -> List[int]:
+        """Kill all external python processes that are using the specified GPU.
+
+        Parameters
+        ----------
+        device : str
+            Device string (e.g. 'cuda:0'). 'cpu' is a no-op.
+        include_self : bool
+            If True, will also terminate current process (not recommended during recovery).
+
+        Returns
+        -------
+        List[int]
+            List of PIDs that were signaled.
+        """
+        if not device.startswith("cuda"):
+            return []
+        if not torch.cuda.is_available():  # pragma: no cover
+            return []
+        try:
+            gpu_index = int(device.split(":")[1])
+        except Exception:
+            logger.warning(f"Could not parse GPU index from '{device}'")
+            return []
+
+        pids_killed: List[int] = []
+        try:
+            result = subprocess.run(
+                [
+                    "nvidia-smi",
+                    "--query-compute-apps=pid,gpu_uuid",
+                    "--format=csv,noheader",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode != 0:
+                return []
+            # Map GPU index to UUID
+            uuid_map = {}
+            try:
+                smi_uuid_out = subprocess.run(
+                    ["nvidia-smi", "--query-gpu=index,uuid", "--format=csv,noheader"],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                for line in smi_uuid_out.stdout.strip().splitlines():
+                    parts = [p.strip() for p in line.split(",")]
+                    if len(parts) == 2:
+                        uuid_map[parts[0]] = parts[1]
+                gpu_uuid = uuid_map.get(str(gpu_index))
+            except Exception:  # pragma: no cover
+                gpu_uuid = None
+
+            current_pid = os.getpid()
+            for line in result.stdout.strip().splitlines():
+                if not line.strip():
+                    continue
+                pid_part, uuid_part = [p.strip() for p in line.split(",")[:2]]
+                try:
+                    pid = int(pid_part)
+                except ValueError:
+                    continue
+                if gpu_uuid and uuid_part != gpu_uuid:
+                    continue
+                # Inspect process command
+                try:
+                    with open(f"/proc/{pid}/cmdline", "r") as f:
+                        cmdline = f.read().lower()
+                except Exception:
+                    continue
+                if "python" in cmdline:
+                    if pid == current_pid and not include_self:
+                        continue
+                    try:
+                        os.kill(pid, 9)
+                        pids_killed.append(pid)
+                    except ProcessLookupError:  # pragma: no cover
+                        pass
+                    except PermissionError:  # pragma: no cover
+                        logger.warning(f"No permission to kill PID {pid}")
+            if pids_killed:
+                logger.warning(
+                    f"Killed {len(pids_killed)} python process(es) on {device}: {pids_killed}"
+                )
+        except Exception as e:  # pragma: no cover
+            logger.error(f"Failed to enumerate/kill processes on {device}: {e}")
+        return pids_killed
+
+    def recover_from_oom(
+        self,
+        device: str,
+        model_version: str,
+        checkpoint_path: Path,
+        ccd_path: Path,
+        **model_kwargs,
+    ) -> bool:
+        """High-level OOM recovery sequence for a device.
+
+        1. Kill stray python processes (excluding self)
+        2. Clear caches
+        3. Reload model
+        4. Return device to queue on success
+        """
+        logger.warning(f"Initiating OOM recovery on {device}")
+        self.kill_python_processes_on_device(device, include_self=False)
+        if device.startswith("cuda") and torch.cuda.is_available():
+            try:
+                torch.cuda.empty_cache()
+                torch.cuda.ipc_collect()
+            except Exception:  # pragma: no cover
+                pass
+        ok = self.reload_model_on_gpu(
+            device,
+            model_version=model_version,
+            checkpoint_path=checkpoint_path,
+            ccd_path=ccd_path,
+            **model_kwargs,
+        )
+        if ok:
+            # Ensure back in queue
+            if device not in list(self._available_gpus.queue):  # type: ignore[attr-defined]
+                self.release_gpu(device)
+        return ok
 
     def reload_model_on_gpu(
         self,

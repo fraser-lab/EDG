@@ -323,6 +323,7 @@ class DensityGuidedDiffusion:
         diffusion_kwargs: Optional[dict] = None,
         substructure_conditioning_kwargs: Optional[dict] = None,
         representation_noise_scale: Optional[float] = None,
+        save_interval: int = 10,
     ) -> Structure:
         os.makedirs(output_dir, exist_ok=True)
 
@@ -520,8 +521,7 @@ class DensityGuidedDiffusion:
                 f"step_{self.stepper.current_step - 1}"
             ]["coords"]
 
-            # FIXME: debugging, save calculated model and map every 10 steps
-            if i % 10 == 0:
+            if save_interval and i % save_interval == 0:
                 with torch.no_grad():
                     model_map_ensemble = self.density_calculator(
                         coords_tensor.flatten(0, 1),

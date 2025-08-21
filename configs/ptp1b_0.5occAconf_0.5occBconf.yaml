@@ -1,14 +1,14 @@
 # PTP1B 0.5occAconf_0.5occBconf learning rate sweep configuration
 name: ptp1b_1.74A_0.5occAconf_0.5occBconf_lr_ens_sweep
-output_base_dir: results/ptp1b_1.74A_0.5occAconf_0.5occBconf_lr_ens_sweep
-input_base_dir: input/ptp1b_1.74A_0.5occAconf_0.5occBconf_lr_ens_sweep
+output_base_dir: results/
+input_base_dir: input/
 continue_on_error: true
-max_parallel: 1
+max_parallel: 3
 
 shared_config:
   name: null
-  output_dir: null
-  input_data_dir: null
+  output_dir: results/ptp1b_1.74A_0.5occAconf_0.5occBconf_lr_ens_sweep_xray
+  input_data_dir: input/ptp1b_1.74A_0.5occAconf_0.5occBconf_lr_ens_sweep_xray
   structure:
     structure_path: /home/kchrispens/adp-replicate/tests/resources/6b8x/6b8x_synthetic_0.5occAconf_0.5occBconf_shifted.cif
     clean_structure: true
@@ -73,52 +73,41 @@ shared_config:
   optimization:
     ensemble_size: 4
     partial_diffusion: false
-    save_interval: 10
+    save_interval: 0
     save_maps: true
     save_scores: true
   potentials:
     use_default_potentials: true
-
+  shared_input_dir: true
+  
 experiments:
 # Ensemble size 1
 - name: lr_0.005_ens_1
-  output_dir: results/ptp1b_1.74A_0.5occAconf_0.5occBconf_lr_ens_sweep/lr_0.005_ens_1
-  input_data_dir: input/ptp1b_1.74A_0.5occAconf_0.5occBconf_lr_ens_sweep/lr_0.005_ens_1
   optimization:
     ensemble_size: 1
   adaptive_solver:
     learning_rate: 0.005
 - name: lr_0.01_ens_1
-  output_dir: results/ptp1b_1.74A_0.5occAconf_0.5occBconf_lr_ens_sweep/lr_0.01_ens_1
-  input_data_dir: input/ptp1b_1.74A_0.5occAconf_0.5occBconf_lr_ens_sweep/lr_0.01_ens_1
   optimization:
     ensemble_size: 1
   adaptive_solver:
     learning_rate: 0.01
 - name: lr_0.02_ens_1
-  output_dir: results/ptp1b_1.74A_0.5occAconf_0.5occBconf_lr_ens_sweep/lr_0.02_ens_1
-  input_data_dir: input/ptp1b_1.74A_0.5occAconf_0.5occBconf_lr_ens_sweep/lr_0.02_ens_1
   optimization:
     ensemble_size: 1
   adaptive_solver:
     learning_rate: 0.02
 - name: lr_0.05_ens_1
-  output_dir: results/ptp1b_1.74A_0.5occAconf_0.5occBconf_lr_ens_sweep/lr_0.05_ens_1
-  input_data_dir: input/ptp1b_1.74A_0.5occAconf_0.5occBconf_lr_ens_sweep/lr_0.05_ens_1
   optimization:
     ensemble_size: 1
   adaptive_solver:
     learning_rate: 0.05
 - name: lr_0.1_ens_1
-  output_dir: results/ptp1b_1.74A_0.5occAconf_0.5occBconf_lr_ens_sweep/lr_0.1_ens_1
-  input_data_dir: input/ptp1b_1.74A_0.5occAconf_0.5occBconf_lr_ens_sweep/lr_0.1_ens_1
   optimization:
     ensemble_size: 1
   adaptive_solver:
     learning_rate: 0.1
 - name: lr_0.2_ens_1
-  output_dir: results/ptp1b_1.74A_0.5occAconf_0.5occBconf_lr_ens_sweep/lr_0.2_ens_1
-  input_data_dir: input/ptp1b_1.74A_0.5occAconf_0.5occBconf_lr_ens_sweep/lr_0.2_ens_1
   optimization:
     ensemble_size: 1
   adaptive_solver:
@@ -126,43 +115,31 @@ experiments:
 
 # Ensemble size 2
 - name: lr_0.005_ens_2
-  output_dir: results/ptp1b_1.74A_0.5occAconf_0.5occBconf_lr_ens_sweep/lr_0.005_ens_2
-  input_data_dir: input/ptp1b_1.74A_0.5occAconf_0.5occBconf_lr_ens_sweep/lr_0.005_ens_2
   optimization:
     ensemble_size: 2
   adaptive_solver:
     learning_rate: 0.005
 - name: lr_0.01_ens_2
-  output_dir: results/ptp1b_1.74A_0.5occAconf_0.5occBconf_lr_ens_sweep/lr_0.01_ens_2
-  input_data_dir: input/ptp1b_1.74A_0.5occAconf_0.5occBconf_lr_ens_sweep/lr_0.01_ens_2
   optimization:
     ensemble_size: 2
   adaptive_solver:
     learning_rate: 0.01
 - name: lr_0.02_ens_2
-  output_dir: results/ptp1b_1.74A_0.5occAconf_0.5occBconf_lr_ens_sweep/lr_0.02_ens_2
-  input_data_dir: input/ptp1b_1.74A_0.5occAconf_0.5occBconf_lr_ens_sweep/lr_0.02_ens_2
   optimization:
     ensemble_size: 2
   adaptive_solver:
     learning_rate: 0.02
 - name: lr_0.05_ens_2
-  output_dir: results/ptp1b_1.74A_0.5occAconf_0.5occBconf_lr_ens_sweep/lr_0.05_ens_2
-  input_data_dir: input/ptp1b_1.74A_0.5occAconf_0.5occBconf_lr_ens_sweep/lr_0.05_ens_2
   optimization:
     ensemble_size: 2
   adaptive_solver:
     learning_rate: 0.05
 - name: lr_0.1_ens_2
-  output_dir: results/ptp1b_1.74A_0.5occAconf_0.5occBconf_lr_ens_sweep/lr_0.1_ens_2
-  input_data_dir: input/ptp1b_1.74A_0.5occAconf_0.5occBconf_lr_ens_sweep/lr_0.1_ens_2
   optimization:
     ensemble_size: 2
   adaptive_solver:
     learning_rate: 0.1
 - name: lr_0.2_ens_2
-  output_dir: results/ptp1b_1.74A_0.5occAconf_0.5occBconf_lr_ens_sweep/lr_0.2_ens_2
-  input_data_dir: input/ptp1b_1.74A_0.5occAconf_0.5occBconf_lr_ens_sweep/lr_0.2_ens_2
   optimization:
     ensemble_size: 2
   adaptive_solver:
@@ -170,43 +147,31 @@ experiments:
 
 # Ensemble size 4
 - name: lr_0.005_ens_4
-  output_dir: results/ptp1b_1.74A_0.5occAconf_0.5occBconf_lr_ens_sweep/lr_0.005_ens_4
-  input_data_dir: input/ptp1b_1.74A_0.5occAconf_0.5occBconf_lr_ens_sweep/lr_0.005_ens_4
   optimization:
     ensemble_size: 4
   adaptive_solver:
     learning_rate: 0.005
 - name: lr_0.01_ens_4
-  output_dir: results/ptp1b_1.74A_0.5occAconf_0.5occBconf_lr_ens_sweep/lr_0.01_ens_4
-  input_data_dir: input/ptp1b_1.74A_0.5occAconf_0.5occBconf_lr_ens_sweep/lr_0.01_ens_4
   optimization:
     ensemble_size: 4
   adaptive_solver:
     learning_rate: 0.01
 - name: lr_0.02_ens_4
-  output_dir: results/ptp1b_1.74A_0.5occAconf_0.5occBconf_lr_ens_sweep/lr_0.02_ens_4
-  input_data_dir: input/ptp1b_1.74A_0.5occAconf_0.5occBconf_lr_ens_sweep/lr_0.02_ens_4
   optimization:
     ensemble_size: 4
   adaptive_solver:
     learning_rate: 0.02
 - name: lr_0.05_ens_4
-  output_dir: results/ptp1b_1.74A_0.5occAconf_0.5occBconf_lr_ens_sweep/lr_0.05_ens_4
-  input_data_dir: input/ptp1b_1.74A_0.5occAconf_0.5occBconf_lr_ens_sweep/lr_0.05_ens_4
   optimization:
     ensemble_size: 4
   adaptive_solver:
     learning_rate: 0.05
 - name: lr_0.1_ens_4
-  output_dir: results/ptp1b_1.74A_0.5occAconf_0.5occBconf_lr_ens_sweep/lr_0.1_ens_4
-  input_data_dir: input/ptp1b_1.74A_0.5occAconf_0.5occBconf_lr_ens_sweep/lr_0.1_ens_4
   optimization:
     ensemble_size: 4
   adaptive_solver:
     learning_rate: 0.1
 - name: lr_0.2_ens_4
-  output_dir: results/ptp1b_1.74A_0.5occAconf_0.5occBconf_lr_ens_sweep/lr_0.2_ens_4
-  input_data_dir: input/ptp1b_1.74A_0.5occAconf_0.5occBconf_lr_ens_sweep/lr_0.2_ens_4
   optimization:
     ensemble_size: 4
   adaptive_solver:
@@ -214,43 +179,31 @@ experiments:
 
 # Ensemble size 8
 - name: lr_0.005_ens_8
-  output_dir: results/ptp1b_1.74A_0.5occAconf_0.5occBconf_lr_ens_sweep/lr_0.005_ens_8
-  input_data_dir: input/ptp1b_1.74A_0.5occAconf_0.5occBconf_lr_ens_sweep/lr_0.005_ens_8
   optimization:
     ensemble_size: 8
   adaptive_solver:
     learning_rate: 0.005
 - name: lr_0.01_ens_8
-  output_dir: results/ptp1b_1.74A_0.5occAconf_0.5occBconf_lr_ens_sweep/lr_0.01_ens_8
-  input_data_dir: input/ptp1b_1.74A_0.5occAconf_0.5occBconf_lr_ens_sweep/lr_0.01_ens_8
   optimization:
     ensemble_size: 8
   adaptive_solver:
     learning_rate: 0.01
 - name: lr_0.02_ens_8
-  output_dir: results/ptp1b_1.74A_0.5occAconf_0.5occBconf_lr_ens_sweep/lr_0.02_ens_8
-  input_data_dir: input/ptp1b_1.74A_0.5occAconf_0.5occBconf_lr_ens_sweep/lr_0.02_ens_8
   optimization:
     ensemble_size: 8
   adaptive_solver:
     learning_rate: 0.02
 - name: lr_0.05_ens_8
-  output_dir: results/ptp1b_1.74A_0.5occAconf_0.5occBconf_lr_ens_sweep/lr_0.05_ens_8
-  input_data_dir: input/ptp1b_1.74A_0.5occAconf_0.5occBconf_lr_ens_sweep/lr_0.05_ens_8
   optimization:
     ensemble_size: 8
   adaptive_solver:
     learning_rate: 0.05
 - name: lr_0.1_ens_8
-  output_dir: results/ptp1b_1.74A_0.5occAconf_0.5occBconf_lr_ens_sweep/lr_0.1_ens_8
-  input_data_dir: input/ptp1b_1.74A_0.5occAconf_0.5occBconf_lr_ens_sweep/lr_0.1_ens_8
   optimization:
     ensemble_size: 8
   adaptive_solver:
     learning_rate: 0.1
 - name: lr_0.2_ens_8
-  output_dir: results/ptp1b_1.74A_0.5occAconf_0.5occBconf_lr_ens_sweep/lr_0.2_ens_8
-  input_data_dir: input/ptp1b_1.74A_0.5occAconf_0.5occBconf_lr_ens_sweep/lr_0.2_ens_8
   optimization:
     ensemble_size: 8
   adaptive_solver:

@@ -183,6 +183,7 @@ def prepare_optimization_kwargs_from_config(
         "partial_diffusion": config.optimization.partial_diffusion,
         "steering": config.steering.enabled,
         "representation_noise_scale": config.optimization.representation_noise_scale,
+        "save_interval": config.optimization.save_interval,
     }
 
     # Add substructure conditioning if enabled

@@ -7,12 +7,24 @@ This module provides the main CLI entry point that supports:
 - Experiment execution and logging
 """
 
+import os
 import argparse
 import sys
 import logging
 from typing import Dict, Any
 import traceback
 import yaml
+
+# Configure a local, non-NFS temp directory early to avoid '.nfs*' cleanup errors
+try:
+    from edg.utils.runtime_env import configure_local_tmpdir
+
+    _tmp = configure_local_tmpdir()
+    # Optional: reduce PyTorch DataLoader worker memory pressure on tmpfs
+    os.environ.setdefault("PYTHONWARNINGS", "ignore:semaphore_tracker:UserWarning")
+except Exception:
+    # Safe to proceed without local tmp configuration
+    pass
 
 from edg.config import (
     load_config,
@@ -38,33 +50,33 @@ def create_parser() -> argparse.ArgumentParser:
         description="EDG (Ensembles from Density Generator) - Density-guided diffusion for atomic model optimization",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Examples:
-  # Basic usage
-  edg --config configs/ptp1b.yaml
-  
-  # With parameter overrides
-  edg --config configs/ptp1b.yaml --num-steps 300 --resolution 1.5
-  
-  # Override complex parameters
-  edg --config configs/mac1.yaml --guidance-weight 0.8 --output-dir results/test1
-  
-  # Validation only
-  edg --config configs/ptp1b.yaml --validate-only
-  
-Parameter override syntax:
-  - Simple parameters: --num-steps 300
-  - Nested parameters: --density-guidance.base-weight 0.5
-  - Boolean flags: --substructure-enabled (sets to True)
-  
-Common parameters:
-  --num-steps N             Number of diffusion steps
-  --resolution R            Map resolution in Angstroms  
-  --ensemble-size N         Ensemble size
-  --guidance-weight W       Density guidance weight
-  --num-particles N         Number of steering particles
-  --learning-rate LR        Adaptive solver learning rate
-  --output-dir DIR          Output directory
-        """,
+            Examples:
+                # Basic usage
+                edg --config configs/ptp1b.yaml
+            
+                # With parameter overrides
+                edg --config configs/ptp1b.yaml --num-steps 300 --resolution 1.5
+            
+                # Override complex parameters
+                edg --config configs/mac1.yaml --guidance-weight 0.8 --output-dir results/test1
+            
+                # Validation only
+                edg --config configs/ptp1b.yaml --validate-only
+            
+            Parameter override syntax:
+                - Simple parameters: --num-steps 300
+                - Nested parameters: --density-guidance.base-weight 0.5
+                - Boolean flags: --substructure-enabled (sets to True)
+            
+            Common parameters:
+                --num-steps N             Number of diffusion steps
+                --resolution R            Map resolution in Angstroms  
+                --ensemble-size N         Ensemble size
+                --guidance-weight W       Density guidance weight
+                --num-particles N         Number of steering particles
+                --learning-rate LR        Adaptive solver learning rate
+                --output-dir DIR          Output directory
+                            """,
     )
 
     # Required arguments
