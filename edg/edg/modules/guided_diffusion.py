@@ -10,7 +10,7 @@ from math import sqrt
 from boltz.model.modules.utils import (
     compute_random_augmentation,
 )
-from boltz.model.potentials.schedules import ParameterSchedule
+from edg.edg.modules.schedules import ParameterSchedule
 import numpy as np
 from numpy.typing import NDArray
 

@@ -24,7 +24,7 @@ from boltz.model.models.boltz1 import Boltz1
 from boltz.model.models.boltz2 import Boltz2
 
 # from boltz.model.potentials.potentials import get_potentials
-from boltz.model.potentials.schedules import (
+from edg.edg.modules.schedules import (
     PiecewiseSchedule,
     ExponentialInterpolationWithBounds,
 )

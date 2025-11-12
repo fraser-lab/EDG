@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import List, Union, Optional, Any, Dict
 from abc import ABC, abstractmethod
 
-from boltz.model.potentials.schedules import (
+from edg.edg.modules.schedules import (
     PiecewiseSchedule,
     PiecewiseStepFunction,
     ExponentialInterpolation,

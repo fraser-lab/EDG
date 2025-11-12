@@ -10,7 +10,7 @@ import numpy as np
 import torch
 
 from boltz.data import const
-from boltz.model.potentials.schedules import *
+from edg.edg.modules.schedules import *
 from edg.utils.interpolation import (
     trilinear_interpolation_torch,
     tricubic_interpolation_torch,
