@@ -7,7 +7,7 @@ Install using [pixi](https://pixi.sh/v0.47.0/).
 ```bash
 # install pixi
 curl -fsSL https://pixi.sh/install.sh | sh
-git clone git@github.com:fraser-lab/EDG.git
+git clone https://github.com/fraser-lab/EDG.git
 cd EDG
 pixi install
 ```
