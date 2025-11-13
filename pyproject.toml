@@ -28,7 +28,7 @@ edg = { path = ".", editable = true }
 # IF RUNNING FULL EDG, YOU MAY NEED THE MODIFIED PROCESSING PIPELINE IN k-chrispens/boltz.
 # Clone that and then replace the path below with the path to the cloned boltz repo, then uncomment below
 # boltz = { path = "../boltz", editable = true }
-boltz # and delete this if using the modified processing
+boltz = ">=2.2, <2.3"  # and delete this if using the modified processing
 
 [tool.pixi.tasks]
 mac1_synthetic = "python ./_notebooks/run_mac1.py"
